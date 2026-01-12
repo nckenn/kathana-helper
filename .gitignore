@@ -8,3 +8,7 @@ bot_settings.json
 
 # Logs
 *.log
+
+# Build files
+build/
+dist/
