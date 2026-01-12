@@ -1,0 +1,10 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Bot settings (user-specific, don't commit)
+bot_settings.json
+
+# Logs
+*.log
