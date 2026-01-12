@@ -19,18 +19,33 @@ kathana_bot/
 └── gui.py               # GUI class (CustomTkinter)
 ```
 
+## Installation
+
+### Install Dependencies
+```bash
+pip install -r requirements.txt
+```
+
 ## Usage
 
 ### Running the Bot
 ```bash
-cd kathana_bot
 python main.py
 ```
 
-### With auto_py_to_exe
-1. Point `auto-py-to-exe` to `main.py`
-2. All modules will be automatically included
-3. Works perfectly with PyInstaller
+### Building with PyInstaller
+
+#### Using the spec file (Recommended)
+```bash
+pyinstaller kathana_helper.spec
+```
+
+#### Using command line
+```bash
+pyinstaller --name "Kathana Helper" --onefile --windowed --hidden-import=win32api --hidden-import=win32con --hidden-import=win32gui --hidden-import=win32ui --hidden-import=pydirectinput --hidden-import=pyautogui --hidden-import=customtkinter --hidden-import=easyocr main.py
+```
+
+The executable will be created in the `dist` folder.
 
 ## Module Descriptions
 

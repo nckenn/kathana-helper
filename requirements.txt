@@ -1,0 +1,17 @@
+# GUI Framework
+customtkinter>=5.2.0
+
+# Windows API and Automation
+pywin32>=306
+pywinauto>=0.6.9
+
+# Input Automation
+pydirectinput>=1.0.4
+pyautogui>=0.9.54
+
+# Image Processing
+Pillow>=10.0.0
+numpy>=1.24.0
+
+# OCR
+easyocr>=1.7.0
