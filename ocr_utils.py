@@ -142,6 +142,68 @@ def filter_messages_by_keywords(ocr_result, keywords, case_sensitive=False):
     return filtered
 
 
+def check_item_break_warning(ocr_result):
+    """Check for 'is about to break' keyword in system message OCR result
+    
+    Returns True if the keyword is found, False otherwise.
+    Example message: "Datu Madanti is about to break"
+    """
+    if not ocr_result:
+        return False
+    
+    # Filter lines containing "about" and "break" keywords
+    break_lines = filter_messages_by_keywords(ocr_result, ['about', 'break'], case_sensitive=False)
+    
+    if isinstance(ocr_result, dict):
+        lines = break_lines if break_lines else ocr_result.get('lines', [])
+        full_text = ocr_result.get('full', '')
+        space_text = ocr_result.get('space', '')
+    else:
+        lines = [ocr_result] if ocr_result else []
+        full_text = ocr_result
+        space_text = ocr_result
+    
+    try:
+        # Check lines for "is about to break" pattern
+        if break_lines:
+            for line in reversed(break_lines):
+                # Pattern: "something is about to break"
+                # Case-insensitive match
+                pattern = r'is\s+about\s+to\s+break'
+                if re.search(pattern, line, re.IGNORECASE):
+                    current_time = time.time()
+                    if not hasattr(check_item_break_warning, 'last_debug_time'):
+                        check_item_break_warning.last_debug_time = 0
+                    if current_time - check_item_break_warning.last_debug_time > 2.0:
+                        print(f"[Auto Repair] Item break warning detected: {line[:80]}")
+                        check_item_break_warning.last_debug_time = current_time
+                    return True
+        
+        # Fallback: check full text
+        text_to_parse = space_text if space_text else full_text
+        if text_to_parse:
+            pattern = r'is\s+about\s+to\s+break'
+            if re.search(pattern, text_to_parse, re.IGNORECASE):
+                current_time = time.time()
+                if not hasattr(check_item_break_warning, 'last_debug_time'):
+                    check_item_break_warning.last_debug_time = 0
+                if current_time - check_item_break_warning.last_debug_time > 2.0:
+                    print(f"[Auto Repair] Item break warning detected (fallback)")
+                    check_item_break_warning.last_debug_time = current_time
+                return True
+                
+    except Exception as e:
+        current_time = time.time()
+        if not hasattr(check_item_break_warning, 'last_error_time'):
+            check_item_break_warning.last_error_time = 0
+        if current_time - check_item_break_warning.last_error_time > 10.0:
+            error_text = str(ocr_result)[:100] if not isinstance(ocr_result, dict) else str(ocr_result.get('full', ''))[:100]
+            print(f"[Auto Repair] Error checking break warning: {e}, text: {error_text}")
+            check_item_break_warning.last_error_time = current_time
+    
+    return False
+
+
 def parse_damage_from_message(ocr_result):
     """Parse damage value from system message OCR result"""
     if not ocr_result:

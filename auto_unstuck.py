@@ -17,8 +17,8 @@ def update_unstuck_countdown_display(current_time):
         if hasattr(BotGUI, '_instance') and BotGUI._instance:
             gui = BotGUI._instance
             if hasattr(gui, 'unstuck_countdown_label'):
-                if config.enemy_target_time == 0 or config.last_damage_detected_time == 0:
-                    # No enemy targeted or not initialized
+                if config.last_damage_detected_time == 0:
+                    # Not initialized
                     safe_update_gui(lambda: gui.unstuck_countdown_label.configure(text="Unstuck: ---", text_color="gray"))
                 else:
                     time_since_last_damage = current_time - config.last_damage_detected_time
@@ -34,8 +34,10 @@ def update_unstuck_countdown_display(current_time):
                     
                     # Use ceil to round up so countdown doesn't jump (e.g., 9.9s shows as 10s until it hits 9.0s)
                     display_seconds = math.ceil(remaining_time)
+                    # Show "(no target)" indicator when there's no target but timer is running
+                    target_indicator = " (no target)" if config.enemy_target_time == 0 else ""
                     safe_update_gui(lambda: gui.unstuck_countdown_label.configure(
-                        text=f"Unstuck: {display_seconds}s",
+                        text=f"Unstuck: {display_seconds}s{target_indicator}",
                         text_color=color
                     ))
     except:
@@ -53,55 +55,53 @@ def check_auto_unstuck():
         update_unstuck_countdown_display(time.time())
         return
     
-    # Need an enemy targeted to check HP
-    if config.enemy_target_time == 0:
-        config.last_damage_detected_time = 0
-        config.last_enemy_hp_for_unstuck = None
-        update_unstuck_countdown_display(time.time())
-        return
-    
     current_time = time.time()
     if current_time - config.last_unstuck_check_time < config.UNSTUCK_CHECK_INTERVAL:
         return
     
     config.last_unstuck_check_time = current_time
     
-    # Initialize damage detection time if not set
-    if config.last_damage_detected_time == 0:
+    # Initialize damage detection time if not set (only when we have a target)
+    if config.last_damage_detected_time == 0 and config.enemy_target_time > 0:
         config.last_damage_detected_time = current_time
         config.last_enemy_hp_for_unstuck = None
     
-    # Update countdown display
+    # Update countdown display (works even without target now)
     update_unstuck_countdown_display(current_time)
     
-    # Check if enemy HP has decreased (indicating damage dealt)
-    if config.enemy_hp_readings and len(config.enemy_hp_readings) > 0:
-        current_hp = sum(config.enemy_hp_readings) / len(config.enemy_hp_readings)
-        
-        # If we have a previous HP reading and current HP is lower, damage was dealt
-        if config.last_enemy_hp_for_unstuck is not None:
-            hp_decrease = config.last_enemy_hp_for_unstuck - current_hp
+    # Only check HP damage when we have a target
+    if config.enemy_target_time > 0:
+        # Check if enemy HP has decreased (indicating damage dealt)
+        if config.enemy_hp_readings and len(config.enemy_hp_readings) > 0:
+            current_hp = sum(config.enemy_hp_readings) / len(config.enemy_hp_readings)
             
-            # Only consider it damage if HP decreased by at least 0.5% (to avoid false positives from minor fluctuations)
-            if hp_decrease > 0.5:
-                config.last_damage_detected_time = current_time
-                update_unstuck_countdown_display(current_time)  # Update display immediately when damage detected
-                if not hasattr(check_auto_unstuck, 'last_damage_log_time'):
-                    check_auto_unstuck.last_damage_log_time = 0
-                if current_time - check_auto_unstuck.last_damage_log_time > 5.0:
-                    print(f"[Auto Unstuck] Enemy HP decreased from {config.last_enemy_hp_for_unstuck:.1f}% to {current_hp:.1f}% - unstuck timer reset")
-                    check_auto_unstuck.last_damage_log_time = current_time
-        
-        # Update last HP value for next comparison
-        config.last_enemy_hp_for_unstuck = current_hp
-    else:
-        # No HP readings available, reset tracking
-        config.last_enemy_hp_for_unstuck = None
+            # If we have a previous HP reading and current HP is lower, damage was dealt
+            if config.last_enemy_hp_for_unstuck is not None:
+                hp_decrease = config.last_enemy_hp_for_unstuck - current_hp
+                
+                # Only consider it damage if HP decreased by at least 0.5% (to avoid false positives from minor fluctuations)
+                if hp_decrease > 0.5:
+                    config.last_damage_detected_time = current_time
+                    update_unstuck_countdown_display(current_time)  # Update display immediately when damage detected
+                    if not hasattr(check_auto_unstuck, 'last_damage_log_time'):
+                        check_auto_unstuck.last_damage_log_time = 0
+                    if current_time - check_auto_unstuck.last_damage_log_time > 5.0:
+                        print(f"[Auto Unstuck] Enemy HP decreased from {config.last_enemy_hp_for_unstuck:.1f}% to {current_hp:.1f}% - unstuck timer reset")
+                        check_auto_unstuck.last_damage_log_time = current_time
+            
+            # Update last HP value for next comparison
+            config.last_enemy_hp_for_unstuck = current_hp
+        else:
+            # No HP readings available, reset tracking
+            config.last_enemy_hp_for_unstuck = None
     
+    # Check timeout even when there's no target (timer continues from last damage time)
     if config.last_damage_detected_time > 0:
         time_since_last_damage = current_time - config.last_damage_detected_time
         if time_since_last_damage >= config.unstuck_timeout:
-            print(f"[Auto Unstuck] No damage detected for {time_since_last_damage:.1f}s (timeout: {config.unstuck_timeout}s) - Unstucking...")
+            has_target = config.enemy_target_time > 0
+            target_status = "with target" if has_target else "no target"
+            print(f"[Auto Unstuck] No damage detected for {time_since_last_damage:.1f}s (timeout: {config.unstuck_timeout}s, {target_status}) - Unstucking...")
             config.last_damage_value = None
             config.last_enemy_hp_for_unstuck = None
             

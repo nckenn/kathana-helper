@@ -337,7 +337,8 @@ def check_enemy_HP():
     def reset_enemy_state():
         config.enemy_target_time = 0
         config.enemy_hp_readings.clear()
-        config.last_damage_detected_time = 0
+        # Don't reset last_damage_detected_time here - let it continue so unstuck timer keeps running
+        # It will be reset when a new target is acquired
         config.last_damage_value = None
         config.last_enemy_hp_for_unstuck = None
         config.last_mob_verification_time = 0
@@ -564,6 +565,7 @@ def check_enemy_HP():
                     config.enemy_target_time = current_time
                     config.last_unstuck_check_time = 0  # Reset unstuck check interval to allow immediate damage detection
                     config.last_enemy_hp_for_unstuck = None  # Reset HP tracking for new enemy
+                    config.last_damage_detected_time = current_time  # Reset damage detection timer for new target
                     
                     # Verify mob detection after targeting to ensure we have the correct mob name
                     if config.mob_detection_enabled:
