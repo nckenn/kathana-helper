@@ -167,7 +167,7 @@ class BotGUI:
         # Initialize root window with customtkinter
         self.root = ctk.CTk()
         self.root.title("Kathana Helper by xCrypto v2.0.0")
-        self.root.geometry("750x750")
+        self.root.geometry("655x740")
         self.root.resizable(True, True)
         
         # Configure root window grid to allow resizing
@@ -274,42 +274,41 @@ class BotGUI:
         
         # HP Progress Bar
         hp_bar_frame = ctk.CTkFrame(status_frame, fg_color="transparent")
-        hp_bar_frame.grid(row=0, column=0, sticky="ew", padx=15, pady=(15, 5))
+        hp_bar_frame.grid(row=0, column=0, sticky="w", padx=15, pady=(15, 5))
         
-        hp_label = ctk.CTkLabel(hp_bar_frame, text="HP:", width=60, anchor='w', font=ctk.CTkFont(size=11))
+        hp_label = ctk.CTkLabel(hp_bar_frame, text="HP:", width=70, anchor='w', font=ctk.CTkFont(size=11))
         hp_label.grid(row=0, column=0, padx=(0, 10))
-        self.hp_progress_bar = ctk.CTkProgressBar(hp_bar_frame, width=250, progress_color="red")
+        self.hp_progress_bar = ctk.CTkProgressBar(hp_bar_frame, width=200, height=20, progress_color="red", corner_radius=0)
         self.hp_progress_bar.set(0)
-        self.hp_progress_bar.grid(row=0, column=1, sticky="ew", padx=(0, 10))
-        self.hp_percent_label = ctk.CTkLabel(hp_bar_frame, text="---%", font=ctk.CTkFont(size=11, weight="bold"), text_color="red")
+        self.hp_progress_bar.grid(row=0, column=1, padx=(0, 10))
+        self.hp_percent_label = ctk.CTkLabel(hp_bar_frame, text="---%", font=ctk.CTkFont(size=11, weight="bold"), text_color="white")
         self.hp_percent_label.grid(row=0, column=2)
-        hp_bar_frame.columnconfigure(1, weight=1)
         
         # MP Progress Bar
         mp_bar_frame = ctk.CTkFrame(status_frame, fg_color="transparent")
-        mp_bar_frame.grid(row=1, column=0, sticky="ew", padx=15, pady=5)
+        mp_bar_frame.grid(row=1, column=0, sticky="w", padx=15, pady=5)
         
-        mp_label = ctk.CTkLabel(mp_bar_frame, text="MP:", width=60, anchor='w', font=ctk.CTkFont(size=11))
+        mp_label = ctk.CTkLabel(mp_bar_frame, text="MP:", width=70, anchor='w', font=ctk.CTkFont(size=11))
         mp_label.grid(row=0, column=0, padx=(0, 10))
-        self.mp_progress_bar = ctk.CTkProgressBar(mp_bar_frame, width=250, progress_color="blue")
+        self.mp_progress_bar = ctk.CTkProgressBar(mp_bar_frame, width=200, height=20, progress_color="#0b58b0", corner_radius=0)
         self.mp_progress_bar.set(0)
-        self.mp_progress_bar.grid(row=0, column=1, sticky="ew", padx=(0, 10))
-        self.mp_percent_label = ctk.CTkLabel(mp_bar_frame, text="---%", font=ctk.CTkFont(size=11, weight="bold"), text_color="blue")
+        self.mp_progress_bar.grid(row=0, column=1, padx=(0, 10))
+        self.mp_percent_label = ctk.CTkLabel(mp_bar_frame, text="---%", font=ctk.CTkFont(size=11, weight="bold"), text_color="white")
         self.mp_percent_label.grid(row=0, column=2)
-        mp_bar_frame.columnconfigure(1, weight=1)
         
         # Enemy HP Progress Bar
         enemy_hp_bar_frame = ctk.CTkFrame(status_frame, fg_color="transparent")
-        enemy_hp_bar_frame.grid(row=2, column=0, sticky="ew", padx=15, pady=5)
+        enemy_hp_bar_frame.grid(row=2, column=0, sticky="w", padx=15, pady=5)
         
-        enemy_hp_label = ctk.CTkLabel(enemy_hp_bar_frame, text="Enemy HP:", width=60, anchor='w', font=ctk.CTkFont(size=11))
+        enemy_hp_label = ctk.CTkLabel(enemy_hp_bar_frame, text="Enemy HP:", width=70, anchor='w', font=ctk.CTkFont(size=11))
         enemy_hp_label.grid(row=0, column=0, padx=(0, 10))
-        self.enemy_hp_progress_bar = ctk.CTkProgressBar(enemy_hp_bar_frame, width=250, progress_color="orange")
+        self.enemy_hp_progress_bar = ctk.CTkProgressBar(enemy_hp_bar_frame, width=200, height=20, progress_color="green", corner_radius=0)
         self.enemy_hp_progress_bar.set(0)
-        self.enemy_hp_progress_bar.grid(row=0, column=1, sticky="ew", padx=(0, 10))
-        self.enemy_hp_percent_label = ctk.CTkLabel(enemy_hp_bar_frame, text="---%", font=ctk.CTkFont(size=11, weight="bold"), text_color="orange")
-        self.enemy_hp_percent_label.grid(row=0, column=2)
-        enemy_hp_bar_frame.columnconfigure(1, weight=1)
+        self.enemy_hp_progress_bar.grid(row=0, column=1, padx=(0, 10))
+        self.enemy_hp_percent_label = ctk.CTkLabel(enemy_hp_bar_frame, text="---%", font=ctk.CTkFont(size=11, weight="bold"), text_color="white")
+        self.enemy_hp_percent_label.grid(row=0, column=2, padx=(0, 10))
+        self.unstuck_countdown_label = ctk.CTkLabel(enemy_hp_bar_frame, text="Unstuck: ---", font=ctk.CTkFont(size=10), text_color="gray")
+        self.unstuck_countdown_label.grid(row=0, column=3)
         
         # Enemy Name display
         enemy_name_frame = ctk.CTkFrame(status_frame, fg_color="transparent")

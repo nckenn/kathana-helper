@@ -25,8 +25,18 @@ def check_skill_slots():
 def trigger_skill(slot_num):
     """Trigger a skill for the specified slot number or function key"""
     try:
-        if config.mob_detection_enabled and mob_detection.should_skip_current_mob():
-            return
+        # Always check mob filter before attacking - verify current mob is up to date
+        if config.mob_detection_enabled:
+            # Refresh mob detection if it's been a while since last detection
+            current_time = time.time()
+            if current_time - config.last_mob_detection_time > 0.5:
+                detected_mob = mob_detection.detect_mob_name()
+                if detected_mob:
+                    config.current_target_mob = detected_mob
+                    config.last_mob_detection_time = current_time
+            
+            if mob_detection.should_skip_current_mob():
+                return
         
         if isinstance(slot_num, int):
             skill_key = str(slot_num)
@@ -49,20 +59,36 @@ def check_action_slots():
 
 
 def smart_loot():
-    """Smart loot function - triggers looting when enemy is killed"""
+    """Smart loot function - triggers looting when enemy is killed with multiple attempts"""
     try:
         current_time = time.time()
         if current_time - config.last_smart_loot_time < config.SMART_LOOT_COOLDOWN:
             return
         
-        if config.action_slots['pick']['enabled']:
-            action_key = config.action_slots['pick']['key']
+        if not config.action_slots['pick']['enabled']:
+            return
+        
+        action_key = config.action_slots['pick']['key']
+        config.last_smart_loot_time = current_time
+        
+        # Set looting flag to prevent auto-targeting during looting
+        config.is_looting = True
+        config.looting_start_time = current_time
+        
+        # Multiple loot attempts with delays to ensure items are picked up
+        # Sometimes loot appears slightly after enemy death, so we try multiple times
+        num_attempts = 3
+        attempt_delay = 0.2  # Delay between attempts
+        
+        for attempt in range(num_attempts):
             input_handler.send_input(action_key)
-            config.last_smart_loot_time = current_time
-            time.sleep(0.15)
-            print(f"Smart loot triggered (key: {action_key})")
+            if attempt < num_attempts - 1:  # Don't sleep after last attempt
+                time.sleep(attempt_delay)
+        
+        print(f"Smart loot triggered ({num_attempts} attempts, key: {action_key})")
     except Exception as e:
         print(f"Error in smart loot: {e}")
+        # Note: is_looting flag will be cleared by check_enemy_HP after LOOTING_DURATION
 
 
 def check_mouse_clicker():
@@ -96,6 +122,7 @@ def reset_bot_state():
     config.last_mob_verification_time = 0
     config.last_damage_detected_time = 0
     config.last_damage_value = None
+    config.last_enemy_hp_for_unstuck = None
     config.last_unstuck_check_time = 0
     config.last_hp_log_time = 0
     config.last_mp_log_time = 0
@@ -103,6 +130,8 @@ def reset_bot_state():
     config.current_target_mob = None
     config.mouse_clicker_last_used = 0
     config.last_smart_loot_time = 0
+    config.is_looting = False
+    config.looting_start_time = 0
     config.low_damage_count = 0
     config.last_repair_time = 0
     config.last_auto_repair_check_time = 0

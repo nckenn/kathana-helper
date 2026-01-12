@@ -329,11 +329,17 @@ def check_enemy_HP():
     
     config.last_enemy_hp_capture_time = current_time
     
+    # Clear looting flag after looting duration has passed
+    if config.is_looting:
+        if current_time - config.looting_start_time >= config.LOOTING_DURATION:
+            config.is_looting = False
+    
     def reset_enemy_state():
         config.enemy_target_time = 0
         config.enemy_hp_readings.clear()
         config.last_damage_detected_time = 0
         config.last_damage_value = None
+        config.last_enemy_hp_for_unstuck = None
         config.last_mob_verification_time = 0
     
     def send_target_key_with_mob_check(recursion_depth=0):
@@ -344,13 +350,14 @@ def check_enemy_HP():
         input_handler.send_input(config.action_slots['target']['key'])
         config.last_auto_target_time = current_time
         
-        delay = 0.25 if recursion_depth > 0 else 0.15
+        # Increased delay to ensure mob name appears after targeting
+        delay = 0.3 if recursion_depth > 0 else 0.2
         time.sleep(delay)
         
         previous_mob = config.current_target_mob
         detected_mob = None
-        max_retries = 5
-        retry_delay = 0.1
+        max_retries = 6  # Increased retries for more reliable detection
+        retry_delay = 0.15  # Slightly increased retry delay
         
         for attempt in range(max_retries):
             detected_mob = mob_detection.detect_mob_name()
@@ -385,18 +392,31 @@ def check_enemy_HP():
         except:
             pass
         
+        # Always verify mob detection and skip list check, even if detection failed
         if config.mob_detection_enabled and config.mob_skip_list:
+            # Re-detect mob one more time to ensure we have the latest name
+            if not detected_mob:
+                time.sleep(0.1)
+                detected_mob = mob_detection.detect_mob_name()
+                if detected_mob:
+                    config.current_target_mob = detected_mob
+                    config.last_mob_detection_time = current_time
+            
             if detected_mob and mob_detection.should_skip_current_mob():
                 print(f"[Mob Filter] Skipping mob: {detected_mob} (in skip list, retry {recursion_depth + 1}/5)")
                 reset_enemy_state()
                 config.current_target_mob = None
-                time.sleep(0.2)
+                time.sleep(0.25)  # Slightly longer delay before retargeting
                 print(f"[Mob Filter] Retargeting to skip mob")
                 return send_target_key_with_mob_check(recursion_depth + 1)
         
         return False
     
     def try_auto_target(reason="", bypass_cooldown=False):
+        # Don't auto-target if we're currently looting (item names appear in same location as enemy names)
+        if config.is_looting:
+            return False
+        
         if config.auto_attack_enabled:
             if bypass_cooldown or current_time - config.last_auto_target_time >= config.AUTO_TARGET_COOLDOWN:
                 send_target_key_with_mob_check()
@@ -447,6 +467,10 @@ def check_enemy_HP():
                         safe_update_gui(lambda: gui.enemy_hp_percent_label.configure(text=f"{enemy_hp_percentage:.1f}%"))
                     if hasattr(gui, 'enemy_hp_progress_bar'):
                         safe_update_gui(lambda: gui.enemy_hp_progress_bar.set(enemy_hp_percentage / 100.0))
+                    # Update unstuck countdown (will show "---" when no enemy)
+                    if hasattr(gui, 'unstuck_countdown_label'):
+                        import auto_unstuck
+                        auto_unstuck.update_unstuck_countdown_display(current_time)
             except:
                 pass
             return
@@ -469,10 +493,18 @@ def check_enemy_HP():
         
         if not has_red_bar:
             if len(config.enemy_hp_readings) > 0 or config.enemy_target_time > 0:
+                # Small delay to ensure enemy is fully dead and loot is available
+                time.sleep(0.15)
                 bot_logic.smart_loot()
+                # Don't auto-target immediately after looting - wait for looting to complete
+                # The try_auto_target will be blocked by is_looting flag anyway, but we return early here
+                reset_enemy_state()
+                return
             
             reset_enemy_state()
-            try_auto_target("no enemy detected")
+            # Only try auto-targeting if not looting
+            if not config.is_looting:
+                try_auto_target("no enemy detected")
         else:
             raw_enemy_hp_percentage = calculate_bar_percentage(bar_img, 'hp')
             
@@ -481,6 +513,7 @@ def check_enemy_HP():
             if is_suspicious:
                 enemy_hp_percentage = 0.0
                 reset_enemy_state()
+                time.sleep(0.15)  # Delay before looting
                 bot_logic.smart_loot()
                 try_auto_target("no valid target")
             elif config.enemy_hp_readings:
@@ -488,6 +521,7 @@ def check_enemy_HP():
                 if last_avg < 50 and raw_enemy_hp_percentage >= 95:
                     enemy_hp_percentage = 0.0
                     reset_enemy_state()
+                    time.sleep(0.15)  # Delay before looting to ensure enemy is dead
                     bot_logic.smart_loot()
                     try_auto_target("enemy died")
                 else:
@@ -496,10 +530,28 @@ def check_enemy_HP():
                         config.enemy_hp_readings.pop(0)
                     enemy_hp_percentage = sum(config.enemy_hp_readings) / len(config.enemy_hp_readings)
                     
+                    # Periodic mob verification during combat to catch skip list mobs
+                    if config.mob_detection_enabled and config.mob_skip_list and config.enemy_target_time > 0:
+                        # Check mob every 2 seconds during combat
+                        if current_time - config.last_mob_verification_time > 2.0:
+                            config.last_mob_verification_time = current_time
+                            detected_mob = mob_detection.detect_mob_name()
+                            if detected_mob:
+                                config.current_target_mob = detected_mob
+                                config.last_mob_detection_time = current_time
+                                if mob_detection.should_skip_current_mob():
+                                    print(f"[Mob Filter] Detected skip list mob during combat: {detected_mob} - retargeting")
+                                    reset_enemy_state()
+                                    time.sleep(0.2)
+                                    try_auto_target("skip list mob detected during combat")
+                                    return
+                    
                     if raw_enemy_hp_percentage <= 3.0 and config.enemy_target_time > 0 and len(config.enemy_hp_readings) > 1:
                         previous_readings = config.enemy_hp_readings[:-1]
                         if previous_readings and max(previous_readings) > 10.0:
                             print(f"Enemy HP dropped from {max(previous_readings):.1f}% to {raw_enemy_hp_percentage:.1f}% - triggering smart loot")
+                            # Small delay to ensure enemy is fully dead before looting
+                            time.sleep(0.1)
                             bot_logic.smart_loot()
                             enemy_hp_percentage = 0.0
                             reset_enemy_state()
@@ -510,6 +562,23 @@ def check_enemy_HP():
             if enemy_hp_percentage > 0:
                 if config.enemy_target_time == 0:
                     config.enemy_target_time = current_time
+                    config.last_unstuck_check_time = 0  # Reset unstuck check interval to allow immediate damage detection
+                    config.last_enemy_hp_for_unstuck = None  # Reset HP tracking for new enemy
+                    
+                    # Verify mob detection after targeting to ensure we have the correct mob name
+                    if config.mob_detection_enabled:
+                        time.sleep(0.1)  # Small delay for mob name to appear
+                        detected_mob = mob_detection.detect_mob_name()
+                        if detected_mob:
+                            config.current_target_mob = detected_mob
+                            config.last_mob_detection_time = current_time
+                            if config.mob_skip_list and mob_detection.should_skip_current_mob():
+                                print(f"[Mob Filter] Detected skip list mob after targeting: {detected_mob} - retargeting")
+                                reset_enemy_state()
+                                time.sleep(0.2)
+                                try_auto_target("skip list mob detected")
+                                return
+                    
                     print(f"Enemy targeted")
         
         try:
@@ -521,6 +590,10 @@ def check_enemy_HP():
                     safe_update_gui(lambda: gui.enemy_hp_percent_label.configure(text=f"{enemy_hp_percentage:.1f}%"))
                 if hasattr(gui, 'enemy_hp_progress_bar'):
                     safe_update_gui(lambda: gui.enemy_hp_progress_bar.set(enemy_hp_percentage / 100.0))
+                # Update unstuck countdown when enemy HP is displayed
+                if hasattr(gui, 'unstuck_countdown_label'):
+                    import auto_unstuck
+                    auto_unstuck.update_unstuck_countdown_display(current_time)
         except:
             pass
         
@@ -539,5 +612,9 @@ def check_enemy_HP():
                     safe_update_gui(lambda: gui.enemy_hp_percent_label.configure(text=f"{enemy_hp_percentage:.1f}%"))
                 if hasattr(gui, 'enemy_hp_progress_bar'):
                     safe_update_gui(lambda: gui.enemy_hp_progress_bar.set(enemy_hp_percentage / 100.0))
+                # Update unstuck countdown (will show "---" when no enemy)
+                if hasattr(gui, 'unstuck_countdown_label'):
+                    import auto_unstuck
+                    auto_unstuck.update_unstuck_countdown_display(current_time)
         except:
             pass

@@ -18,7 +18,7 @@ auto_repair_enabled = False
 mouse_clicker_enabled = False
 
 # HP/MP thresholds and areas
-hp_threshold = 50  # Default HP threshold percentage (0-100)
+hp_threshold = 70  # Default HP threshold percentage (0-100)
 hp_bar_area = {'x': 152, 'y': 69, 'width': 0, 'height': 0}
 mp_threshold = 50  # Default MP threshold percentage (0-100)
 mp_bar_area = {'x': 428, 'y': 139, 'width': 0, 'height': 0}
@@ -101,10 +101,14 @@ last_enemy_hp_capture_time = 0
 last_auto_target_time = 0
 enemy_target_time = 0
 last_smart_loot_time = 0
-SMART_LOOT_COOLDOWN = 1.0
-unstuck_timeout = 10.0
+SMART_LOOT_COOLDOWN = 0.5  # Reduced cooldown to allow more frequent looting attempts
+is_looting = False  # Flag to prevent auto-targeting during looting
+looting_start_time = 0
+LOOTING_DURATION = 1.5  # Duration to prevent auto-targeting after looting starts
+unstuck_timeout = 8.0
 last_damage_detected_time = 0
 last_damage_value = None
+last_enemy_hp_for_unstuck = None  # Track last enemy HP for unstuck detection (HP-based instead of OCR)
 last_unstuck_check_time = 0
 UNSTUCK_CHECK_INTERVAL = 1.0
 HP_CAPTURE_INTERVAL = 0.3
