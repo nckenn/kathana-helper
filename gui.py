@@ -14,6 +14,7 @@ import settings_manager
 import bot_logic
 import input_handler
 import mob_detection
+import ocr_utils
 
 class BotGUI:
     _instance = None
@@ -22,6 +23,33 @@ class BotGUI:
         if cls._instance is None:
             cls._instance = super(BotGUI, cls).__new__(cls)
         return cls._instance
+    
+    def check_ocr_on_startup(self):
+        """Check OCR availability on startup and show warning if not available"""
+        print("Checking OCR availability...")
+        is_available, error_msg, mode = ocr_utils.check_ocr_availability()
+        
+        # Store OCR availability in config
+        config.ocr_available = is_available
+        config.ocr_mode = mode
+        
+        if not is_available:
+            error_details = f"\n\nError: {error_msg}" if error_msg else ""
+            warning_message = (
+                "OCR (Optical Character Recognition) is not available on this system.\n\n"
+                "Features that require OCR (such as auto-repair, damage detection, etc.) "
+                "will not work.\n\n"
+                "Possible solutions:\n"
+                "• Install EasyOCR: pip install easyocr\n"
+                "• Install required dependencies (PyTorch, etc.)\n"
+                "• Check if your system meets the requirements\n"
+                f"{error_details}\n\n"
+                "The application will continue, but OCR features will be disabled."
+            )
+            messagebox.showwarning("OCR Not Available", warning_message)
+            print("WARNING: OCR is not available - OCR features will be disabled")
+        else:
+            print(f"OCR check passed - Available in {mode.upper()} mode")
     
     def save_settings_gui(self):
         """Save settings from GUI"""
@@ -169,6 +197,9 @@ class BotGUI:
         self.root.title("Kathana Helper by xCrypto v2.0.0")
         self.root.geometry("655x740")
         self.root.resizable(True, True)
+        
+        # Check OCR availability on startup
+        self.check_ocr_on_startup()
         
         # Configure root window grid to allow resizing
         self.root.columnconfigure(0, weight=1)

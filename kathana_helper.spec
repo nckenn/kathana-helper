@@ -3,14 +3,20 @@
 block_cipher = None
 
 hiddenimports = [
+    # Python stdlib (often missed)
     "queue",
     "threading",
+    "multiprocessing",
+    "asyncio",
+    "concurrent.futures",
 
     # Windows / pywin32
-    "win32api",
-    "win32con",
     "win32gui",
+    "win32con",
+    "win32api",
+    "win32process",
     "win32ui",
+    "pywintypes",
 
     # Input automation
     "pydirectinput",
@@ -21,8 +27,17 @@ hiddenimports = [
     "tkinter",
     "customtkinter",
 
-    # OCR
+    # OCR / Imaging stack
     "easyocr",
+    "easyocr.reader",
+    "easyocr.utils",
+    "easyocr.model",
+    "easyocr.character",
+    "easyocr.detection",
+    "easyocr.recognition",
+    "cv2",
+    "numpy",
+    "PIL",
 ]
 
 datas = [

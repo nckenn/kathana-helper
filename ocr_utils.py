@@ -11,13 +11,71 @@ import config
 import window_utils
 
 
+def check_ocr_availability():
+    """Check if OCR is available and working
+    
+    Returns:
+        tuple: (is_available: bool, error_message: str, mode: str)
+        mode can be 'gpu', 'cpu', or None if unavailable
+    """
+    try:
+        # Try GPU first if enabled
+        if config.ocr_use_gpu:
+            try:
+                test_reader = easyocr.Reader(['en'], gpu=True, verbose=False)
+                # Test with a simple image (white rectangle)
+                test_image = np.ones((50, 200, 3), dtype=np.uint8) * 255
+                test_reader.readtext(test_image, detail=0)
+                del test_reader  # Clean up test reader
+                return True, None, 'gpu'
+            except Exception as gpu_error:
+                error_msg = str(gpu_error)
+                # Fall through to CPU test
+        
+        # Try CPU
+        try:
+            test_reader = easyocr.Reader(['en'], gpu=False, verbose=False)
+            # Test with a simple image (white rectangle)
+            test_image = np.ones((50, 200, 3), dtype=np.uint8) * 255
+            test_reader.readtext(test_image, detail=0)
+            del test_reader  # Clean up test reader
+            return True, None, 'cpu'
+        except Exception as cpu_error:
+            return False, str(cpu_error), None
+            
+    except Exception as e:
+        return False, str(e), None
+
+
 def initialize_ocr_reader():
-    """Lazy initialize EasyOCR reader (only when first needed)"""
+    """Lazy initialize EasyOCR reader (only when first needed)
+    
+    Tries GPU first if enabled, falls back to CPU if GPU is unavailable.
+    Returns False if OCR is not available (checked on startup).
+    """
+    # Check if OCR was determined to be unavailable on startup
+    if not config.ocr_available:
+        print("OCR is not available on this system (checked on startup)")
+        return False
+    
     if config.ocr_reader is None:
         print("Initializing EasyOCR (this may take a moment)...")
+        
+        # Try GPU first if enabled
+        if config.ocr_use_gpu:
+            try:
+                config.ocr_reader = easyocr.Reader(['en'], gpu=True, verbose=False)
+                print("EasyOCR initialized successfully with GPU acceleration!")
+                return True
+            except Exception as e:
+                print(f"GPU initialization failed: {e}")
+                print("Falling back to CPU mode...")
+                # Fall through to CPU initialization
+        
+        # Use CPU (either because GPU is disabled or GPU failed)
         try:
             config.ocr_reader = easyocr.Reader(['en'], gpu=False, verbose=False)
-            print("EasyOCR initialized successfully!")
+            print("EasyOCR initialized successfully with CPU mode!")
         except Exception as e:
             print(f"Error initializing EasyOCR: {e}")
             return False

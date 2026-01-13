@@ -84,6 +84,9 @@ MOB_DETECTION_INTERVAL = 1.0
 
 # OCR settings
 ocr_reader = None  # EasyOCR reader instance (lazy loaded)
+ocr_use_gpu = True  # Try to use GPU if available, fallback to CPU if not
+ocr_available = False  # Set to True if OCR check passes on startup
+ocr_mode = None  # 'gpu', 'cpu', or None - indicates which mode OCR is using
 
 # Settings file
 SETTINGS_FILE = "bot_settings.json"
