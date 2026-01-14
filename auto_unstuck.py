@@ -9,6 +9,20 @@ import input_handler
 import mob_detection
 
 
+def get_unstuck_remaining_time(unstuck_timeout):
+    """
+    Get remaining unstuck time
+    Returns (elapsed, remaining) in seconds
+    """
+    if config.enemy_hp_stagnant_time == 0 or config.last_enemy_hp_before_stagnant is None:
+        return (0.0, unstuck_timeout)
+    
+    current_time = time.time()
+    elapsed = max(0.0, current_time - config.enemy_hp_stagnant_time)
+    remaining = max(0.0, unstuck_timeout - elapsed)
+    return (elapsed, remaining)
+
+
 def update_unstuck_countdown_display(current_time):
     """Update the unstuck countdown display in the GUI"""
     try:
@@ -17,13 +31,21 @@ def update_unstuck_countdown_display(current_time):
         if hasattr(BotGUI, '_instance') and BotGUI._instance:
             gui = BotGUI._instance
             if hasattr(gui, 'unstuck_countdown_label'):
-                if config.last_damage_detected_time == 0:
-                    # Not initialized
+                # Check if auto unstuck is enabled
+                if not config.auto_change_target_enabled:
+                    safe_update_gui(lambda: gui.unstuck_countdown_label.configure(
+                        text="Unstuck: Disabled", 
+                        text_color="gray"
+                    ))
+                    return
+                
+                # Use stagnant HP time instead of damage detection time
+                _, remaining_time = get_unstuck_remaining_time(config.unstuck_timeout)
+                
+                if config.enemy_hp_stagnant_time == 0 or config.last_enemy_hp_before_stagnant is None:
+                    # Not initialized or no target
                     safe_update_gui(lambda: gui.unstuck_countdown_label.configure(text="Unstuck: ---", text_color="gray"))
                 else:
-                    time_since_last_damage = current_time - config.last_damage_detected_time
-                    remaining_time = max(0, config.unstuck_timeout - time_since_last_damage)
-                    
                     # Color coding: green when safe, yellow when warning, red when critical
                     if remaining_time > config.unstuck_timeout * 0.5:
                         color = "green"
@@ -45,13 +67,18 @@ def update_unstuck_countdown_display(current_time):
 
 
 def check_auto_unstuck():
-    """Check enemy HP for damage detection and trigger unstuck if no damage detected for timeout period"""
+    """
+    Check enemy HP for stagnant detection and trigger unstuck if HP is stagnant for timeout period
+    Checks if HP change > 5% to reset timer, uses stagnant HP time tracking
+    """
     if not config.auto_change_target_enabled:
+        # Update display to show disabled state
+        update_unstuck_countdown_display(time.time())
         return
     
     if not config.auto_attack_enabled:
-        config.last_damage_detected_time = 0
-        config.last_enemy_hp_for_unstuck = None
+        config.enemy_hp_stagnant_time = 0
+        config.last_enemy_hp_before_stagnant = None
         update_unstuck_countdown_display(time.time())
         return
     
@@ -61,73 +88,44 @@ def check_auto_unstuck():
     
     config.last_unstuck_check_time = current_time
     
-    # Initialize damage detection time if not set (only when we have a target)
-    if config.last_damage_detected_time == 0 and config.enemy_target_time > 0:
-        config.last_damage_detected_time = current_time
-        config.last_enemy_hp_for_unstuck = None
-    
-    # Update countdown display (works even without target now)
+    # Update countdown display
     update_unstuck_countdown_display(current_time)
     
-    # Only check HP damage when we have a target
-    if config.enemy_target_time > 0:
-        # Check if enemy HP has decreased (indicating damage dealt)
-        if config.enemy_hp_readings and len(config.enemy_hp_readings) > 0:
-            current_hp = sum(config.enemy_hp_readings) / len(config.enemy_hp_readings)
-            
-            # If we have a previous HP reading and current HP is lower, damage was dealt
-            if config.last_enemy_hp_for_unstuck is not None:
-                hp_decrease = config.last_enemy_hp_for_unstuck - current_hp
+    # Only check for stagnant HP when we have a target and HP readings
+    if config.enemy_target_time > 0 and config.enemy_hp_readings and len(config.enemy_hp_readings) > 0:
+        current_hp = sum(config.enemy_hp_readings) / len(config.enemy_hp_readings)
+        
+        # Check if HP has been stagnant for the timeout period
+        if config.enemy_hp_stagnant_time > 0 and config.last_enemy_hp_before_stagnant is not None:
+            time_stagnant = current_time - config.enemy_hp_stagnant_time
+            if time_stagnant >= config.unstuck_timeout:
+                # HP has been stagnant for timeout period - execute unstuck
+                print(f"[Auto Unstuck] Enemy HP stagnant at {current_hp:.1f}% for {time_stagnant:.1f}s (timeout: {config.unstuck_timeout}s) - Unstucking...")
                 
-                # Only consider it damage if HP decreased by at least 0.5% (to avoid false positives from minor fluctuations)
-                if hp_decrease > 0.5:
-                    config.last_damage_detected_time = current_time
-                    update_unstuck_countdown_display(current_time)  # Update display immediately when damage detected
-                    if not hasattr(check_auto_unstuck, 'last_damage_log_time'):
-                        check_auto_unstuck.last_damage_log_time = 0
-                    if current_time - check_auto_unstuck.last_damage_log_time > 5.0:
-                        print(f"[Auto Unstuck] Enemy HP decreased from {config.last_enemy_hp_for_unstuck:.1f}% to {current_hp:.1f}% - unstuck timer reset")
-                        check_auto_unstuck.last_damage_log_time = current_time
-            
-            # Update last HP value for next comparison
-            config.last_enemy_hp_for_unstuck = current_hp
-        else:
-            # No HP readings available, reset tracking
-            config.last_enemy_hp_for_unstuck = None
-    
-    # Check timeout even when there's no target (timer continues from last damage time)
-    if config.last_damage_detected_time > 0:
-        time_since_last_damage = current_time - config.last_damage_detected_time
-        if time_since_last_damage >= config.unstuck_timeout:
-            has_target = config.enemy_target_time > 0
-            target_status = "with target" if has_target else "no target"
-            print(f"[Auto Unstuck] No damage detected for {time_since_last_damage:.1f}s (timeout: {config.unstuck_timeout}s, {target_status}) - Unstucking...")
-            config.last_damage_value = None
-            config.last_enemy_hp_for_unstuck = None
-            
-            movement_keys = ['w', 's', 'a', 'd']
-            num_movements = random.randint(4, 5)
-            for _ in range(num_movements):
-                key = random.choice(movement_keys)
-                input_handler.send_movement_key(key, hold_duration=0.15)
-                time.sleep(0.05)
-            
-            if config.auto_attack_enabled:
-                target_key = config.action_slots['target']['key']
-                input_handler.send_input(target_key)
-                config.last_auto_target_time = current_time
+                movement_keys = ['w', 's', 'a', 'd']
+                num_movements = random.randint(4, 5)
+                for _ in range(num_movements):
+                    key = random.choice(movement_keys)
+                    input_handler.send_movement_key(key, hold_duration=0.15)
+                    time.sleep(0.05)
                 
-                if config.mob_detection_enabled and config.mob_skip_list:
-                    time.sleep(0.15)
-                    detected_mob = mob_detection.detect_mob_name()
-                    if detected_mob:
-                        config.current_target_mob = detected_mob
-                        if mob_detection.should_skip_current_mob():
-                            print(f"[Mob Filter] Skipping mob after unstuck: {detected_mob}")
+                if config.auto_attack_enabled:
+                    target_key = config.action_slots['target']['key']
+                    input_handler.send_input(target_key)
+                    config.last_auto_target_time = current_time
+                    
+                    if config.mob_detection_enabled and config.mob_target_list:
+                        # Use reusable function to detect and verify mob after retarget
+                        mob_result = mob_detection.detect_and_verify_mob_after_target(delay=0.15, retry_delay=0.1)
+                        
+                        if mob_result['needs_retarget']:
+                            print(f"[Mob Filter] Skipping mob after unstuck: {mob_result['name']} (not in target list)")
                             time.sleep(0.1)
                             input_handler.send_input(target_key)
                             config.last_auto_target_time = current_time
-            print(f"[Auto Unstuck] Unstuck complete, retargeting")
-            # Reset damage detection time AFTER unstuck completes to show full countdown
-            config.last_damage_detected_time = time.time()
-            update_unstuck_countdown_display(config.last_damage_detected_time)
+                
+                print(f"[Auto Unstuck] Unstuck complete, retargeting")
+                # Reset stagnant tracking AFTER unstuck completes
+                config.enemy_hp_stagnant_time = time.time()
+                config.last_enemy_hp_before_stagnant = None
+                update_unstuck_countdown_display(time.time())

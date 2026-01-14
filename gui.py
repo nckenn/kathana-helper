@@ -6,6 +6,7 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog
 import customtkinter as ctk
 import threading
+import time
 import win32gui
 import queue
 import config
@@ -15,6 +16,7 @@ import bot_logic
 import input_handler
 import mob_detection
 import ocr_utils
+import calibration
 
 class BotGUI:
     _instance = None
@@ -27,7 +29,7 @@ class BotGUI:
     def check_ocr_on_startup(self):
         """Check OCR availability on startup and show warning if not available"""
         print("Checking OCR availability...")
-        is_available, error_msg, mode = ocr_utils.check_ocr_availability()
+        is_available, error_msg, mode, troubleshooting = ocr_utils.check_ocr_availability()
         
         # Store OCR availability in config
         config.ocr_available = is_available
@@ -35,21 +37,69 @@ class BotGUI:
         
         if not is_available:
             error_details = f"\n\nError: {error_msg}" if error_msg else ""
+            troubleshooting_text = f"\n\n{troubleshooting}" if troubleshooting else ""
             warning_message = (
                 "OCR (Optical Character Recognition) is not available on this system.\n\n"
                 "Features that require OCR (such as auto-repair, damage detection, etc.) "
-                "will not work.\n\n"
-                "Possible solutions:\n"
-                "• Install EasyOCR: pip install easyocr\n"
-                "• Install required dependencies (PyTorch, etc.)\n"
-                "• Check if your system meets the requirements\n"
-                f"{error_details}\n\n"
-                "The application will continue, but OCR features will be disabled."
+                "will not work."
+                f"{error_details}"
+                f"{troubleshooting_text}\n\n"
+                "You can re-check OCR availability from the Settings tab after fixing the issue."
             )
             messagebox.showwarning("OCR Not Available", warning_message)
             print("WARNING: OCR is not available - OCR features will be disabled")
         else:
             print(f"OCR check passed - Available in {mode.upper()} mode")
+    
+    def update_ocr_status_display(self):
+        """Update the OCR status display in the Settings tab"""
+        if not hasattr(self, 'ocr_status_text'):
+            return  # GUI elements not created yet
+        
+        if config.ocr_available:
+            status_text = f"✓ Available ({config.ocr_mode.upper()} mode)"
+            self.ocr_status_text.configure(text=status_text, text_color="green")
+        else:
+            status_text = "✗ Not Available"
+            self.ocr_status_text.configure(text=status_text, text_color="red")
+    
+    def recheck_ocr_availability(self):
+        """Re-check OCR availability (called from GUI button)"""
+        # Disable button during check
+        self.recheck_ocr_button.configure(state="disabled", text="Checking...")
+        self.ocr_status_text.configure(text="Checking...", text_color="gray")
+        
+        # Run in a separate thread to avoid blocking GUI
+        def check_thread():
+            try:
+                is_available, error_msg, mode, troubleshooting = ocr_utils.recheck_ocr_availability()
+                
+                # Update status display in GUI thread
+                def update_gui():
+                    self.update_ocr_status_display()
+                    self.recheck_ocr_button.configure(state="normal", text="Re-check OCR")
+                    
+                    if is_available:
+                        messagebox.showinfo("OCR Status", 
+                            f"OCR is now available in {config.ocr_mode.upper()} mode!\n\n"
+                            "OCR features are now enabled.")
+                    else:
+                        error_details = f"\n\nError: {error_msg}" if error_msg else ""
+                        troubleshooting_text = f"\n\n{troubleshooting}" if troubleshooting else ""
+                        messagebox.showwarning("OCR Status", 
+                            "OCR is still not available."
+                            f"{error_details}"
+                            f"{troubleshooting_text}")
+                
+                # Schedule GUI update in main thread
+                self.root.after(0, update_gui)
+            except Exception as e:
+                def show_error():
+                    self.recheck_ocr_button.configure(state="normal", text="Re-check OCR")
+                    messagebox.showerror("OCR Check Error", f"Error checking OCR: {e}")
+                self.root.after(0, show_error)
+        
+        threading.Thread(target=check_thread, daemon=True).start()
     
     def save_settings_gui(self):
         """Save settings from GUI"""
@@ -168,16 +218,19 @@ class BotGUI:
             except Exception as e:
                 print(f"  Error applying mouse clicker settings: {e}")
             
-            # Apply skip list
-            skip_text = '\n'.join(config.mob_skip_list)
-            self.skip_list_text.delete("1.0", tk.END)
-            self.skip_list_text.insert("1.0", skip_text)
+            # Apply target list
+            target_text = '\n'.join(config.mob_target_list)
+            self.target_list_text.delete("1.0", tk.END)
+            self.target_list_text.insert("1.0", target_text)
             
             # Apply selected window
             if config.selected_window:
                 self.window_var.set(config.selected_window)
                 # Try to refresh and select the window
                 self.refresh_windows_with_selection(config.selected_window)
+            
+            # Update toggle bot button state after applying settings
+            self.update_toggle_bot_button_state()
             
             print("Settings applied to GUI")
         except Exception as e:
@@ -195,7 +248,7 @@ class BotGUI:
         # Initialize root window with customtkinter
         self.root = ctk.CTk()
         self.root.title("Kathana Helper by xCrypto v2.0.0")
-        self.root.geometry("655x740")
+        self.root.geometry("655x800")
         self.root.resizable(True, True)
         
         # Check OCR availability on startup
@@ -262,25 +315,25 @@ class BotGUI:
         self.connect_button = ctk.CTkButton(bot_frame, text="Connect", command=self.connect_window, width=120, height=32, corner_radius=6)
         self.connect_button.grid(row=0, column=0, padx=(10, 5), pady=5)
         
-        # Start button
-        self.start_button = ctk.CTkButton(bot_frame, text="Start", command=self.start_bot, state="disabled", width=100, height=32, corner_radius=6, fg_color="green", hover_color="darkgreen")
-        self.start_button.grid(row=0, column=1, padx=5, pady=5)
+        # Calibrate button
+        self.calibrate_button = ctk.CTkButton(bot_frame, text="Calibrate", command=self.calibrate_bars, width=100, height=32, corner_radius=6, state="disabled")
+        self.calibrate_button.grid(row=0, column=1, padx=5, pady=5)
         
-        # Stop button
-        self.stop_button = ctk.CTkButton(bot_frame, text="Stop", command=self.stop_bot, state="disabled", width=100, height=32, corner_radius=6, fg_color="red", hover_color="darkred")
-        self.stop_button.grid(row=0, column=2, padx=5, pady=5)
+        # Start/Stop toggle button
+        self.toggle_bot_button = ctk.CTkButton(bot_frame, text="Start", command=self.toggle_bot, state="disabled", width=100, height=32, corner_radius=6, fg_color="green", hover_color="darkgreen")
+        self.toggle_bot_button.grid(row=0, column=2, padx=5, pady=5)
         
         # Separator frame (using a thin frame as separator) - fixed height to match buttons
         separator = ctk.CTkFrame(bot_frame, width=2, height=40, fg_color="gray50")
-        separator.grid(row=0, column=3, padx=6, pady=5)
+        separator.grid(row=0, column=4, padx=6, pady=5)
         
         # Save Settings button
         self.save_settings_button = ctk.CTkButton(bot_frame, text="Save Settings", command=self.save_settings_gui, width=110, height=32, corner_radius=6)
-        self.save_settings_button.grid(row=0, column=4, padx=5, pady=5)
+        self.save_settings_button.grid(row=0, column=5, padx=5, pady=5)
         
         # Load Settings button
         self.load_settings_button = ctk.CTkButton(bot_frame, text="Load Settings", command=self.load_settings_gui, width=110, height=32, corner_radius=6)
-        self.load_settings_button.grid(row=0, column=5, padx=(5, 10), pady=5)
+        self.load_settings_button.grid(row=0, column=6, padx=(5, 10), pady=5)
         
         # Create tabview for all sections
         tabview = ctk.CTkTabview(main_frame, corner_radius=8)
@@ -360,6 +413,9 @@ class BotGUI:
         settings_frame.columnconfigure(0, weight=1)
         settings_frame.columnconfigure(1, weight=1)
         settings_frame.rowconfigure(0, weight=0)
+        settings_frame.rowconfigure(1, weight=0)
+        settings_frame.rowconfigure(2, weight=0)
+        settings_frame.rowconfigure(3, weight=0)
         
         # Column 0: Auto Attack, Auto Loot, Auto Repair
         # Auto Attack frame
@@ -451,6 +507,33 @@ class BotGUI:
         self.mp_height_var = tk.StringVar(value=str(config.mp_bar_area['height']))
         self.mp_coords_var = tk.StringVar(value=f"{config.mp_bar_area['x']},{config.mp_bar_area['y']}")
         
+        # OCR Status frame (row 0, spans both columns)
+        ocr_status_frame = ctk.CTkFrame(settings_frame, corner_radius=8)
+        ocr_status_frame.grid(row=0, column=0, columnspan=2, sticky="ew", padx=15, pady=(10, 5))
+        ocr_status_frame.columnconfigure(1, weight=1)
+        
+        # OCR Status label
+        ocr_status_label = ctk.CTkLabel(ocr_status_frame, text="OCR Status:", font=ctk.CTkFont(size=12, weight="bold"))
+        ocr_status_label.grid(row=0, column=0, sticky="w", padx=(10, 5), pady=10)
+        
+        # OCR Status indicator
+        self.ocr_status_text = ctk.CTkLabel(ocr_status_frame, 
+                                           text="Checking...", 
+                                           font=ctk.CTkFont(size=11))
+        self.ocr_status_text.grid(row=0, column=1, sticky="w", padx=5, pady=10)
+        
+        # Re-check OCR button
+        self.recheck_ocr_button = ctk.CTkButton(ocr_status_frame, 
+                                                text="Re-check OCR", 
+                                                command=self.recheck_ocr_availability,
+                                                width=120, 
+                                                height=28, 
+                                                corner_radius=6)
+        self.recheck_ocr_button.grid(row=0, column=2, padx=(5, 10), pady=10)
+        
+        # Update OCR status display
+        self.update_ocr_status_display()
+        
         # Auto Unstuck frame
         auto_change_target_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
         auto_change_target_frame.grid(row=3, column=1, sticky="ew", padx=(5, 15), pady=(0, 0))
@@ -489,20 +572,26 @@ class BotGUI:
                                      font=ctk.CTkFont(size=11))
         mob_checkbox.grid(row=6, column=0, columnspan=2, sticky="w", padx=15, pady=(0, 5))
         
-        # Skip list
-        ctk.CTkLabel(settings_frame, text="Skip List (one per line):", font=ctk.CTkFont(size=11)).grid(row=7, column=0, columnspan=2, sticky="w", padx=15, pady=(5, 5))
-        self.skip_list_text = ctk.CTkTextbox(settings_frame, height=150, width=400, font=ctk.CTkFont(size=11))
-        self.skip_list_text.grid(row=8, column=0, columnspan=2, sticky="ew", padx=15, pady=(0, 5))
+        # Target list
+        ctk.CTkLabel(settings_frame, text="Target List (one per line, only attack mobs in this list):", font=ctk.CTkFont(size=11)).grid(row=7, column=0, columnspan=2, sticky="w", padx=15, pady=(5, 5))
+        self.target_list_text = ctk.CTkTextbox(settings_frame, height=150, width=400, font=ctk.CTkFont(size=11))
+        self.target_list_text.grid(row=8, column=0, columnspan=2, sticky="ew", padx=15, pady=(0, 5))
         
         # Mob filter buttons
         mob_btn_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
         mob_btn_frame.grid(row=9, column=0, columnspan=2, sticky="ew", padx=15, pady=(10, 15))
         
-        update_btn = ctk.CTkButton(mob_btn_frame, text="Update List", command=self.update_skip_list, width=100, corner_radius=6)
+        update_btn = ctk.CTkButton(mob_btn_frame, text="Update List", command=self.update_target_list, width=100, corner_radius=6)
         update_btn.grid(row=0, column=0, padx=(0, 10))
         
         test_btn = ctk.CTkButton(mob_btn_frame, text="Test", command=self.test_mob_detection, width=100, corner_radius=6)
-        test_btn.grid(row=0, column=1)
+        test_btn.grid(row=0, column=1, padx=(0, 10))
+        
+        # Record button - captures current enemy name automatically
+        is_calibrated = config.calibrator is not None and config.calibrator.mp_position is not None and config.connected_window is not None
+        self.record_target_btn = ctk.CTkButton(mob_btn_frame, text="Record", command=self.record_target_mob, width=100, corner_radius=6, 
+                                  state="normal" if is_calibrated else "disabled")
+        self.record_target_btn.grid(row=0, column=2)
         
         settings_frame.columnconfigure(0, weight=1)
         settings_frame.columnconfigure(1, weight=1)
@@ -606,25 +695,9 @@ class BotGUI:
         # Create buttons for each calibration
         ctk.CTkLabel(calibration_frame, text="Set calibration areas:", font=ctk.CTkFont(size=11)).grid(row=0, column=0, columnspan=2, sticky="w", padx=15, pady=(15, 10))
         
-        # Player HP button - store as instance variable
-        self.hp_calib_btn = ctk.CTkButton(calibration_frame, text="Set Player HP", command=self.pick_hp_coordinates, width=150, corner_radius=6)
-        self.hp_calib_btn.grid(row=1, column=0, sticky="ew", padx=(15, 5), pady=5)
-        
-        # Player MP button - store as instance variable
-        self.mp_calib_btn = ctk.CTkButton(calibration_frame, text="Set Player MP", command=self.pick_mp_coordinates, width=150, corner_radius=6)
-        self.mp_calib_btn.grid(row=1, column=1, sticky="ew", padx=(5, 15), pady=5)
-        
-        # Enemy HP button - store as instance variable
-        self.enemy_hp_calib_btn = ctk.CTkButton(calibration_frame, text="Set Enemy HP", command=self.pick_enemy_hp_coordinates, width=150, corner_radius=6)
-        self.enemy_hp_calib_btn.grid(row=2, column=0, sticky="ew", padx=(15, 5), pady=5)
-        
-        # Enemy Name button - store as instance variable
-        self.enemy_name_calib_btn = ctk.CTkButton(calibration_frame, text="Set Enemy Name", command=self.pick_mob_coordinates, width=150, corner_radius=6)
-        self.enemy_name_calib_btn.grid(row=2, column=1, sticky="ew", padx=(5, 15), pady=5)
-        
         # System Message button - store as instance variable
         self.system_message_calib_btn = ctk.CTkButton(calibration_frame, text="Set System Message", command=self.pick_system_message_coordinates, width=150, corner_radius=6)
-        self.system_message_calib_btn.grid(row=3, column=0, sticky="ew", padx=(15, 5), pady=(5, 15))
+        self.system_message_calib_btn.grid(row=1, column=0, sticky="ew", padx=(15, 5), pady=(5, 15))
         
         # Configure calibration frame grid
         calibration_frame.columnconfigure(0, weight=1)
@@ -785,7 +858,7 @@ class BotGUI:
         if config.connected_window:
             config.connected_window = None
             self.connect_button.configure(text="Connect", state="normal")
-            self.start_button.configure(state="disabled")
+            self.toggle_bot_button.configure(state="disabled")
             self.connection_label.configure(text="Window: Not Connected")
             self.status_label.configure(text="Status: Disconnected")
             print("Window changed - connection reset")
@@ -807,17 +880,122 @@ class BotGUI:
         
         if config.connected_window:
             self.connect_button.configure(text="Connected", state="disabled")
-            self.start_button.configure(state="normal")
+            self.calibrate_button.configure(state="normal")
+            # Don't enable toggle button here - it will be enabled when calibrated
+            self.update_toggle_bot_button_state()
             self.connection_label.configure(text=f"Window: {selected_window_title}")
             self.status_label.configure(text="Status: Connected")
             print(f"Successfully connected to: {selected_window_title}")
         else:
             self.connect_button.configure(text="Connect")
-            self.start_button.configure(state="disabled")
+            self.calibrate_button.configure(state="disabled")
+            self.toggle_bot_button.configure(state="disabled")
             self.connection_label.configure(text="Window: Connection Failed")
             self.status_label.configure(text="Status: Connection Failed")
             print(f"Failed to connect to: {selected_window_title}")
 
+    def calibrate_bars(self):
+        """Perform auto-calibration to detect HP/MP bar positions"""
+        if not config.connected_window:
+            messagebox.showwarning("Not Connected", "Please connect to a window first")
+            return
+        
+        # Disable button during calibration
+        self.calibrate_button.configure(state="disabled", text="Calibrating...")
+        
+        def calibration_thread():
+            try:
+                hwnd = config.connected_window.handle
+                
+                # Create calibrator instance
+                calibrator = calibration.Calibrator()
+                
+                # Perform calibration
+                success = calibrator.calibrate(hwnd)
+                
+                if success:
+                    # Update config with calibrated positions
+                    if calibrator.hp_position:
+                        config.hp_bar_area['x'] = calibrator.hp_position[0]
+                        config.hp_bar_area['y'] = calibrator.hp_position[1]
+                        config.hp_bar_area['width'] = calibrator.hp_dimensions[0]
+                        config.hp_bar_area['height'] = calibrator.hp_dimensions[1]
+                        print(f"[Calibration] HP bar position set: {calibrator.hp_position}")
+                    
+                    if calibrator.mp_position:
+                        config.mp_bar_area['x'] = calibrator.mp_position[0]
+                        config.mp_bar_area['y'] = calibrator.mp_position[1]
+                        config.mp_bar_area['width'] = calibrator.mp_dimensions[0]
+                        config.mp_bar_area['height'] = calibrator.mp_dimensions[1]
+                        print(f"[Calibration] MP bar position set: {calibrator.mp_position}")
+                    
+                    # Store calibrator instance in config for later use
+                    config.calibrator = calibrator
+                    
+                    # Update GUI with calibrated values
+                    def update_gui():
+                        try:
+                            self.hp_x_var.set(str(config.hp_bar_area['x']))
+                            self.hp_y_var.set(str(config.hp_bar_area['y']))
+                            self.hp_width_var.set(str(config.hp_bar_area['width']))
+                            self.hp_height_var.set(str(config.hp_bar_area['height']))
+                            self.hp_coords_var.set(f"{config.hp_bar_area['x']},{config.hp_bar_area['y']}")
+                            
+                            self.mp_x_var.set(str(config.mp_bar_area['x']))
+                            self.mp_y_var.set(str(config.mp_bar_area['y']))
+                            self.mp_width_var.set(str(config.mp_bar_area['width']))
+                            self.mp_height_var.set(str(config.mp_bar_area['height']))
+                            self.mp_coords_var.set(f"{config.mp_bar_area['x']},{config.mp_bar_area['y']}")
+                            
+                            self.calibrate_button.configure(state="normal", text="Calibrate")
+                            # Enable record button if calibration successful
+                            if hasattr(self, 'record_target_btn'):
+                                self.record_target_btn.configure(state="normal")
+                            # Update toggle bot button state to enable Start button
+                            self.update_toggle_bot_button_state()
+                            messagebox.showinfo("Calibration Success", 
+                                f"Calibration completed successfully!\n\n"
+                                f"HP Bar: ({config.hp_bar_area['x']}, {config.hp_bar_area['y']})\n"
+                                f"MP Bar: ({config.mp_bar_area['x']}, {config.mp_bar_area['y']})")
+                        except Exception as e:
+                            print(f"[Calibration] Error updating GUI: {e}")
+                            self.calibrate_button.configure(state="normal", text="Calibrate")
+                    
+                    self.root.after(0, update_gui)
+                else:
+                    def show_error():
+                        self.calibrate_button.configure(state="normal", text="Calibrate")
+                        messagebox.showerror("Calibration Failed", 
+                            "Failed to detect HP/MP bars.\n\n"
+                            "Please ensure:\n"
+                            "1. The game window is visible\n"
+                            "2. HP/MP bars are visible on screen\n"
+                            "3. No other red/blue UI elements are blocking the bars\n"
+                            "4. Make sure HP/MP bars are full")
+                    
+                    self.root.after(0, show_error)
+                    
+            except Exception as e:
+                print(f"[Calibration] Error during calibration: {e}")
+                import traceback
+                traceback.print_exc()
+                
+                def show_error():
+                    self.calibrate_button.configure(state="normal", text="Calibrate")
+                    messagebox.showerror("Calibration Error", f"An error occurred during calibration:\n{str(e)}")
+                
+                self.root.after(0, show_error)
+        
+        # Run calibration in separate thread to avoid blocking GUI
+        threading.Thread(target=calibration_thread, daemon=True).start()
+
+    def toggle_bot(self):
+        """Toggle bot between start and stop states"""
+        if not config.bot_running:
+            self.start_bot()
+        else:
+            self.stop_bot()
+    
     def start_bot(self):
         if not config.bot_running:
             # Check if window is connected
@@ -834,9 +1012,12 @@ class BotGUI:
             config.bot_thread = threading.Thread(target=bot_logic.bot_loop, daemon=True)
             config.bot_thread.start()
             
-            self.start_button.configure(state="disabled")
-            self.stop_button.configure(state="normal")
+            # Update button to show Stop state
+            self.toggle_bot_button.configure(text="Stop", command=self.toggle_bot, fg_color="red", hover_color="darkred")
             self.status_label.configure(text="Status: Running")
+            
+            # Start periodic status updates
+            self.update_status()
         else:
             print("Bot is already running")
             
@@ -846,8 +1027,8 @@ class BotGUI:
         # Reset all bot state for clean stop
         bot_logic.reset_bot_state()
         
-        self.start_button.configure(state="normal")
-        self.stop_button.configure(state="disabled")
+        # Update button to show Start state
+        self.toggle_bot_button.configure(text="Start", command=self.toggle_bot, fg_color="green", hover_color="darkgreen")
         self.status_label.configure(text="Status: Stopped")
         # Keep connection status - don't reset to "Not Connected"
     
@@ -2000,35 +2181,29 @@ class BotGUI:
         """Update calibration button texts to show if areas are already set"""
 
         
-        # Check if Player HP is set (has valid width and height)
-        if config.hp_bar_area.get('width', 0) > 0 and config.hp_bar_area.get('height', 0) > 0:
-            self.hp_calib_btn.configure(text="✓ Player HP")
-        else:
-            self.hp_calib_btn.configure(text="Set Player HP")
-        
-        # Check if Player MP is set
-        if config.mp_bar_area.get('width', 0) > 0 and config.mp_bar_area.get('height', 0) > 0:
-            self.mp_calib_btn.configure(text="✓ Player MP")
-        else:
-            self.mp_calib_btn.configure(text="Set Player MP")
-        
-        # Check if Enemy HP is set
-        if config.target_hp_bar_area.get('width', 0) > 0 and config.target_hp_bar_area.get('height', 0) > 0:
-            self.enemy_hp_calib_btn.configure(text="✓ Enemy HP")
-        else:
-            self.enemy_hp_calib_btn.configure(text="Set Enemy HP")
-        
-        # Check if Enemy Name is set
-        if config.target_name_area.get('width', 0) > 0 and config.target_name_area.get('height', 0) > 0:
-            self.enemy_name_calib_btn.configure(text="✓ Enemy Name")
-        else:
-            self.enemy_name_calib_btn.configure(text="Set Enemy Name")
-        
         # Check if System Message is set
         if config.system_message_area.get('width', 0) > 0 and config.system_message_area.get('height', 0) > 0:
             self.system_message_calib_btn.configure(text="✓ System Message")
         else:
             self.system_message_calib_btn.configure(text="Set System Message")
+        
+        # Update toggle bot button state based on calibration
+        self.update_toggle_bot_button_state()
+    
+    def update_toggle_bot_button_state(self):
+        """Update the Start/Stop button state based on calibration and connection"""
+        # Button should be enabled only if:
+        # 1. Window is connected
+        # 2. Calibration has been completed (calibrator exists)
+        is_calibrated = config.calibrator is not None and config.calibrator.mp_position is not None
+        
+        if config.connected_window and is_calibrated and not config.bot_running:
+            self.toggle_bot_button.configure(state="normal", text="Start", fg_color="green", hover_color="darkgreen", command=self.toggle_bot)
+        elif config.bot_running:
+            # Keep button enabled when running so user can stop
+            self.toggle_bot_button.configure(state="normal", text="Stop", fg_color="red", hover_color="darkred", command=self.toggle_bot)
+        else:
+            self.toggle_bot_button.configure(state="disabled")
     
     def update_mob_coordinates(self):
         """Update mob name detection coordinates"""
@@ -2047,31 +2222,125 @@ class BotGUI:
         except (ValueError, AttributeError) as e:
             print(f"Invalid coordinates - please enter numbers only: {e}")
     
-    def update_skip_list(self):
-        """Update mob skip list"""
+    def update_target_list(self):
+        """Update mob target list"""
 
-        skip_text = self.skip_list_text.get("1.0", tk.END).strip()
-        config.mob_skip_list = [line.strip() for line in skip_text.split('\n') if line.strip()]
-        print(f"Updated skip list: {config.mob_skip_list}")
+        target_text = self.target_list_text.get("1.0", tk.END).strip()
+        config.mob_target_list = [line.strip() for line in target_text.split('\n') if line.strip()]
+        print(f"Updated target list: {config.mob_target_list}")
     
     def test_mob_detection(self):
         """Test mob detection and display result"""
-        mob_name = mob_detection.detect_mob_name()
+        if not config.connected_window or not config.calibrator or config.calibrator.mp_position is None:
+            print("TEST: Calibration required for mob detection")
+            self.current_mob_label.configure(text="Calibration Required", text_color="red")
+            return
+        
+        import enemy_bar_detection
+        hwnd = config.connected_window.handle
+        result = enemy_bar_detection.detect_enemy_for_auto_attack(hwnd, targets=None)
+        mob_name = result.get('name')
+        
         if mob_name:
             self.current_mob_label.configure(text=mob_name, text_color="green")
-            if mob_detection.should_skip_current_mob():
+            config.current_target_mob = mob_name
+            if not mob_detection.should_target_current_mob():
                 self.current_mob_label.configure(text_color="orange")
-                print(f"TEST: Mob '{mob_name}' would be SKIPPED")
+                print(f"TEST: Mob '{mob_name}' would be SKIPPED (not in target list)")
             else:
-                print(f"TEST: Mob '{mob_name}' would be ATTACKED")
+                print(f"TEST: Mob '{mob_name}' would be ATTACKED (in target list)")
         else:
             self.current_mob_label.configure(text="None", text_color="red")
             print("TEST: No mob detected")
+    
+    def record_target_mob(self):
+        """Record current enemy name automatically and add to target list"""
+        if not config.connected_window:
+            print("[Record] No window connected")
+            return
+        
+        if not config.calibrator or config.calibrator.mp_position is None:
+            print("[Record] Calibration required. Please calibrate first.")
+            return
+        
+        try:
+            import enemy_bar_detection
+            hwnd = config.connected_window.handle
+            
+            # Detect enemy using calibration-based method (without target filtering)
+            result = enemy_bar_detection.detect_enemy_for_auto_attack(hwnd, targets=None)
+            
+            if result.get('found') and result.get('name'):
+                detected_name = result.get('name', '').strip()
+                if detected_name:
+                    detected_name_lower = detected_name.lower()
+                    # Check if already in target list
+                    if not any(t.lower() == detected_name_lower for t in config.mob_target_list):
+                        config.mob_target_list.append(detected_name)
+                        # Update GUI textbox - ensure it exists and update it
+                        if hasattr(self, 'target_list_text'):
+                            target_text = '\n'.join(config.mob_target_list)
+                            self.target_list_text.delete("1.0", tk.END)
+                            self.target_list_text.insert("1.0", target_text)
+                            # Force GUI update to show the change
+                            self.target_list_text.update_idletasks()
+                        print(f"[Record] Added target: {detected_name}")
+                    else:
+                        print(f"[Record] Target '{detected_name}' already in list")
+                else:
+                    print("[Record] Enemy name detected but empty")
+            else:
+                print("[Record] No enemy detected. Make sure you have a target selected.")
+        except Exception as e:
+            print(f"[Record] Error recording target: {str(e)}")
+            import traceback
+            traceback.print_exc()
     
     # Legacy functions removed - no longer needed with OCR mode
     
     
     # Calibration function removed - Tesseract OCR is automatic, no calibration needed!
+    
+    def update_status(self):
+        """Update HP/MP/Enemy HP status display (reads from config, updated by bot_logic/enemy_bar_detection)"""
+        if config.bot_running:
+            # Read HP/MP percentages from config (calculated by bot_logic in separate thread)
+            hp_percent = config.current_hp_percentage
+            mp_percent = config.current_mp_percentage
+            
+            # Update GUI progress bars and labels
+            self.hp_progress_bar.set(hp_percent / 100.0)
+            self.hp_percent_label.configure(text=f"{hp_percent:.1f}%")
+            self.mp_progress_bar.set(mp_percent / 100.0)
+            self.mp_percent_label.configure(text=f"{mp_percent:.1f}%")
+            
+            # Read enemy HP percentage from config (updated by enemy_bar_detection in separate thread)
+            enemy_hp_percent = config.current_enemy_hp_percentage
+            if hasattr(self, 'enemy_hp_progress_bar'):
+                self.enemy_hp_progress_bar.set(enemy_hp_percent / 100.0)
+            if hasattr(self, 'enemy_hp_percent_label'):
+                self.enemy_hp_percent_label.configure(text=f"{enemy_hp_percent:.1f}%")
+            
+            # Read enemy name from config (updated by enemy_bar_detection/bot_logic in separate thread)
+            if hasattr(self, 'current_mob_label'):
+                enemy_name = config.current_enemy_name
+                if enemy_name:
+                    # Check if mob should be targeted (for color coding)
+                    if config.mob_detection_enabled and not mob_detection.should_target_current_mob():
+                        self.current_mob_label.configure(text=enemy_name, text_color="orange")
+                    else:
+                        self.current_mob_label.configure(text=enemy_name, text_color="green")
+                else:
+                    self.current_mob_label.configure(text="None", text_color="red")
+            
+            # Update unstuck countdown when enemy HP is displayed
+            if hasattr(self, 'unstuck_countdown_label'):
+                import auto_unstuck
+                auto_unstuck.update_unstuck_countdown_display(time.time())
+        
+        # Schedule next update (every 100ms for smooth display)
+        if config.bot_running:
+            self.root.after(100, self.update_status)
     
     def process_gui_updates(self):
         """Process queued GUI updates from background threads (thread-safe)"""
@@ -2087,6 +2356,9 @@ class BotGUI:
         self.root.after(50, self.process_gui_updates)
     
     def run(self):
+        # Update OCR status display after GUI is fully initialized
+        self.update_ocr_status_display()
+        
         # Start processing GUI updates from background threads
         self.process_gui_updates()
         self.root.mainloop()

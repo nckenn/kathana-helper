@@ -56,7 +56,7 @@ action_slots = {
 }
 
 # Mob detection system
-mob_skip_list = []
+mob_target_list = []  # List of mob names to target (only attack mobs in this list)
 mob_detection_enabled = False
 target_name_area = {'x': 381, 'y': 161, 'width': 0, 'height': 0}
 target_hp_bar_area = {'x': 381, 'y': 183, 'width': 0, 'height': 0}
@@ -112,12 +112,17 @@ unstuck_timeout = 8.0
 last_damage_detected_time = 0
 last_damage_value = None
 last_enemy_hp_for_unstuck = None  # Track last enemy HP for unstuck detection (HP-based instead of OCR)
+
+enemy_hp_stagnant_time = 0  # Time when enemy HP became stagnant
+last_enemy_hp_before_stagnant = None  # HP value when stagnation started
 last_unstuck_check_time = 0
 UNSTUCK_CHECK_INTERVAL = 1.0
 HP_CAPTURE_INTERVAL = 0.3
 MP_CAPTURE_INTERVAL = 0.3
-ENEMY_HP_CAPTURE_INTERVAL = 0.3
+ENEMY_HP_CAPTURE_INTERVAL = 0.3  # Internal capture interval for HP bar detection
 AUTO_TARGET_COOLDOWN = 3.0
+# Target search interval
+TARGET_SEARCH_INTERVAL = 2.0
 MOB_VERIFICATION_DELAY = 0.5
 last_mob_verification_time = 0
 
@@ -136,6 +141,22 @@ mouse_clicker_last_used = 0
 # Thread-safe GUI update queue
 import queue
 gui_update_queue = queue.Queue(maxsize=200)
+
+# Calibration
+calibrator = None  # Calibrator instance (set after calibration)
+
+# AutoPots instance (shared, created once)
+autopots_instance = None  # Will be initialized in bot_logic
+
+# Current HP/MP percentages (updated by bot_logic, read by GUI)
+current_hp_percentage = 100.0
+current_mp_percentage = 100.0
+
+# Current enemy HP percentage (updated by enemy_bar_detection, read by GUI)
+current_enemy_hp_percentage = 0.0
+
+# Current enemy name (updated by enemy_bar_detection/bot_logic, read by GUI)
+current_enemy_name = None
 
 
 def safe_update_gui(update_func):

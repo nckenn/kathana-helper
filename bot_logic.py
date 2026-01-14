@@ -5,9 +5,11 @@ import time
 import config
 import input_handler
 import mob_detection
-import bar_detection
+import enemy_bar_detection
 import auto_repair
 import auto_unstuck
+import auto_pots
+import calibration
 
 
 def check_skill_slots():
@@ -27,15 +29,8 @@ def trigger_skill(slot_num):
     try:
         # Always check mob filter before attacking - verify current mob is up to date
         if config.mob_detection_enabled:
-            # Refresh mob detection if it's been a while since last detection
-            current_time = time.time()
-            if current_time - config.last_mob_detection_time > 0.5:
-                detected_mob = mob_detection.detect_mob_name()
-                if detected_mob:
-                    config.current_target_mob = detected_mob
-                    config.last_mob_detection_time = current_time
-            
-            if mob_detection.should_skip_current_mob():
+            # Use current enemy name from config (updated by enemy_bar_detection via calibration)
+            if not mob_detection.should_target_current_mob():
                 return
         
         if isinstance(slot_num, int):
@@ -45,8 +40,8 @@ def trigger_skill(slot_num):
         else:
             skill_key = str(slot_num)
         
+        # Send input immediately - no blocking delay (input handler manages timing internally)
         input_handler.send_input(skill_key)
-        time.sleep(0.1)
         
     except Exception as e:
         print(f"Error triggering skill slot {slot_num}: {e}")
@@ -88,7 +83,7 @@ def smart_loot():
         print(f"Smart loot triggered ({num_attempts} attempts, key: {action_key})")
     except Exception as e:
         print(f"Error in smart loot: {e}")
-        # Note: is_looting flag will be cleared by check_enemy_HP after LOOTING_DURATION
+        # Note: is_looting flag will be cleared by check_enemy_for_auto_attack after LOOTING_DURATION
 
 
 def check_mouse_clicker():
@@ -146,21 +141,55 @@ def reset_bot_state():
 
 def bot_loop():
     """Main bot loop that runs in a separate thread"""
+    # Initialize AutoPots instance (shared, single instance for proper cooldown management)
+    if config.autopots_instance is None:
+        config.autopots_instance = auto_pots.AutoPots()
+    autopots = config.autopots_instance
+    
     while config.bot_running:
         if config.connected_window:
-            bar_detection.check_HP()
-            bar_detection.check_MP()
-            mob_detection.update_mob_display()
-            bar_detection.check_enemy_HP()
+            hwnd = config.connected_window.handle
+            
             check_skill_slots()
             check_action_slots()
+
+            # Use calibration module to get HP/MP percentages and auto-pots
+            if config.calibrator and config.calibrator.hp_position is not None and config.calibrator.mp_position is not None:
+                try:
+                    # Calculate HP/MP percentages (only once per cycle)
+                    hp_percent = config.calibrator.get_hp_percentage(hwnd)
+                    mp_percent = config.calibrator.get_mp_percentage(hwnd)
+                    
+                    # Clamp values to 0-100
+                    hp_percent = max(0, min(100, hp_percent))
+                    mp_percent = max(0, min(100, mp_percent))
+                    
+                    # Store in config for GUI to read
+                    config.current_hp_percentage = hp_percent
+                    config.current_mp_percentage = mp_percent
+                    
+                    # Get thresholds from config
+                    hp_threshold = float(config.hp_threshold)
+                    mp_threshold = float(config.mp_threshold)
+                    
+                    # Check and use potions if auto-pots are enabled
+                    if config.auto_hp_enabled or config.auto_mp_enabled:
+                        autopots.check_and_use_pots(hwnd, hp_percent, mp_percent, hp_threshold, mp_threshold, False)
+                except ValueError:
+                    print("[Bot Loop] Error: HP/MP thresholds must be valid numbers")
+                except Exception as e:
+                    print(f"[Bot Loop] Error in auto-pots: {e}")
             
+            enemy_bar_detection.check_enemy_for_auto_attack()
+            if config.auto_change_target_enabled:
+                auto_unstuck.check_auto_unstuck()
+
+            auto_repair.check_auto_repair()
+
             if config.mouse_clicker_enabled:
                 check_mouse_clicker()
             
-            auto_repair.check_auto_repair()
-            
-            if config.auto_change_target_enabled:
-                auto_unstuck.check_auto_unstuck()
         time.sleep(0.1)
+    
+    # Clean up when bot stops
     print("Bot loop stopped")

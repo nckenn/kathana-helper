@@ -15,8 +15,11 @@ def check_ocr_availability():
     """Check if OCR is available and working
     
     Returns:
-        tuple: (is_available: bool, error_message: str, mode: str)
-        mode can be 'gpu', 'cpu', or None if unavailable
+        tuple: (is_available: bool, error_message: str, mode: str, troubleshooting: str)
+        - is_available: True if OCR works, False otherwise
+        - error_message: Error description if unavailable, None if available
+        - mode: 'gpu', 'cpu', or None if unavailable
+        - troubleshooting: Specific troubleshooting steps based on error type
     """
     try:
         # Try GPU first if enabled
@@ -27,9 +30,10 @@ def check_ocr_availability():
                 test_image = np.ones((50, 200, 3), dtype=np.uint8) * 255
                 test_reader.readtext(test_image, detail=0)
                 del test_reader  # Clean up test reader
-                return True, None, 'gpu'
+                return True, None, 'gpu', None
             except Exception as gpu_error:
-                error_msg = str(gpu_error)
+                error_msg = str(gpu_error).lower()
+                troubleshooting = _get_troubleshooting_steps(error_msg, 'gpu')
                 # Fall through to CPU test
         
         # Try CPU
@@ -39,12 +43,108 @@ def check_ocr_availability():
             test_image = np.ones((50, 200, 3), dtype=np.uint8) * 255
             test_reader.readtext(test_image, detail=0)
             del test_reader  # Clean up test reader
-            return True, None, 'cpu'
+            return True, None, 'cpu', None
         except Exception as cpu_error:
-            return False, str(cpu_error), None
+            error_msg = str(cpu_error).lower()
+            troubleshooting = _get_troubleshooting_steps(error_msg, 'cpu')
+            return False, str(cpu_error), None, troubleshooting
             
+    except ImportError as e:
+        troubleshooting = (
+            "EasyOCR is not installed.\n\n"
+            "Installation steps:\n"
+            "1. Open Command Prompt or PowerShell\n"
+            "2. Run: pip install easyocr\n"
+            "3. If that fails, install PyTorch first:\n"
+            "   • CPU version: pip install torch torchvision torchaudio\n"
+            "   • GPU version (NVIDIA): pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118\n"
+            "4. Then run: pip install easyocr\n"
+            "5. Restart this application"
+        )
+        return False, f"EasyOCR not installed: {e}", None, troubleshooting
     except Exception as e:
-        return False, str(e), None
+        error_msg = str(e).lower()
+        troubleshooting = _get_troubleshooting_steps(error_msg, 'unknown')
+        return False, str(e), None, troubleshooting
+
+
+def _get_troubleshooting_steps(error_msg, mode):
+    """Get specific troubleshooting steps based on error message"""
+    error_lower = error_msg.lower()
+    
+    if 'cuda' in error_lower or 'gpu' in error_lower or 'nvidia' in error_lower:
+        return (
+            f"GPU/CUDA error detected ({mode} mode).\n\n"
+            "Solutions:\n"
+            "1. If you don't have NVIDIA GPU, set ocr_use_gpu = False in config.py\n"
+            "2. If you have NVIDIA GPU:\n"
+            "   • Install CUDA toolkit: https://developer.nvidia.com/cuda-downloads\n"
+            "   • Install PyTorch with CUDA: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118\n"
+            "   • Verify: python -c \"import torch; print(torch.cuda.is_available())\"\n"
+            "3. Try CPU mode by setting ocr_use_gpu = False in config.py"
+        )
+    elif 'torch' in error_lower or 'pytorch' in error_lower:
+        return (
+            "PyTorch error detected.\n\n"
+            "Solutions:\n"
+            "1. Install PyTorch:\n"
+            "   • CPU: pip install torch torchvision torchaudio\n"
+            "   • GPU (NVIDIA): pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118\n"
+            "2. Verify installation: python -c \"import torch; print(torch.__version__)\"\n"
+            "3. Restart this application"
+        )
+    elif 'no module named' in error_lower or 'cannot import' in error_lower:
+        return (
+            "Missing Python module.\n\n"
+            "Solutions:\n"
+            "1. Install EasyOCR: pip install easyocr\n"
+            "2. Install dependencies: pip install torch torchvision torchaudio opencv-python pillow\n"
+            "3. Restart this application"
+        )
+    elif 'memory' in error_lower or 'out of memory' in error_lower:
+        return (
+            "Memory error detected.\n\n"
+            "Solutions:\n"
+            "1. Close other applications to free up memory\n"
+            "2. Try CPU mode (slower but uses less memory): Set ocr_use_gpu = False in config.py\n"
+            "3. Restart this application"
+        )
+    else:
+        return (
+            "General OCR error.\n\n"
+            "Solutions:\n"
+            "1. Reinstall EasyOCR: pip uninstall easyocr && pip install easyocr\n"
+            "2. Install/update PyTorch: pip install --upgrade torch torchvision torchaudio\n"
+            "3. Try CPU mode: Set ocr_use_gpu = False in config.py\n"
+            "4. Check console for detailed error message\n"
+            "5. Restart this application"
+        )
+
+
+def recheck_ocr_availability():
+    """Re-check OCR availability (useful after user fixes installation issues)
+    
+    This will update config.ocr_available and config.ocr_mode.
+    Returns tuple: (is_available: bool, error_message: str, mode: str, troubleshooting: str)
+    """
+    print("Re-checking OCR availability...")
+    is_available, error_msg, mode, troubleshooting = check_ocr_availability()
+    
+    # Update config
+    config.ocr_available = is_available
+    config.ocr_mode = mode
+    
+    # Reset reader if availability changed
+    if not is_available and config.ocr_reader is not None:
+        config.ocr_reader = None
+        print("OCR reader cleared due to unavailability")
+    
+    if is_available:
+        print(f"OCR is now available in {mode.upper()} mode!")
+    else:
+        print(f"OCR is still not available: {error_msg}")
+    
+    return is_available, error_msg, mode, troubleshooting
 
 
 def initialize_ocr_reader():

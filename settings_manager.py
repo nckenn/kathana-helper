@@ -30,7 +30,7 @@ def save_settings():
         settings = {
             'skill_slots': clean_skill_slots,
             'action_slots': clean_action_slots,
-            'mob_skip_list': config.mob_skip_list.copy(),
+            'mob_target_list': config.mob_target_list.copy(),
             'mob_detection_enabled': config.mob_detection_enabled,
             'target_name_area': config.target_name_area.copy(),
             'target_hp_bar_area': config.target_hp_bar_area.copy(),
@@ -139,8 +139,12 @@ def load_settings():
             print("Loaded action slots settings")
         
         # Load mob settings
-        if 'mob_skip_list' in settings:
-            config.mob_skip_list = settings['mob_skip_list']
+        if 'mob_target_list' in settings:
+            config.mob_target_list = settings['mob_target_list']
+        # Backward compatibility: migrate old mob_skip_list to mob_target_list
+        elif 'mob_skip_list' in settings:
+            config.mob_target_list = settings['mob_skip_list']
+            print("[Settings] Migrated mob_skip_list to mob_target_list (inverted logic)")
         if 'mob_detection_enabled' in settings:
             config.mob_detection_enabled = settings['mob_detection_enabled']
         if 'target_name_area' in settings:

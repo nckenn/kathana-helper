@@ -12,3 +12,6 @@ bot_settings.json
 # Build files
 build/
 dist/
+decompiled/
+debug/
+calibration_debug/

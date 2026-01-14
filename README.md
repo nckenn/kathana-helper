@@ -9,7 +9,7 @@ kathana_bot/
 ├── config.py             # Global variables and configuration
 ├── window_utils.py       # Window capture and management
 ├── input_handler.py      # Input sending (keys, mouse)
-├── bar_detection.py      # HP/MP bar detection
+├── enemy_bar_detection.py  # Enemy HP bar and name detection using calibration
 ├── ocr_utils.py         # OCR functions for text reading
 ├── mob_detection.py     # Mob detection and filtering
 ├── auto_repair.py       # Auto repair functionality
@@ -52,7 +52,7 @@ The executable will be created in the `dist` folder.
 - **config.py**: All global variables, constants, and configuration
 - **window_utils.py**: Window capture, connection, and management
 - **input_handler.py**: Keyboard and mouse input functions
-- **bar_detection.py**: HP/MP bar detection and percentage calculation
+- **enemy_bar_detection.py**: Enemy HP bar and name detection using calibration-based method
 - **ocr_utils.py**: EasyOCR integration for text reading
 - **mob_detection.py**: Mob name detection and filtering
 - **auto_repair.py**: Damage monitoring and auto repair
