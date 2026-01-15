@@ -49,6 +49,8 @@ datas = [
     ("mob_detection.py", "."),
     ("auto_repair.py", "."),
     ("auto_unstuck.py", "."),
+    ("auto_pots.py", "."),
+    ("calibration.py", "."),
     ("bot_logic.py", "."),
     ("settings_manager.py", "."),
     ("gui.py", "."),

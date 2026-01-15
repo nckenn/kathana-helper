@@ -183,9 +183,9 @@ def bot_loop():
             enemy_bar_detection.check_enemy_for_auto_attack()
             if config.auto_change_target_enabled:
                 auto_unstuck.check_auto_unstuck()
-
+            
             auto_repair.check_auto_repair()
-
+            
             if config.mouse_clicker_enabled:
                 check_mouse_clicker()
             

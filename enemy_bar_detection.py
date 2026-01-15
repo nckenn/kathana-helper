@@ -209,10 +209,9 @@ def check_enemy_for_auto_attack():
             return False
         
         input_handler.send_input(config.action_slots['target']['key'])
-        config.last_auto_target_time = current_time
         
-        # Increased delay to ensure mob name appears after targeting
-        delay = 0.3 if recursion_depth > 0 else 0.2
+        # Delay to ensure mob name appears after targeting
+        delay = 0.15 if recursion_depth > 0 else 0.1
         time.sleep(delay)
         
         previous_mob = config.current_target_mob
@@ -236,17 +235,16 @@ def check_enemy_for_auto_attack():
         
         return False
     
-    def try_auto_target(reason="", bypass_cooldown=False):
+    def try_auto_target(reason=""):
         # Don't auto-target if we're currently looting (item names appear in same location as enemy names)
         if config.is_looting:
             return False
         
         if config.auto_attack_enabled:
-            if bypass_cooldown or current_time - config.last_auto_target_time >= config.AUTO_TARGET_COOLDOWN:
-                send_target_key_with_mob_check()
-                if reason:
-                    print(f"Auto-targeting ({reason})")
-                return True
+            send_target_key_with_mob_check()
+            if reason:
+                print(f"Auto-targeting ({reason})")
+            return True
         return False
     
     # Require calibration to be available
@@ -276,14 +274,14 @@ def check_enemy_for_auto_attack():
         
         if not has_red_bar:
             if len(config.enemy_hp_readings) > 0 or config.enemy_target_time > 0:
-                # Small delay to ensure enemy is fully dead and loot is available
-                time.sleep(0.15)
+                # Enemy was killed - immediately retarget (bypass search interval)
                 bot_logic.smart_loot()
-                # Don't auto-target immediately after looting - wait for looting to complete
-                # The try_auto_target will be blocked by is_looting flag anyway, but we return early here
                 reset_enemy_state()
-                # Reset target search time when enemy is lost
+                # Reset target search time to allow immediate retargeting
                 check_enemy_for_auto_attack.last_target_search_time = 0
+                # Immediately retarget after enemy death
+                if not config.is_looting:
+                    try_auto_target("enemy killed")
                 return
             
             reset_enemy_state()
@@ -300,8 +298,9 @@ def check_enemy_for_auto_attack():
                 if last_avg < 50 and raw_enemy_hp_percentage >= 95:
                     enemy_hp_percentage = 0.0
                     reset_enemy_state()
-                    time.sleep(0.15)  # Delay before looting to ensure enemy is dead
                     bot_logic.smart_loot()
+                    # Immediately retarget after enemy death - bypass search interval
+                    check_enemy_for_auto_attack.last_target_search_time = 0
                     try_auto_target("enemy died")
                 else:
                     config.enemy_hp_readings.append(raw_enemy_hp_percentage)
@@ -346,11 +345,13 @@ def check_enemy_for_auto_attack():
                         previous_readings = config.enemy_hp_readings[:-1]
                         if previous_readings and max(previous_readings) > 10.0:
                             print(f"Enemy HP dropped from {max(previous_readings):.1f}% to {raw_enemy_hp_percentage:.1f}% - triggering smart loot")
-                            # Small delay to ensure enemy is fully dead before looting
-                            time.sleep(0.1)
                             bot_logic.smart_loot()
                             enemy_hp_percentage = 0.0
                             reset_enemy_state()
+                            # Immediately retarget after enemy death - bypass search interval
+                            check_enemy_for_auto_attack.last_target_search_time = 0
+                            try_auto_target("enemy died")
+                            return
             else:
                 config.enemy_hp_readings.append(raw_enemy_hp_percentage)
                 enemy_hp_percentage = raw_enemy_hp_percentage

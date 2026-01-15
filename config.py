@@ -120,8 +120,7 @@ UNSTUCK_CHECK_INTERVAL = 1.0
 HP_CAPTURE_INTERVAL = 0.3
 MP_CAPTURE_INTERVAL = 0.3
 ENEMY_HP_CAPTURE_INTERVAL = 0.3  # Internal capture interval for HP bar detection
-AUTO_TARGET_COOLDOWN = 3.0
-# Target search interval
+# Target search interval (2.0 second interval when no enemy found)
 TARGET_SEARCH_INTERVAL = 2.0
 MOB_VERIFICATION_DELAY = 0.5
 last_mob_verification_time = 0

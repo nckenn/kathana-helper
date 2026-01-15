@@ -247,9 +247,14 @@ class BotGUI:
         
         # Initialize root window with customtkinter
         self.root = ctk.CTk()
-        self.root.title("Kathana Helper by xCrypto v2.0.0")
+        self.root.title("Kathana Helper by xCrypto v2.0.1")
         self.root.geometry("655x800")
         self.root.resizable(True, True)
+        
+        # Track minimized state
+        self.is_minimized = False
+        self.minimized_window = None
+        self.saved_window_position = None  # Store window position when minimizing
         
         # Check OCR availability on startup
         self.check_ocr_on_startup()
@@ -304,6 +309,10 @@ class BotGUI:
         # Connection status label
         self.connection_label = ctk.CTkLabel(status_info_frame, text="Window: Not Connected", font=ctk.CTkFont(size=11))
         self.connection_label.grid(row=0, column=1, padx=(10, 10), pady=6)
+        
+        # Minimize/Maximize button
+        self.minimize_button = ctk.CTkButton(status_info_frame, text="−", command=self.toggle_minimize, width=30, height=25, font=ctk.CTkFont(size=16, weight="bold"))
+        self.minimize_button.grid(row=0, column=2, padx=(10, 10), pady=6)
         
         # Bot control frame - fixed height to prevent fluid expansion
         bot_frame = ctk.CTkFrame(main_frame, corner_radius=8)
@@ -390,18 +399,18 @@ class BotGUI:
         self.enemy_hp_progress_bar.set(0)
         self.enemy_hp_progress_bar.grid(row=0, column=1, padx=(0, 10))
         self.enemy_hp_percent_label = ctk.CTkLabel(enemy_hp_bar_frame, text="---%", font=ctk.CTkFont(size=11, weight="bold"), text_color="white")
-        self.enemy_hp_percent_label.grid(row=0, column=2, padx=(0, 10))
-        self.unstuck_countdown_label = ctk.CTkLabel(enemy_hp_bar_frame, text="Unstuck: ---", font=ctk.CTkFont(size=10), text_color="gray")
-        self.unstuck_countdown_label.grid(row=0, column=3)
+        self.enemy_hp_percent_label.grid(row=0, column=2)
         
         # Enemy Name display
         enemy_name_frame = ctk.CTkFrame(status_frame, fg_color="transparent")
-        enemy_name_frame.grid(row=3, column=0, sticky="ew", padx=15, pady=(5, 15))
+        enemy_name_frame.grid(row=3, column=0, sticky="w", padx=15, pady=(5, 15))
         
-        enemy_name_label = ctk.CTkLabel(enemy_name_frame, text="Enemy Name:", width=60, anchor='w', font=ctk.CTkFont(size=11))
+        enemy_name_label = ctk.CTkLabel(enemy_name_frame, text="Enemy Name:", width=70, anchor='w', font=ctk.CTkFont(size=11))
         enemy_name_label.grid(row=0, column=0, padx=(0, 10))
-        self.current_mob_label = ctk.CTkLabel(enemy_name_frame, text="None", font=ctk.CTkFont(size=11), text_color="red")
-        self.current_mob_label.grid(row=0, column=1, sticky="w")
+        self.current_mob_label = ctk.CTkLabel(enemy_name_frame, text="None", width=170, anchor='w', font=ctk.CTkFont(size=11), text_color="red")
+        self.current_mob_label.grid(row=0, column=1, sticky="w", padx=(0, 10))
+        self.unstuck_countdown_label = ctk.CTkLabel(enemy_name_frame, text="Unstuck: ---", font=ctk.CTkFont(size=10), text_color="gray")
+        self.unstuck_countdown_label.grid(row=0, column=2)
         
         # Configure status frame grid
         status_frame.columnconfigure(0, weight=1)
@@ -2308,18 +2317,18 @@ class BotGUI:
             hp_percent = config.current_hp_percentage
             mp_percent = config.current_mp_percentage
             
-            # Update GUI progress bars and labels
+            # Update GUI progress bars and labels (maximized view)
             self.hp_progress_bar.set(hp_percent / 100.0)
-            self.hp_percent_label.configure(text=f"{hp_percent:.1f}%")
+            self.hp_percent_label.configure(text=f"{int(hp_percent)}%")
             self.mp_progress_bar.set(mp_percent / 100.0)
-            self.mp_percent_label.configure(text=f"{mp_percent:.1f}%")
+            self.mp_percent_label.configure(text=f"{int(mp_percent)}%")
             
             # Read enemy HP percentage from config (updated by enemy_bar_detection in separate thread)
             enemy_hp_percent = config.current_enemy_hp_percentage
             if hasattr(self, 'enemy_hp_progress_bar'):
                 self.enemy_hp_progress_bar.set(enemy_hp_percent / 100.0)
             if hasattr(self, 'enemy_hp_percent_label'):
-                self.enemy_hp_percent_label.configure(text=f"{enemy_hp_percent:.1f}%")
+                self.enemy_hp_percent_label.configure(text=f"{int(enemy_hp_percent)}%")
             
             # Read enemy name from config (updated by enemy_bar_detection/bot_logic in separate thread)
             if hasattr(self, 'current_mob_label'):
@@ -2337,6 +2346,56 @@ class BotGUI:
             if hasattr(self, 'unstuck_countdown_label'):
                 import auto_unstuck
                 auto_unstuck.update_unstuck_countdown_display(time.time())
+            
+            # Update minimized window if it exists
+            if self.is_minimized and self.minimized_window:
+                try:
+                    # Update minimized progress bars
+                    if hasattr(self, 'minimized_hp_progress_bar'):
+                        self.minimized_hp_progress_bar.set(hp_percent / 100.0)
+                        self.minimized_hp_percent_label.configure(text=f"{int(hp_percent)}%")
+                    if hasattr(self, 'minimized_mp_progress_bar'):
+                        self.minimized_mp_progress_bar.set(mp_percent / 100.0)
+                        self.minimized_mp_percent_label.configure(text=f"{int(mp_percent)}%")
+                    if hasattr(self, 'minimized_enemy_hp_progress_bar'):
+                        self.minimized_enemy_hp_progress_bar.set(enemy_hp_percent / 100.0)
+                        self.minimized_enemy_hp_percent_label.configure(text=f"{int(enemy_hp_percent)}%")
+                    
+                    # Update minimized enemy name
+                    if hasattr(self, 'minimized_current_mob_label'):
+                        enemy_name = config.current_enemy_name
+                        if enemy_name:
+                            if config.mob_detection_enabled and not mob_detection.should_target_current_mob():
+                                self.minimized_current_mob_label.configure(text=enemy_name, text_color="orange")
+                            else:
+                                self.minimized_current_mob_label.configure(text=enemy_name, text_color="green")
+                        else:
+                            self.minimized_current_mob_label.configure(text="None", text_color="red")
+                    
+                    # Update minimized unstuck countdown
+                    if hasattr(self, 'minimized_unstuck_countdown_label'):
+                        import auto_unstuck
+                        current_time = time.time()
+                        _, remaining_time = auto_unstuck.get_unstuck_remaining_time(config.unstuck_timeout)
+                        if config.enemy_hp_stagnant_time == 0 or config.last_enemy_hp_before_stagnant is None:
+                            self.minimized_unstuck_countdown_label.configure(text="Unstuck: ---", text_color="gray")
+                        else:
+                            import math
+                            display_seconds = math.ceil(remaining_time)
+                            if remaining_time > config.unstuck_timeout * 0.5:
+                                color = "green"
+                            elif remaining_time > config.unstuck_timeout * 0.25:
+                                color = "yellow"
+                            else:
+                                color = "red"
+                            target_indicator = " (no target)" if config.enemy_target_time == 0 else ""
+                            self.minimized_unstuck_countdown_label.configure(
+                                text=f"Unstuck: {display_seconds}s{target_indicator}",
+                                text_color=color
+                            )
+                except Exception as e:
+                    # Ignore errors if minimized window was closed
+                    pass
         
         # Schedule next update (every 100ms for smooth display)
         if config.bot_running:
@@ -2354,6 +2413,126 @@ class BotGUI:
         
         # Schedule next check (every 50ms for responsive UI)
         self.root.after(50, self.process_gui_updates)
+    
+    def toggle_minimize(self):
+        """Toggle between minimized and maximized UI"""
+        if self.is_minimized:
+            # Restore to maximized view
+            if self.minimized_window:
+                self.minimized_window.destroy()
+                self.minimized_window = None
+            self.root.deiconify()
+            # Restore saved window position and size
+            if self.saved_window_position:
+                self.root.geometry(self.saved_window_position)
+            else:
+                self.root.geometry("655x800")
+            self.minimize_button.configure(text="−")
+            self.is_minimized = False
+        else:
+            # Save current window position and size before minimizing
+            try:
+                geometry = self.root.geometry()
+                self.saved_window_position = geometry
+            except:
+                self.saved_window_position = "655x800+100+100"
+            # Create minimized window at the same position
+            self.create_minimized_window()
+            self.minimize_button.configure(text="+")
+            self.is_minimized = True
+    
+    def create_minimized_window(self):
+        """Create a minimized window showing only progress bars"""
+        if self.minimized_window:
+            return
+        
+        # Create new window for minimized view
+        self.minimized_window = ctk.CTkToplevel(self.root)
+        self.minimized_window.title("Kathana Helper xCrypto v2.0.1")
+        
+        # Position minimized window at the same location as main window
+        if self.saved_window_position:
+            # Extract position from geometry string (format: "WxH+X+Y")
+            try:
+                parts = self.saved_window_position.split('+')
+                if len(parts) >= 3:
+                    x_pos = parts[1]
+                    y_pos = parts[2]
+                    self.minimized_window.geometry(f"350x180+{x_pos}+{y_pos}")
+                else:
+                    self.minimized_window.geometry("350x180")
+            except:
+                self.minimized_window.geometry("350x180")
+        else:
+            self.minimized_window.geometry("350x180")
+        
+        self.minimized_window.resizable(False, False)
+        self.minimized_window.overrideredirect(False)  # Keep window controls
+        
+        # Make it stay on top
+        self.minimized_window.attributes("-topmost", True)
+        
+        # Configure grid
+        self.minimized_window.columnconfigure(0, weight=1)
+        self.minimized_window.rowconfigure(0, weight=1)
+        
+        # Create main frame
+        minimized_frame = ctk.CTkFrame(self.minimized_window, corner_radius=5)
+        minimized_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        minimized_frame.columnconfigure(1, weight=1)
+        
+        # HP Progress Bar
+        hp_bar_frame = ctk.CTkFrame(minimized_frame, fg_color="transparent")
+        hp_bar_frame.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(10, 5))
+        
+        hp_label = ctk.CTkLabel(hp_bar_frame, text="HP:", width=70, anchor='w', font=ctk.CTkFont(size=11))
+        hp_label.grid(row=0, column=0, padx=(0, 10))
+        self.minimized_hp_progress_bar = ctk.CTkProgressBar(hp_bar_frame, width=200, height=20, progress_color="red", corner_radius=0)
+        self.minimized_hp_progress_bar.set(0)
+        self.minimized_hp_progress_bar.grid(row=0, column=1, padx=(0, 10))
+        self.minimized_hp_percent_label = ctk.CTkLabel(hp_bar_frame, text="---%", font=ctk.CTkFont(size=11, weight="bold"), text_color="white")
+        self.minimized_hp_percent_label.grid(row=0, column=2)
+        
+        # MP Progress Bar
+        mp_bar_frame = ctk.CTkFrame(minimized_frame, fg_color="transparent")
+        mp_bar_frame.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
+        
+        mp_label = ctk.CTkLabel(mp_bar_frame, text="MP:", width=70, anchor='w', font=ctk.CTkFont(size=11))
+        mp_label.grid(row=0, column=0, padx=(0, 10))
+        self.minimized_mp_progress_bar = ctk.CTkProgressBar(mp_bar_frame, width=200, height=20, progress_color="#0b58b0", corner_radius=0)
+        self.minimized_mp_progress_bar.set(0)
+        self.minimized_mp_progress_bar.grid(row=0, column=1, padx=(0, 10))
+        self.minimized_mp_percent_label = ctk.CTkLabel(mp_bar_frame, text="---%", font=ctk.CTkFont(size=11, weight="bold"), text_color="white")
+        self.minimized_mp_percent_label.grid(row=0, column=2)
+        
+        # Enemy HP Progress Bar
+        enemy_hp_bar_frame = ctk.CTkFrame(minimized_frame, fg_color="transparent")
+        enemy_hp_bar_frame.grid(row=2, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
+        
+        enemy_hp_label = ctk.CTkLabel(enemy_hp_bar_frame, text="Enemy HP:", width=70, anchor='w', font=ctk.CTkFont(size=11))
+        enemy_hp_label.grid(row=0, column=0, padx=(0, 10))
+        self.minimized_enemy_hp_progress_bar = ctk.CTkProgressBar(enemy_hp_bar_frame, width=200, height=20, progress_color="green", corner_radius=0)
+        self.minimized_enemy_hp_progress_bar.set(0)
+        self.minimized_enemy_hp_progress_bar.grid(row=0, column=1, padx=(0, 10))
+        self.minimized_enemy_hp_percent_label = ctk.CTkLabel(enemy_hp_bar_frame, text="---%", font=ctk.CTkFont(size=11, weight="bold"), text_color="white")
+        self.minimized_enemy_hp_percent_label.grid(row=0, column=2)
+        
+        # Enemy Name display
+        enemy_name_frame = ctk.CTkFrame(minimized_frame, fg_color="transparent")
+        enemy_name_frame.grid(row=3, column=0, columnspan=2, sticky="w", padx=10, pady=(5, 10))
+        
+        enemy_name_label = ctk.CTkLabel(enemy_name_frame, text="Enemy Name:", width=70, anchor='w', font=ctk.CTkFont(size=11))
+        enemy_name_label.grid(row=0, column=0, padx=(0, 10))
+        self.minimized_current_mob_label = ctk.CTkLabel(enemy_name_frame, text="None", width=170, anchor='w', font=ctk.CTkFont(size=11), text_color="red")
+        self.minimized_current_mob_label.grid(row=0, column=1, sticky="w", padx=(0, 10))
+        self.minimized_unstuck_countdown_label = ctk.CTkLabel(enemy_name_frame, text="Unstuck: ---", font=ctk.CTkFont(size=10), text_color="gray")
+        self.minimized_unstuck_countdown_label.grid(row=0, column=2)
+        
+        # Handle window close - restore to maximized
+        self.minimized_window.protocol("WM_DELETE_WINDOW", self.toggle_minimize)
+        
+        # Hide main window
+        self.root.withdraw()
     
     def run(self):
         # Update OCR status display after GUI is fully initialized

@@ -95,6 +95,21 @@ def check_auto_unstuck():
     if config.enemy_target_time > 0 and config.enemy_hp_readings and len(config.enemy_hp_readings) > 0:
         current_hp = sum(config.enemy_hp_readings) / len(config.enemy_hp_readings)
         
+        # Check if HP has changed significantly (reset timer) or update tracking
+        if config.last_enemy_hp_before_stagnant is not None:
+            hp_difference = abs(config.last_enemy_hp_before_stagnant - current_hp)
+            if hp_difference > 5.0:
+                # Reset stagnant timer if HP changes significantly
+                config.enemy_hp_stagnant_time = current_time
+                config.last_enemy_hp_before_stagnant = current_hp
+            else:
+                # Update HP but keep timer running if change is minimal
+                config.last_enemy_hp_before_stagnant = current_hp
+        else:
+            # Initialize stagnant tracking
+            config.enemy_hp_stagnant_time = current_time
+            config.last_enemy_hp_before_stagnant = current_hp
+        
         # Check if HP has been stagnant for the timeout period
         if config.enemy_hp_stagnant_time > 0 and config.last_enemy_hp_before_stagnant is not None:
             time_stagnant = current_time - config.enemy_hp_stagnant_time
@@ -112,7 +127,6 @@ def check_auto_unstuck():
                 if config.auto_attack_enabled:
                     target_key = config.action_slots['target']['key']
                     input_handler.send_input(target_key)
-                    config.last_auto_target_time = current_time
                     
                     if config.mob_detection_enabled and config.mob_target_list:
                         # Use reusable function to detect and verify mob after retarget
@@ -122,7 +136,6 @@ def check_auto_unstuck():
                             print(f"[Mob Filter] Skipping mob after unstuck: {mob_result['name']} (not in target list)")
                             time.sleep(0.1)
                             input_handler.send_input(target_key)
-                            config.last_auto_target_time = current_time
                 
                 print(f"[Auto Unstuck] Unstuck complete, retargeting")
                 # Reset stagnant tracking AFTER unstuck completes
