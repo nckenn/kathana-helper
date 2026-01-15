@@ -8,6 +8,7 @@ bot_running = False
 bot_thread = None
 selected_window = None
 connected_window = None  # Store the connected window reference
+force_initial_target = False  # Flag to force auto-target on bot start
 
 # Auto features flags
 auto_attack_enabled = True
@@ -67,15 +68,10 @@ MOB_IMAGES_FOLDER = "mob_images"
 
 # Auto repair system
 system_message_area = {'x': 0, 'y': 0, 'width': 0, 'height': 0}
-low_damage_count = 0
-low_damage_threshold = 200
-low_damage_trigger_count = 5
 last_repair_time = 0
 REPAIR_COOLDOWN = 5.0
 AUTO_REPAIR_CHECK_INTERVAL = 1.0
 last_auto_repair_check_time = 0
-low_damage_timestamps = []
-LOW_DAMAGE_TIME_WINDOW = 10.0
 
 # Mob detection optimization
 mob_detection_lock = None  # Will be initialized in mob_detection module
@@ -119,9 +115,9 @@ last_unstuck_check_time = 0
 UNSTUCK_CHECK_INTERVAL = 1.0
 HP_CAPTURE_INTERVAL = 0.3
 MP_CAPTURE_INTERVAL = 0.3
-ENEMY_HP_CAPTURE_INTERVAL = 0.3  # Internal capture interval for HP bar detection
-# Target search interval (2.0 second interval when no enemy found)
-TARGET_SEARCH_INTERVAL = 2.0
+ENEMY_HP_CAPTURE_INTERVAL = 0.2  # Reduced from 0.3 for faster enemy detection
+# Target search interval (only used when no enemy found - after kill, bypasses this)
+TARGET_SEARCH_INTERVAL = 1.5  # Reduced from 2.0 for faster searching when idle
 MOB_VERIFICATION_DELAY = 0.5
 last_mob_verification_time = 0
 

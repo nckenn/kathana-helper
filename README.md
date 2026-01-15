@@ -9,9 +9,8 @@ kathana_bot/
 ├── config.py             # Global variables and configuration
 ├── window_utils.py       # Window capture and management
 ├── input_handler.py      # Input sending (keys, mouse)
-├── enemy_bar_detection.py  # Enemy HP bar and name detection using calibration
+├── auto_attack.py      # Auto-attack system: enemy HP bar detection, name detection, and mob filtering
 ├── ocr_utils.py         # OCR functions for text reading
-├── mob_detection.py     # Mob detection and filtering
 ├── auto_repair.py       # Auto repair functionality
 ├── auto_unstuck.py      # Auto unstuck functionality
 ├── bot_logic.py         # Main bot loop and skill checking
@@ -52,9 +51,8 @@ The executable will be created in the `dist` folder.
 - **config.py**: All global variables, constants, and configuration
 - **window_utils.py**: Window capture, connection, and management
 - **input_handler.py**: Keyboard and mouse input functions
-- **enemy_bar_detection.py**: Enemy HP bar and name detection using calibration-based method
+- **auto_attack.py**: Auto-attack system including enemy HP bar detection, name detection using OCR, and mob filtering
 - **ocr_utils.py**: EasyOCR integration for text reading
-- **mob_detection.py**: Mob name detection and filtering
 - **auto_repair.py**: Damage monitoring and auto repair
 - **auto_unstuck.py**: Stuck detection and unstuck mechanism
 - **bot_logic.py**: Main bot loop, skill checking, and state management

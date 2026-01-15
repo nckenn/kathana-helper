@@ -19,29 +19,47 @@ class AutoPots:
         self.last_rohati_heal_time = 0
         self.rohati_heal_cooldown = 3.0
     
-    def check_and_use_pots(self, hwnd, hp_percent, mp_percent, hp_threshold, mp_threshold, use_rohati_heal=False):
-        """
-        Check HP/MP percentages and use potions if necessary
-        
-        Args:
-            hwnd: Window handle of the game
-            hp_percent: Current HP percentage
-            mp_percent: Current MP percentage
-            hp_threshold: HP threshold for using potion
-            mp_threshold: MP threshold for using potion
-            use_rohati_heal: If True, use Rohati heal before HP potion
-        """
-        current_time = time.time()
-        
-        # Check HP
-        if hp_percent <= hp_threshold and current_time - self.last_hp_pot_time >= self.pot_cooldown:
-            self.use_hp_pot(hwnd, use_rohati_heal)
-            self.last_hp_pot_time = current_time
-        
-        # Check MP
-        if mp_percent <= mp_threshold and current_time - self.last_mp_pot_time >= self.pot_cooldown:
-            self.use_mp_pot(hwnd)
-            self.last_mp_pot_time = current_time
+    def check_auto_pots(self):
+        """Check and use potions if necessary - HP and MP are checked separately"""
+        try:
+            if not config.calibrator:
+                return
+            
+            hwnd = config.connected_window.handle
+            current_time = time.time()
+            
+            # Calculate HP/MP percentages (only once per cycle)
+            hp_percent = config.calibrator.get_hp_percentage(hwnd)
+            mp_percent = config.calibrator.get_mp_percentage(hwnd)
+            
+            # Clamp values to 0-100
+            hp_percent = max(0, min(100, hp_percent))
+            mp_percent = max(0, min(100, mp_percent))
+            
+            # Store in config for GUI to read
+            config.current_hp_percentage = hp_percent
+            config.current_mp_percentage = mp_percent
+            
+            # Get thresholds from config
+            hp_threshold = float(config.hp_threshold)
+            mp_threshold = float(config.mp_threshold)
+            
+            # Check and use HP potion if enabled (separate from MP)
+            if config.auto_hp_enabled:
+                if hp_percent <= hp_threshold and current_time - self.last_hp_pot_time >= self.pot_cooldown:
+                    self.use_hp_pot(hwnd, False)
+                    self.last_hp_pot_time = current_time
+            
+            # Check and use MP potion if enabled (separate from HP)
+            if config.auto_mp_enabled:
+                if mp_percent <= mp_threshold and current_time - self.last_mp_pot_time >= self.pot_cooldown:
+                    self.use_mp_pot(hwnd)
+                    self.last_mp_pot_time = current_time
+                    
+        except ValueError:
+            print("[Auto Pots] Error: HP/MP thresholds must be valid numbers")
+        except Exception as e:
+            print(f"[Auto Pots] Error: {e}")
     
     def use_hp_pot(self, hwnd, use_rohati_heal=False):
         """

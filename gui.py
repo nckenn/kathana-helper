@@ -14,7 +14,7 @@ import window_utils
 import settings_manager
 import bot_logic
 import input_handler
-import mob_detection
+import auto_attack
 import ocr_utils
 import calibration
 
@@ -2245,15 +2245,14 @@ class BotGUI:
             self.current_mob_label.configure(text="Calibration Required", text_color="red")
             return
         
-        import enemy_bar_detection
         hwnd = config.connected_window.handle
-        result = enemy_bar_detection.detect_enemy_for_auto_attack(hwnd, targets=None)
+        result = auto_attack.detect_enemy_for_auto_attack(hwnd, targets=None)
         mob_name = result.get('name')
         
         if mob_name:
             self.current_mob_label.configure(text=mob_name, text_color="green")
             config.current_target_mob = mob_name
-            if not mob_detection.should_target_current_mob():
+            if not auto_attack.should_target_current_mob():
                 self.current_mob_label.configure(text_color="orange")
                 print(f"TEST: Mob '{mob_name}' would be SKIPPED (not in target list)")
             else:
@@ -2273,11 +2272,10 @@ class BotGUI:
             return
         
         try:
-            import enemy_bar_detection
             hwnd = config.connected_window.handle
             
             # Detect enemy using calibration-based method (without target filtering)
-            result = enemy_bar_detection.detect_enemy_for_auto_attack(hwnd, targets=None)
+            result = auto_attack.detect_enemy_for_auto_attack(hwnd, targets=None)
             
             if result.get('found') and result.get('name'):
                 detected_name = result.get('name', '').strip()
@@ -2311,7 +2309,7 @@ class BotGUI:
     # Calibration function removed - Tesseract OCR is automatic, no calibration needed!
     
     def update_status(self):
-        """Update HP/MP/Enemy HP status display (reads from config, updated by bot_logic/enemy_bar_detection)"""
+        """Update HP/MP/Enemy HP status display (reads from config, updated by bot_logic/auto_attack)"""
         if config.bot_running:
             # Read HP/MP percentages from config (calculated by bot_logic in separate thread)
             hp_percent = config.current_hp_percentage
@@ -2323,19 +2321,19 @@ class BotGUI:
             self.mp_progress_bar.set(mp_percent / 100.0)
             self.mp_percent_label.configure(text=f"{int(mp_percent)}%")
             
-            # Read enemy HP percentage from config (updated by enemy_bar_detection in separate thread)
+            # Read enemy HP percentage from config (updated by auto_attack in separate thread)
             enemy_hp_percent = config.current_enemy_hp_percentage
             if hasattr(self, 'enemy_hp_progress_bar'):
                 self.enemy_hp_progress_bar.set(enemy_hp_percent / 100.0)
             if hasattr(self, 'enemy_hp_percent_label'):
                 self.enemy_hp_percent_label.configure(text=f"{int(enemy_hp_percent)}%")
             
-            # Read enemy name from config (updated by enemy_bar_detection/bot_logic in separate thread)
+            # Read enemy name from config (updated by auto_attack/bot_logic in separate thread)
             if hasattr(self, 'current_mob_label'):
                 enemy_name = config.current_enemy_name
                 if enemy_name:
                     # Check if mob should be targeted (for color coding)
-                    if config.mob_detection_enabled and not mob_detection.should_target_current_mob():
+                    if config.mob_detection_enabled and not auto_attack.should_target_current_mob():
                         self.current_mob_label.configure(text=enemy_name, text_color="orange")
                     else:
                         self.current_mob_label.configure(text=enemy_name, text_color="green")
@@ -2365,7 +2363,7 @@ class BotGUI:
                     if hasattr(self, 'minimized_current_mob_label'):
                         enemy_name = config.current_enemy_name
                         if enemy_name:
-                            if config.mob_detection_enabled and not mob_detection.should_target_current_mob():
+                            if config.mob_detection_enabled and not auto_attack.should_target_current_mob():
                                 self.minimized_current_mob_label.configure(text=enemy_name, text_color="orange")
                             else:
                                 self.minimized_current_mob_label.configure(text=enemy_name, text_color="green")
