@@ -17,6 +17,7 @@ auto_mp_enabled = False
 auto_change_target_enabled = True
 auto_repair_enabled = False
 mouse_clicker_enabled = False
+is_mage = False  # If enabled, attack action won't be triggered after target
 
 # HP/MP thresholds and areas
 hp_threshold = 70  # Default HP threshold percentage (0-100)
@@ -142,6 +143,34 @@ calibrator = None  # Calibrator instance (set after calibration)
 
 # AutoPots instance (shared, created once)
 autopots_instance = None  # Will be initialized in bot_logic
+
+# Buffs Manager instance
+buffs_manager = None  # Will be initialized in GUI
+
+# Buffs configuration (max 8 buffs)
+buffs_config = {
+    i: {
+        'enabled': False,
+        'image_path': None,
+        'key': ''
+    } for i in range(8)
+}
+
+# Skills area (set during calibration) - (x_min, y_min, x_max, y_max)
+area_skills = None
+
+# Skill Sequence Manager instance
+skill_sequence_manager = None  # Will be initialized in GUI
+
+# Skill Sequence configuration (max 8 skills)
+skill_sequence_config = {
+    i: {
+        'enabled': False,
+        'image_path': None,
+        'key': '',
+        'bypass': False  # If True, skip to next skill if current skill not found
+    } for i in range(8)
+}
 
 # Current HP/MP percentages (updated by bot_logic, read by GUI)
 current_hp_percentage = 100.0

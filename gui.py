@@ -9,6 +9,8 @@ import threading
 import time
 import win32gui
 import queue
+import os
+import sys
 import config
 import window_utils
 import settings_manager
@@ -175,6 +177,11 @@ class BotGUI:
                 self.unstuck_timeout_var.set(str(config.unstuck_timeout))
                 print(f"  Applied unstuck timeout: {config.unstuck_timeout} seconds")
             
+            # Apply Mage setting
+            if hasattr(self, 'is_mage_var'):
+                self.is_mage_var.set(config.is_mage)
+                print(f"  Applied mage: enabled={config.is_mage}")
+            
             # Apply HP settings
             self.auto_hp_var.set(config.auto_hp_enabled)
             print(f"  Applied auto HP: enabled={config.auto_hp_enabled}")
@@ -217,6 +224,82 @@ class BotGUI:
                 print(f"  Applied mouse clicker: interval={config.mouse_clicker_interval}s, mode={'cursor' if config.mouse_clicker_use_cursor else 'coords'}, coords={config.mouse_clicker_coords}")
             except Exception as e:
                 print(f"  Error applying mouse clicker settings: {e}")
+            
+            # Apply buffs settings
+            if hasattr(self, 'buffs_vars') and hasattr(self, 'buffs_keys') and hasattr(self, 'buffs_canvases'):
+                for i in range(8):
+                    try:
+                        # Update enabled state
+                        self.buffs_vars[i].set(config.buffs_config[i]['enabled'])
+                        # Update key
+                        self.buffs_keys[i].set(config.buffs_config[i]['key'])
+                        # Load image if exists - convert relative paths to absolute
+                        if config.buffs_config[i]['image_path']:
+                            image_path = self.convert_to_absolute_path(config.buffs_config[i]['image_path'])
+                            if image_path and os.path.exists(image_path):
+                                # Update config with absolute path
+                                config.buffs_config[i]['image_path'] = image_path
+                                self.buffs_state[i]['image_path'] = image_path
+                                # Load and display the image
+                                self.load_buff_image(i, image_path)
+                                # Sync with buffs manager
+                                if config.buffs_manager:
+                                    if config.buffs_config[i]['enabled']:
+                                        config.buffs_manager.set_buff(i, image_path)
+                                    else:
+                                        config.buffs_manager.clear_buff(i)
+                                print(f"  Applied buff {i+1}: enabled={config.buffs_config[i]['enabled']}, key={config.buffs_config[i]['key']}, path={image_path}")
+                            else:
+                                print(f"  Buff {i+1} image path not found: {config.buffs_config[i]['image_path']}")
+                                self.clear_buff_skill(i)
+                        else:
+                            self.clear_buff_skill(i)
+                            # Update buffs manager
+                            if config.buffs_manager:
+                                config.buffs_manager.clear_buff(i)
+                    except Exception as e:
+                        print(f"  Error applying buff {i+1} settings: {e}")
+                        import traceback
+                        traceback.print_exc()
+            
+            # Apply skill sequence settings
+            if hasattr(self, 'skill_sequence_vars') and hasattr(self, 'skill_sequence_keys') and hasattr(self, 'skill_sequence_canvases'):
+                for i in range(8):
+                    try:
+                        # Update enabled state
+                        self.skill_sequence_vars[i].set(config.skill_sequence_config[i]['enabled'])
+                        # Update bypass state
+                        self.skill_sequence_bypass_vars[i].set(config.skill_sequence_config[i].get('bypass', False))
+                        # Update key
+                        self.skill_sequence_keys[i].set(config.skill_sequence_config[i].get('key', ''))
+                        # Load image if exists - convert relative paths to absolute
+                        if config.skill_sequence_config[i].get('image_path'):
+                            image_path = self.convert_to_absolute_path(config.skill_sequence_config[i]['image_path'])
+                            if image_path and os.path.exists(image_path):
+                                # Update config with absolute path
+                                config.skill_sequence_config[i]['image_path'] = image_path
+                                self.skill_sequence_state[i]['image_path'] = image_path
+                                # Load and display the image
+                                self.load_skill_sequence_image(i, image_path)
+                                # Sync with skill sequence manager
+                                if config.skill_sequence_manager:
+                                    if config.skill_sequence_config[i]['enabled']:
+                                        config.skill_sequence_manager.set_skill(i, image_path)
+                                    else:
+                                        config.skill_sequence_manager.clear_skill(i)
+                                print(f"  Applied skill sequence {i+1}: enabled={config.skill_sequence_config[i]['enabled']}, key={config.skill_sequence_config[i].get('key', '')}, bypass={config.skill_sequence_config[i].get('bypass', False)}, path={image_path}")
+                            else:
+                                print(f"  Skill Sequence {i+1} image path not found: {config.skill_sequence_config[i]['image_path']}")
+                                self.clear_skill_sequence_skill(i)
+                        else:
+                            self.clear_skill_sequence_skill(i)
+                            # Update skill sequence manager
+                            if config.skill_sequence_manager:
+                                config.skill_sequence_manager.clear_skill(i)
+                    except Exception as e:
+                        print(f"  Error applying skill sequence {i+1} settings: {e}")
+                        import traceback
+                        traceback.print_exc()
             
             # Apply target list
             target_text = '\n'.join(config.mob_target_list)
@@ -354,7 +437,9 @@ class BotGUI:
         # Create tabs
         status_tab = tabview.add("Status")
         settings_tab = tabview.add("Settings")
+        skill_sequence_tab = tabview.add("Skill Sequence")
         skills_tab = tabview.add("Skill Slots")
+        buffs_tab = tabview.add("Buffs")
         calibration_tab = tabview.add("Calibration")
         mouse_clicker_tab = tabview.add("Mouse Clicker")
         
@@ -425,6 +510,7 @@ class BotGUI:
         settings_frame.rowconfigure(1, weight=0)
         settings_frame.rowconfigure(2, weight=0)
         settings_frame.rowconfigure(3, weight=0)
+        settings_frame.rowconfigure(4, weight=0)
         
         # Column 0: Auto Attack, Auto Loot, Auto Repair
         # Auto Attack frame
@@ -462,6 +548,18 @@ class BotGUI:
                                          command=self.update_auto_repair,
                                          font=ctk.CTkFont(size=11))
         auto_repair_checkbox.grid(row=0, column=0, sticky="w", pady=5)
+        
+        # Mage frame
+        mage_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
+        mage_frame.grid(row=4, column=0, sticky="ew", padx=(15, 5), pady=(0, 0))
+        
+        # Mage checkbox
+        self.is_mage_var = tk.BooleanVar(value=config.is_mage)
+        mage_checkbox = ctk.CTkCheckBox(mage_frame, text="Mage?", 
+                                         variable=self.is_mage_var,
+                                         command=self.update_is_mage,
+                                         font=ctk.CTkFont(size=11))
+        mage_checkbox.grid(row=0, column=0, sticky="w", pady=5)
         
         # Column 1: Auto HP, Auto MP, Auto Unstuck
         # Auto HP frame
@@ -568,7 +666,6 @@ class BotGUI:
         
         # Add Mob Filter to Settings tab
         mob_separator = ctk.CTkFrame(settings_frame, height=1, fg_color="gray50")
-        mob_separator.grid(row=4, column=0, columnspan=2, sticky="ew", padx=15, pady=15)
         
         mob_label = ctk.CTkLabel(settings_frame, text="Mob Filter", font=ctk.CTkFont(size=12, weight="bold"))
         mob_label.grid(row=5, column=0, columnspan=2, sticky="w", padx=15, pady=(5, 5))
@@ -615,6 +712,106 @@ class BotGUI:
         self.enemy_hp_height_var = tk.StringVar(value=str(config.target_hp_bar_area['height']))
         self.mob_width_var = tk.StringVar(value=str(config.target_name_area['width']))
         self.mob_height_var = tk.StringVar(value=str(config.target_name_area['height']))
+        
+        # Skill Sequence frame - moved to Skill Sequence tab
+        skill_sequence_frame = skill_sequence_tab
+        
+        # Initialize skill sequence variables
+        self.skill_sequence_vars = {}
+        self.skill_sequence_keys = []
+        self.skill_sequence_canvases = []
+        self.skill_sequence_bypass_vars = {}
+        self.skill_sequence_state = []
+        
+        # Title label
+        skill_sequence_title = ctk.CTkLabel(skill_sequence_frame, text="Skill Sequence Configuration", 
+                                           font=ctk.CTkFont(size=14, weight="bold"))
+        skill_sequence_title.grid(row=0, column=0, columnspan=4, sticky="w", padx=15, pady=(15, 10))
+        
+        # Create skill sequence slots in a grid (4 rows x 2 columns)
+        for i in range(8):
+            row = (i // 2) + 1
+            col = (i % 2) * 2
+            
+            # Create frame for each skill sequence slot
+            skill_slot_frame = ctk.CTkFrame(skill_sequence_frame, corner_radius=8)
+            padx_left = 15 if col == 0 else 5
+            padx_right = 5 if col == 0 else 15
+            skill_slot_frame.grid(row=row, column=col, columnspan=2, sticky="ew", 
+                                 padx=(padx_left, padx_right), pady=5)
+            
+            # Enable checkbox
+            self.skill_sequence_vars[i] = tk.BooleanVar(value=config.skill_sequence_config[i]['enabled'])
+            checkbox = ctk.CTkCheckBox(skill_slot_frame, text=f"Skill {i+1}", 
+                                      variable=self.skill_sequence_vars[i],
+                                      command=lambda idx=i: self.update_skill_sequence_enabled(idx),
+                                      font=ctk.CTkFont(size=11))
+            checkbox.grid(row=0, column=0, padx=10, pady=5, sticky="w")
+            
+            # Bypass checkbox
+            self.skill_sequence_bypass_vars[i] = tk.BooleanVar(value=config.skill_sequence_config[i].get('bypass', False))
+            bypass_checkbox = ctk.CTkCheckBox(skill_slot_frame, text="Bypass", 
+                                             variable=self.skill_sequence_bypass_vars[i],
+                                             command=lambda idx=i: self.update_skill_sequence_bypass(idx),
+                                             font=ctk.CTkFont(size=10))
+            bypass_checkbox.grid(row=0, column=1, padx=5, pady=5, sticky="w")
+            
+            # Skill image canvas (clickable to select skill)
+            canvas_frame = ctk.CTkFrame(skill_slot_frame, fg_color="transparent")
+            canvas_frame.grid(row=1, column=0, padx=10, pady=5)
+            
+            canvas = tk.Canvas(canvas_frame, width=48, height=48, bg='gray20', 
+                             highlightthickness=1, highlightbackground='gray50')
+            canvas.grid(row=0, column=0, padx=5)
+            canvas.bind('<Button-1>', lambda e, idx=i: self.show_skill_sequence_selector(idx))
+            canvas.bind('<Button-3>', lambda e, idx=i: self.clear_skill_sequence_skill(idx))
+            self.skill_sequence_canvases.append(canvas)
+            
+            # Key registration button
+            key_frame = ctk.CTkFrame(skill_slot_frame, fg_color="transparent")
+            key_frame.grid(row=1, column=1, padx=10, pady=5, sticky="w")
+            
+            key_label = ctk.CTkLabel(key_frame, text="Key:", font=ctk.CTkFont(size=11))
+            key_label.grid(row=0, column=0, padx=(0, 5))
+            
+            key_var = tk.StringVar(value=config.skill_sequence_config[i].get('key', ''))
+            self.skill_sequence_keys.append(key_var)
+            
+            key_button = ctk.CTkButton(key_frame, textvariable=key_var, width=50, height=30,
+                                     command=lambda idx=i: self.register_skill_sequence_key(idx),
+                                     font=ctk.CTkFont(size=11))
+            key_button.grid(row=0, column=1, padx=(0, 5))
+            
+            # Clear key button (right-click)
+            key_button.bind('<Button-3>', lambda e, idx=i: self.clear_skill_sequence_key(idx))
+            
+            # Initialize skill sequence state
+            self.skill_sequence_state.append({
+                'image_path': config.skill_sequence_config[i].get('image_path'),
+                'enabled': config.skill_sequence_config[i]['enabled']
+            })
+            
+            # Load skill image if exists - convert relative paths to absolute
+            if config.skill_sequence_config[i].get('image_path'):
+                image_path = self.convert_to_absolute_path(config.skill_sequence_config[i]['image_path'])
+                if image_path and os.path.exists(image_path):
+                    # Update config with absolute path
+                    config.skill_sequence_config[i]['image_path'] = image_path
+                    self.skill_sequence_state[i]['image_path'] = image_path
+                    self.load_skill_sequence_image(i, image_path)
+                else:
+                    print(f"Skill Sequence {i+1} image path not found: {config.skill_sequence_config[i]['image_path']}")
+                    config.skill_sequence_config[i]['image_path'] = None
+                    self.skill_sequence_state[i]['image_path'] = None
+        
+        # Configure skill sequence frame grid
+        skill_sequence_frame.columnconfigure(0, weight=1)
+        skill_sequence_frame.columnconfigure(2, weight=1)
+        
+        # Initialize skill sequence manager
+        import skill_sequence_manager
+        config.skill_sequence_manager = skill_sequence_manager.SkillSequenceManager(num_skills=8)
+        config.skill_sequence_manager.set_ui_reference(self)
         
         # Skill slots frame - moved to Skill Slots tab
         skill_frame = skills_tab
@@ -697,6 +894,97 @@ class BotGUI:
         # Configure skill frame grid
         skill_frame.columnconfigure(0, weight=1)
         skill_frame.columnconfigure(1, weight=1)
+        
+        # Buffs frame - moved to Buffs tab
+        buffs_frame = buffs_tab
+        
+        # Initialize buffs variables
+        self.buffs_vars = {}
+        self.buffs_keys = []
+        self.buffs_canvases = []
+        self.buffs_state = []
+        
+        # Title label
+        buffs_title = ctk.CTkLabel(buffs_frame, text="Buffs Configuration", 
+                                   font=ctk.CTkFont(size=14, weight="bold"))
+        buffs_title.grid(row=0, column=0, columnspan=4, sticky="w", padx=15, pady=(15, 10))
+        
+        # Create buff slots in a grid (4 rows x 2 columns)
+        for i in range(8):
+            row = (i // 2) + 1
+            col = (i % 2) * 2
+            
+            # Create frame for each buff slot
+            buff_slot_frame = ctk.CTkFrame(buffs_frame, corner_radius=8)
+            padx_left = 15 if col == 0 else 5
+            padx_right = 5 if col == 0 else 15
+            buff_slot_frame.grid(row=row, column=col, columnspan=2, sticky="ew", 
+                               padx=(padx_left, padx_right), pady=5)
+            
+            # Enable checkbox
+            self.buffs_vars[i] = tk.BooleanVar(value=config.buffs_config[i]['enabled'])
+            checkbox = ctk.CTkCheckBox(buff_slot_frame, text=f"Buff {i+1}", 
+                                      variable=self.buffs_vars[i],
+                                      command=lambda idx=i: self.update_buff_enabled(idx),
+                                      font=ctk.CTkFont(size=11))
+            checkbox.grid(row=0, column=0, padx=10, pady=5, sticky="w")
+            
+            # Skill image canvas (clickable to select skill)
+            canvas_frame = ctk.CTkFrame(buff_slot_frame, fg_color="transparent")
+            canvas_frame.grid(row=1, column=0, padx=10, pady=5)
+            
+            canvas = tk.Canvas(canvas_frame, width=48, height=48, bg='gray20', 
+                             highlightthickness=1, highlightbackground='gray50')
+            canvas.grid(row=0, column=0, padx=5)
+            canvas.bind('<Button-1>', lambda e, idx=i: self.show_buff_skill_selector(idx))
+            canvas.bind('<Button-3>', lambda e, idx=i: self.clear_buff_skill(idx))
+            self.buffs_canvases.append(canvas)
+            
+            # Key registration button
+            key_frame = ctk.CTkFrame(buff_slot_frame, fg_color="transparent")
+            key_frame.grid(row=1, column=1, padx=10, pady=5, sticky="w")
+            
+            key_label = ctk.CTkLabel(key_frame, text="Key:", font=ctk.CTkFont(size=11))
+            key_label.grid(row=0, column=0, padx=(0, 5))
+            
+            key_var = tk.StringVar(value=config.buffs_config[i]['key'])
+            self.buffs_keys.append(key_var)
+            
+            key_button = ctk.CTkButton(key_frame, textvariable=key_var, width=50, height=30,
+                                     command=lambda idx=i: self.register_buff_key(idx),
+                                     font=ctk.CTkFont(size=11))
+            key_button.grid(row=0, column=1, padx=(0, 5))
+            
+            # Clear key button (right-click)
+            key_button.bind('<Button-3>', lambda e, idx=i: self.clear_buff_key(idx))
+            
+            # Initialize buff state
+            self.buffs_state.append({
+                'image_path': config.buffs_config[i]['image_path'],
+                'enabled': config.buffs_config[i]['enabled']
+            })
+            
+            # Load buff image if exists - convert relative paths to absolute
+            if config.buffs_config[i]['image_path']:
+                image_path = self.convert_to_absolute_path(config.buffs_config[i]['image_path'])
+                if image_path and os.path.exists(image_path):
+                    # Update config with absolute path
+                    config.buffs_config[i]['image_path'] = image_path
+                    self.buffs_state[i]['image_path'] = image_path
+                    self.load_buff_image(i, image_path)
+                else:
+                    print(f"Buff {i+1} image path not found: {config.buffs_config[i]['image_path']}")
+                    config.buffs_config[i]['image_path'] = None
+                    self.buffs_state[i]['image_path'] = None
+        
+        # Configure buffs frame grid
+        buffs_frame.columnconfigure(0, weight=1)
+        buffs_frame.columnconfigure(2, weight=1)
+        
+        # Initialize buffs manager
+        import buffs_manager
+        config.buffs_manager = buffs_manager.BuffsManager(num_buffs=8)
+        config.buffs_manager.set_ui_reference(self)
         
         # Calibration Tool frame - moved to Calibration tab
         calibration_frame = calibration_tab
@@ -831,7 +1119,6 @@ class BotGUI:
                 return
             
             # Create a simple input dialog
-            from tkinter import simpledialog
             new_name = simpledialog.askstring("Rename Window", 
                                             f"Enter new name for window:\n'{selected_window_title}'",
                                             initialvalue=selected_window_title)
@@ -940,6 +1227,37 @@ class BotGUI:
                     
                     # Store calibrator instance in config for later use
                     config.calibrator = calibrator
+                    
+                    # Calculate and store area_skills
+                    if (calibrator.skills_bar1_position and calibrator.skills_bar2_position):
+                        try:
+                            import cv2
+                            x1, y1 = calibrator.skills_bar1_position
+                            x2, y2 = calibrator.skills_bar2_position
+                            
+                            # Load skill bar templates to get dimensions
+                            current_dir = os.path.dirname(os.path.abspath(__file__))
+                            bar1_path = os.path.join(current_dir, 'skill_bar_1.bmp')
+                            bar2_path = os.path.join(current_dir, 'skill_bar_2.bmp')
+                            
+                            if os.path.exists(bar1_path) and os.path.exists(bar2_path):
+                                bar1 = cv2.imread(bar1_path)
+                                bar2 = cv2.imread(bar2_path)
+                                
+                                if bar1 is not None and bar2 is not None:
+                                    bar1_h, bar1_w = bar1.shape[:2]
+                                    bar2_h, bar2_w = bar2.shape[:2]
+                                    x_min = min(x1, x2)
+                                    y_min = min(y1, y2)
+                                    x_max = max(x1 + bar1_w, x2 + bar2_w)
+                                    y_max_original = max(y1 + bar1_h, y2 + bar2_h)
+                                    original_height = y_max_original - y_min
+                                    new_height = original_height * 5
+                                    y_max_new = y_min + new_height
+                                    config.area_skills = (x_min, y_min, x_max, y_max_new)
+                                    print(f"[Calibration] Skills area set: {config.area_skills}")
+                        except Exception as e:
+                            print(f"[Calibration] Error calculating skills area: {e}")
                     
                     # Update GUI with calibrated values
                     def update_gui():
@@ -1058,6 +1376,400 @@ class BotGUI:
         except ValueError:
             print(f"Invalid interval for skill slot {slot_num}")
     
+    def update_buff_enabled(self, idx):
+        """Update buff enabled status"""
+        config.buffs_config[idx]['enabled'] = self.buffs_vars[idx].get()
+        self.buffs_state[idx]['enabled'] = config.buffs_config[idx]['enabled']
+        if config.buffs_manager:
+            if config.buffs_config[idx]['enabled'] and config.buffs_config[idx]['image_path']:
+                config.buffs_manager.set_buff(idx, config.buffs_config[idx]['image_path'])
+            else:
+                config.buffs_manager.clear_buff(idx)
+        status = "enabled" if config.buffs_config[idx]['enabled'] else "disabled"
+        print(f"Buff {idx + 1} {status}")
+    
+    def load_buff_image(self, idx, image_path):
+        """Load and display buff image"""
+        try:
+            from PIL import Image, ImageTk
+            pil_image = Image.open(image_path)
+            pil_image = pil_image.resize((48, 48), Image.Resampling.LANCZOS)
+            image = ImageTk.PhotoImage(pil_image)
+            canvas = self.buffs_canvases[idx]
+            canvas.delete('all')
+            canvas.create_image(24, 24, image=image)
+            canvas.image = image
+            canvas.image_path = image_path
+            self.buffs_state[idx]['image_path'] = image_path
+            config.buffs_config[idx]['image_path'] = image_path
+            # Sync with buffs_manager
+            if config.buffs_manager:
+                config.buffs_manager.set_buff(idx, image_path)
+                print(f"[Buffs] Buff {idx + 1} synced with buffs_manager: {image_path}")
+        except Exception as e:
+            print(f"Error loading buff image: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def clear_buff_skill(self, idx):
+        """Clear buff skill image"""
+        canvas = self.buffs_canvases[idx]
+        canvas.delete('all')
+        canvas.image = None
+        canvas.image_path = None
+        self.buffs_state[idx]['image_path'] = None
+        config.buffs_config[idx]['image_path'] = None
+        if config.buffs_manager:
+            config.buffs_manager.clear_buff(idx)
+        print(f"Buff {idx + 1} skill cleared")
+    
+    def show_skill_selector(self, callback_func, callback_arg, title="Choose Skill"):
+        """Show popup window to select skill image, grouped by job (reusable for buffs and skill sequence)"""
+        try:
+            from PIL import Image, ImageTk
+            import os
+            
+            # Create popup window
+            popup = ctk.CTkToplevel(self.root)
+            popup.title(title)
+            popup.geometry("550x450")
+            popup.transient(self.root)
+            popup.grab_set()
+            
+            # Jobs folder path
+            jobs_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'jobs')
+            
+            if not os.path.exists(jobs_folder):
+                messagebox.showerror("Error", f"Jobs folder not found: {jobs_folder}")
+                popup.destroy()
+                return
+            
+            # Get all job folders
+            job_folders = [f for f in os.listdir(jobs_folder) 
+                          if os.path.isdir(os.path.join(jobs_folder, f)) and not f.startswith('.')]
+            job_folders.sort()
+            
+            if not job_folders:
+                messagebox.showinfo("No Jobs", "No job folders found in Jobs directory")
+                popup.destroy()
+                return
+            
+            # Create main container
+            main_container = ctk.CTkFrame(popup)
+            main_container.pack(fill="both", expand=True, padx=10, pady=10)
+            
+            # Create tabview for jobs
+            tabview = ctk.CTkTabview(main_container, corner_radius=8)
+            tabview.pack(fill="both", expand=True, pady=(0, 10))
+            
+            # Create a tab for each job
+            for job_name in job_folders:
+                job_path = os.path.join(jobs_folder, job_name)
+                images = [f for f in os.listdir(job_path) 
+                         if f.lower().endswith(('.bmp', '.BMP'))]
+                
+                if not images:
+                    continue
+                
+                # Create tab for this job
+                job_tab = tabview.add(job_name)
+                
+                # Create scrollable frame for skills in this job tab
+                scroll_frame = ctk.CTkScrollableFrame(job_tab)
+                scroll_frame.pack(fill="both", expand=True, padx=5, pady=5)
+                
+                # Create grid for skills (6 columns for compact layout)
+                row = 0
+                col = 0
+                
+                for img_file in sorted(images):
+                    try:
+                        img_path = os.path.join(job_path, img_file)
+                        pil_image = Image.open(img_path)
+                        pil_image = pil_image.resize((48, 48), Image.Resampling.LANCZOS)
+                        image = ImageTk.PhotoImage(pil_image)
+                        
+                        # Create skill frame (compact, just fits the image)
+                        skill_frame = ctk.CTkFrame(scroll_frame, corner_radius=3, width=52, height=52)
+                        skill_frame.grid(row=row, column=col, padx=2, pady=2, sticky="")
+                        skill_frame.grid_propagate(False)
+                        
+                        # Skill image button
+                        img_button = tk.Canvas(skill_frame, width=48, height=48, 
+                                              bg='gray20', highlightthickness=1,
+                                              highlightbackground='gray50',
+                                              cursor='hand2')
+                        img_button.place(relx=0.5, rely=0.5, anchor='center')
+                        img_button.create_image(24, 24, image=image)
+                        img_button.image = image
+                        img_button.image_path = img_path
+                        
+                        # Bind click event
+                        img_button.bind('<Button-1>', 
+                                       lambda e, path=img_path, p=popup, arg=callback_arg: 
+                                       callback_func(arg, path, p))
+                        
+                        # Hover effect
+                        def on_enter(e, frame=skill_frame):
+                            frame.configure(fg_color=("gray70", "gray30"))
+                        def on_leave(e, frame=skill_frame):
+                            frame.configure(fg_color=("gray17", "gray17"))
+                        skill_frame.bind('<Enter>', on_enter)
+                        skill_frame.bind('<Leave>', on_leave)
+                        img_button.bind('<Enter>', lambda e, f=skill_frame: on_enter(e, f))
+                        img_button.bind('<Leave>', lambda e, f=skill_frame: on_leave(e, f))
+                        
+                        col += 1
+                        if col >= 6:
+                            col = 0
+                            row += 1
+                    except Exception as e:
+                        print(f"Error loading skill image {img_file}: {e}")
+                        continue
+                
+                # Configure grid weights for scrollable frame
+                for i in range(6):
+                    scroll_frame.grid_columnconfigure(i, weight=0)
+            
+            # Close button
+            close_button = ctk.CTkButton(main_container, text="Close", 
+                                        command=popup.destroy, width=100)
+            close_button.pack(pady=10)
+            
+        except Exception as e:
+            print(f"Error showing skill selector: {e}")
+            import traceback
+            traceback.print_exc()
+            if 'popup' in locals():
+                popup.destroy()
+    
+    def show_buff_skill_selector(self, buff_index):
+        """Show popup window to select skill image for buff"""
+        self.show_skill_selector(self.select_buff_skill, buff_index, "Choose Skill for Buff")
+    
+    def select_buff_skill(self, buff_index, image_path, popup):
+        """Select a skill image for a buff"""
+        self.load_buff_image(buff_index, image_path)
+        popup.destroy()
+        print(f"Buff {buff_index + 1} skill selected: {image_path}")
+    
+    def register_buff_key(self, idx):
+        """Register a key for a buff by capturing keyboard input"""
+        # Create popup window
+        popup = ctk.CTkToplevel(self.root)
+        popup.title("Press a key")
+        popup.geometry("300x150")
+        popup.transient(self.root)
+        popup.grab_set()
+        
+        # Position popup near main window
+        root_x = self.root.winfo_x()
+        root_y = self.root.winfo_y()
+        popup.geometry(f'+{root_x + 50}+{root_y + 50}')
+        
+        # Label
+        label = ctk.CTkLabel(popup, text="Press any key to register...", 
+                            font=ctk.CTkFont(size=12))
+        label.pack(pady=30)
+        
+        def on_key_press(event):
+            """Handle key press event"""
+            key = event.keysym.upper()
+            
+            # Handle single character keys (letters, numbers)
+            if len(key) == 1:
+                self.buffs_keys[idx].set(key)
+                config.buffs_config[idx]['key'] = key
+                print(f"Buff {idx + 1} key registered: {key}")
+                popup.destroy()
+            # Handle function keys (F1-F12)
+            elif key in ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12']:
+                self.buffs_keys[idx].set(key)
+                config.buffs_config[idx]['key'] = key
+                print(f"Buff {idx + 1} key registered: {key}")
+                popup.destroy()
+            # Handle special keys
+            elif key in ['SPACE', 'TAB', 'RETURN', 'ESCAPE']:
+                key_map = {
+                    'SPACE': 'SPACE',
+                    'TAB': 'TAB',
+                    'RETURN': 'ENTER',
+                    'ESCAPE': 'ESC'
+                }
+                mapped_key = key_map.get(key, key)
+                self.buffs_keys[idx].set(mapped_key)
+                config.buffs_config[idx]['key'] = mapped_key
+                print(f"Buff {idx + 1} key registered: {mapped_key}")
+                popup.destroy()
+        
+        # Bind key press event to popup
+        popup.bind('<Key>', on_key_press)
+        popup.focus_set()
+        
+        # Cancel button
+        cancel_btn = ctk.CTkButton(popup, text="Cancel", command=popup.destroy, width=100)
+        cancel_btn.pack(pady=10)
+    
+    def clear_buff_key(self, idx):
+        """Clear buff key"""
+        self.buffs_keys[idx].set('')
+        config.buffs_config[idx]['key'] = ''
+        print(f"Buff {idx + 1} key cleared")
+    
+    def show_skill_sequence_selector(self, skill_index):
+        """Show popup window to select skill image for skill sequence"""
+        self.show_skill_selector(self.select_skill_sequence_skill, skill_index, "Choose Skill for Sequence")
+    
+    def select_skill_sequence_skill(self, skill_index, image_path, popup):
+        """Select a skill image for skill sequence"""
+        self.load_skill_sequence_image(skill_index, image_path)
+        popup.destroy()
+        print(f"Skill Sequence {skill_index + 1} skill selected: {image_path}")
+    
+    def load_skill_sequence_image(self, idx, image_path):
+        """Load and display skill sequence image"""
+        try:
+            from PIL import Image, ImageTk
+            pil_image = Image.open(image_path)
+            pil_image = pil_image.resize((48, 48), Image.Resampling.LANCZOS)
+            image = ImageTk.PhotoImage(pil_image)
+            canvas = self.skill_sequence_canvases[idx]
+            canvas.delete('all')
+            canvas.create_image(24, 24, image=image)
+            canvas.image = image
+            canvas.image_path = image_path
+            self.skill_sequence_state[idx]['image_path'] = image_path
+            config.skill_sequence_config[idx]['image_path'] = image_path
+            # Sync with skill sequence manager
+            if config.skill_sequence_manager:
+                config.skill_sequence_manager.set_skill(idx, image_path)
+                print(f"[SkillSequence] Skill {idx + 1} synced with skill_sequence_manager: {image_path}")
+        except Exception as e:
+            print(f"Error loading skill sequence image: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def clear_skill_sequence_skill(self, idx):
+        """Clear skill sequence skill image"""
+        canvas = self.skill_sequence_canvases[idx]
+        canvas.delete('all')
+        canvas.image = None
+        canvas.image_path = None
+        self.skill_sequence_state[idx]['image_path'] = None
+        config.skill_sequence_config[idx]['image_path'] = None
+        if config.skill_sequence_manager:
+            config.skill_sequence_manager.clear_skill(idx)
+        print(f"Skill Sequence {idx + 1} skill cleared")
+    
+    def update_skill_sequence_enabled(self, idx):
+        """Update skill sequence enabled status"""
+        config.skill_sequence_config[idx]['enabled'] = self.skill_sequence_vars[idx].get()
+        self.skill_sequence_state[idx]['enabled'] = config.skill_sequence_config[idx]['enabled']
+        if config.skill_sequence_manager:
+            if config.skill_sequence_config[idx]['enabled'] and config.skill_sequence_config[idx].get('image_path'):
+                config.skill_sequence_manager.set_skill(idx, config.skill_sequence_config[idx]['image_path'])
+            else:
+                config.skill_sequence_manager.clear_skill(idx)
+        status = "enabled" if config.skill_sequence_config[idx]['enabled'] else "disabled"
+        print(f"Skill Sequence {idx + 1} {status}")
+    
+    def update_skill_sequence_bypass(self, idx):
+        """Update skill sequence bypass status"""
+        config.skill_sequence_config[idx]['bypass'] = self.skill_sequence_bypass_vars[idx].get()
+        print(f"Skill Sequence {idx + 1} bypass: {config.skill_sequence_config[idx]['bypass']}")
+    
+    def register_skill_sequence_key(self, idx):
+        """Register a key for skill sequence by capturing keyboard input"""
+        # Create popup window
+        popup = ctk.CTkToplevel(self.root)
+        popup.title("Press a key")
+        popup.geometry("300x150")
+        popup.transient(self.root)
+        popup.grab_set()
+        
+        # Position popup near main window
+        root_x = self.root.winfo_x()
+        root_y = self.root.winfo_y()
+        popup.geometry(f'+{root_x + 50}+{root_y + 50}')
+        
+        # Label
+        label = ctk.CTkLabel(popup, text="Press any key to register...", 
+                            font=ctk.CTkFont(size=12))
+        label.pack(pady=30)
+        
+        def on_key_press(event):
+            """Handle key press event"""
+            key = event.keysym.upper()
+            
+            # Handle single character keys (letters, numbers)
+            if len(key) == 1:
+                self.skill_sequence_keys[idx].set(key)
+                config.skill_sequence_config[idx]['key'] = key
+                print(f"Skill Sequence {idx + 1} key registered: {key}")
+                popup.destroy()
+            # Handle function keys (F1-F12)
+            elif key in ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12']:
+                self.skill_sequence_keys[idx].set(key)
+                config.skill_sequence_config[idx]['key'] = key
+                print(f"Skill Sequence {idx + 1} key registered: {key}")
+                popup.destroy()
+            # Handle special keys
+            elif key in ['SPACE', 'TAB', 'RETURN', 'ESCAPE']:
+                key_map = {
+                    'SPACE': 'SPACE',
+                    'TAB': 'TAB',
+                    'RETURN': 'ENTER',
+                    'ESCAPE': 'ESC'
+                }
+                mapped_key = key_map.get(key, key)
+                self.skill_sequence_keys[idx].set(mapped_key)
+                config.skill_sequence_config[idx]['key'] = mapped_key
+                print(f"Skill Sequence {idx + 1} key registered: {mapped_key}")
+                popup.destroy()
+        
+        # Bind key press event to popup
+        popup.bind('<Key>', on_key_press)
+        popup.focus_set()
+        
+        # Cancel button
+        cancel_btn = ctk.CTkButton(popup, text="Cancel", command=popup.destroy, width=100)
+        cancel_btn.pack(pady=10)
+    
+    def clear_skill_sequence_key(self, idx):
+        """Clear skill sequence key"""
+        self.skill_sequence_keys[idx].set('')
+        config.skill_sequence_config[idx]['key'] = ''
+        print(f"Skill Sequence {idx + 1} key cleared")
+    
+    def send_key(self, key_input):
+        """Send a key input (used by BuffsManager)"""
+        try:
+            input_handler.send_input(key_input)
+            return True
+        except Exception as e:
+            print(f"Error sending key {key_input}: {e}")
+            return False
+    
+    def convert_to_absolute_path(self, relative_path):
+        """Convert a relative path to absolute path for loading from configuration"""
+        if not relative_path:
+            return None
+        try:
+            if getattr(sys, 'frozen', False):
+                # Running as compiled executable
+                base_path = sys._MEIPASS
+            else:
+                # Running as script
+                base_path = os.path.dirname(os.path.abspath(__file__))
+            absolute_path = os.path.join(base_path, relative_path)
+            # Normalize the path
+            absolute_path = os.path.normpath(absolute_path)
+            return absolute_path
+        except Exception as e:
+            # If conversion fails, return the original path (might already be absolute)
+            print(f"Warning: Could not convert path {relative_path} to absolute: {e}")
+            return relative_path
+    
     def update_action_slot(self, action_key):
         """Update action slot enabled status"""
 
@@ -1097,6 +1809,12 @@ class BotGUI:
         config.auto_repair_enabled = self.auto_repair_var.get()
         status = "enabled" if config.auto_repair_enabled else "disabled"
         print(f"Auto Repair {status}")
+    
+    def update_is_mage(self):
+        """Update mage setting"""
+        config.is_mage = self.is_mage_var.get()
+        status = "enabled" if config.is_mage else "disabled"
+        print(f"Mage? {status}")
     
     def update_auto_change_target(self):
         """Update auto change target enabled status"""
@@ -2303,13 +3021,65 @@ class BotGUI:
             import traceback
             traceback.print_exc()
     
-    # Legacy functions removed - no longer needed with OCR mode
-    
-    
-    # Calibration function removed - Tesseract OCR is automatic, no calibration needed!
-    
     def update_status(self):
         """Update HP/MP/Enemy HP status display (reads from config, updated by bot_logic/auto_attack)"""
+        if config.bot_running and config.connected_window:
+            # Check and update buffs
+            try:
+                # Check if enabled buffs are configured (have image paths and are enabled)
+                buffs_configured = any(
+                    self.buffs_state[i]['image_path'] and self.buffs_state[i]['enabled']
+                    for i in range(8) 
+                    if hasattr(self, 'buffs_state') and i < len(self.buffs_state)
+                )
+                
+                if buffs_configured and config.calibrator and config.area_skills:
+                    try:
+                        import cv2
+                        # Get window handle
+                        if hasattr(config.connected_window, 'handle'):
+                            hwnd = config.connected_window.handle
+                        else:
+                            hwnd = config.connected_window
+                        
+                        # Capture screen
+                        screen = config.calibrator.capture_window(hwnd)
+                        if screen is not None:
+                            # Extract area_skills from stored coordinates
+                            x_min, y_min, x_max, y_max = config.area_skills
+                            
+                            # Ensure coordinates are within screen bounds
+                            h, w = screen.shape[:2]
+                            if (x_min >= 0 and y_min >= 0 and x_max <= w and y_max <= h):
+                                area_skills = screen[y_min:y_max, x_min:x_max]
+                                
+                                # Calculate area_buffs_activos (40 pixels above skills area)
+                                buff_height_start = max(0, y_min - 40)
+                                buff_height_end = y_min
+                                buff_width_start = x_min
+                                buff_width_end = x_max
+                                
+                                if (buff_height_start >= 0 and buff_height_end <= h and
+                                    buff_width_start >= 0 and buff_width_end <= w and
+                                    buff_height_start < buff_height_end):
+                                    area_buffs_activos = screen[buff_height_start:buff_height_end, buff_width_start:buff_width_end]
+                                    
+                                    # Call buffs manager update
+                                    if config.buffs_manager:
+                                        config.buffs_manager.update_and_activate_buffs(
+                                            hwnd,
+                                            screen,
+                                            area_skills,
+                                            area_buffs_activos,
+                                            x_min,
+                                            y_min,
+                                            run_active=True
+                                        )
+                    except Exception as e:
+                        print(f"[GUI] Error updating buffs in update_status: {e}")
+            except Exception as e:
+                print(f"[GUI] Error checking buffs configuration: {e}")
+        
         if config.bot_running:
             # Read HP/MP percentages from config (calculated by bot_logic in separate thread)
             hp_percent = config.current_hp_percentage

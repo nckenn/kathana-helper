@@ -1,6 +1,5 @@
 """
 Auto-calibration module for detecting HP/MP bar positions
-Based on the decompiled Calibrar.py functionality
 """
 import os
 import cv2
@@ -22,6 +21,9 @@ class Calibrator:
         self.mp_dimensions = (164, 15)  # Expected MP bar dimensions (width, height)
         self.hp_position = None  # (x, y) position of HP bar
         self.mp_position = None  # (x, y) position of MP bar
+        self.skills_bar1_position = None  # (x, y) position of first skill bar
+        self.skills_bar2_position = None  # (x, y) position of second skill bar
+        self.skills_spacing = None  # Spacing between skill bars in pixels
         self.debug_dir = os.path.join(os.path.dirname(__file__), 'debug')
         
         # Create debug directory if it doesn't exist
@@ -195,6 +197,129 @@ class Calibrator:
             print('[Calibration] No valid HP/MP bars found (with both bars associated)')
             return False
     
+    def find_skill_bars(self, screen_img):
+        """
+        Find skill bars using template matching and calculate spacing between them
+        
+        Args:
+            screen_img: Screen image in BGR format
+        Returns:
+            tuple: (bar1_position, bar2_position) or (None, None) if not found
+        """
+        try:
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            bar1_path = os.path.join(current_dir, 'skill_bar_1.bmp')
+            bar2_path = os.path.join(current_dir, 'skill_bar_2.bmp')
+            
+            print(f'[Calibration] Looking for skill bar 1 at: {bar1_path}')
+            print(f'[Calibration] Looking for skill bar 2 at: {bar2_path}')
+            
+            # Check if template files exist
+            if not os.path.exists(bar1_path):
+                print(f'[Calibration] ERROR: File {bar1_path} does not exist')
+                self.save_debug_image(screen_img, 'skill_bars_missing_file1')
+                return (None, None)
+            
+            if not os.path.exists(bar2_path):
+                print(f'[Calibration] ERROR: File {bar2_path} does not exist')
+                self.save_debug_image(screen_img, 'skill_bars_missing_file2')
+                return (None, None)
+            
+            # Load template images
+            bar1 = cv2.imread(bar1_path)
+            bar2 = cv2.imread(bar2_path)
+            
+            if bar1 is None:
+                print(f'[Calibration] ERROR: Could not load image {bar1_path}')
+                self.save_debug_image(screen_img, 'skill_bars_load_error1')
+                return (None, None)
+            
+            if bar2 is None:
+                print(f'[Calibration] ERROR: Could not load image {bar2_path}')
+                self.save_debug_image(screen_img, 'skill_bars_load_error2')
+                return (None, None)
+            
+            # Get template dimensions
+            bar1_h, bar1_w = bar1.shape[:2]
+            bar2_h, bar2_w = bar2.shape[:2]
+            
+            print(f'[Calibration] Skill bar 1 dimensions: {bar1_w}x{bar1_h}')
+            print(f'[Calibration] Skill bar 2 dimensions: {bar2_w}x{bar2_h}')
+            
+            # Save loaded templates for debugging
+            self.save_debug_image(bar1, 'skill_bar_1_loaded')
+            self.save_debug_image(bar2, 'skill_bar_2_loaded')
+            
+            # Convert to grayscale for template matching
+            gray_screen = cv2.cvtColor(screen_img, cv2.COLOR_BGR2GRAY)
+            gray_bar1 = cv2.cvtColor(bar1, cv2.COLOR_BGR2GRAY)
+            gray_bar2 = cv2.cvtColor(bar2, cv2.COLOR_BGR2GRAY)
+            
+            # Perform template matching
+            result1 = cv2.matchTemplate(gray_screen, gray_bar1, cv2.TM_CCOEFF_NORMED)
+            result2 = cv2.matchTemplate(gray_screen, gray_bar2, cv2.TM_CCOEFF_NORMED)
+            
+            # Get best match locations
+            min_val1, max_val1, min_loc1, max_loc1 = cv2.minMaxLoc(result1)
+            min_val2, max_val2, min_loc2, max_loc2 = cv2.minMaxLoc(result2)
+            
+            print(f'[Calibration] Skill bar 1 match: {max_val1:.4f} at {max_loc1}')
+            print(f'[Calibration] Skill bar 2 match: {max_val2:.4f} at {max_loc2}')
+            
+            # Threshold for acceptable match
+            threshold = 0.65
+            
+            if max_val1 >= threshold and max_val2 >= threshold:
+                # Store positions and calculate spacing
+                self.skills_bar1_position = max_loc1
+                self.skills_bar2_position = max_loc2
+                self.skills_spacing = max_loc2[0] - max_loc1[0]
+                
+                # Create debug image showing found bars
+                debug_img = screen_img.copy()
+                cv2.rectangle(debug_img, max_loc1, 
+                             (max_loc1[0] + bar1_w, max_loc1[1] + bar1_h), (0, 255, 0), 2)
+                cv2.rectangle(debug_img, max_loc2, 
+                             (max_loc2[0] + bar2_w, max_loc2[1] + bar2_h), (0, 255, 0), 2)
+                self.save_debug_image(debug_img, 'skill_bars_found')
+                
+                # Calculate and save area image
+                x1 = min(max_loc1[0], max_loc2[0])
+                y1 = min(max_loc1[1], max_loc2[1])
+                x2 = max(max_loc1[0] + bar1_w, max_loc2[0] + bar2_w)
+                y2 = max(max_loc1[1] + bar1_h, max_loc2[1] + bar2_h)
+                
+                area_img = screen_img.copy()
+                cv2.rectangle(area_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                self.save_debug_image(area_img, 'skills_sequence_area')
+                
+                print(f'[Calibration] Skill bar 1 found at: {max_loc1}')
+                print(f'[Calibration] Skill bar 2 found at: {max_loc2}')
+                print(f'[Calibration] Spacing between bars: {self.skills_spacing} pixels')
+                
+                return (max_loc1, max_loc2)
+            else:
+                print('[Calibration] Skill bars not found with sufficient confidence')
+                print(f'[Calibration] Skill bar 1: {max_val1:.4f} (minimum threshold: {threshold})')
+                print(f'[Calibration] Skill bar 2: {max_val2:.4f} (minimum threshold: {threshold})')
+                
+                # Create debug image showing failed matches
+                debug_img = screen_img.copy()
+                cv2.rectangle(debug_img, max_loc1, 
+                             (max_loc1[0] + bar1_w, max_loc1[1] + bar1_h), (0, 0, 255), 2)
+                cv2.rectangle(debug_img, max_loc2, 
+                             (max_loc2[0] + bar2_w, max_loc2[1] + bar2_h), (0, 0, 255), 2)
+                self.save_debug_image(debug_img, 'skill_bars_not_found')
+                
+                return (None, None)
+                
+        except Exception as e:
+            print(f'[Calibration] Error finding skill bars: {e}')
+            import traceback
+            traceback.print_exc()
+            self.save_debug_image(screen_img, 'skill_bars_error')
+            return (None, None)
+    
     def calibrate(self, hwnd):
         """
         Perform calibration by capturing the window and finding bars
@@ -215,10 +340,21 @@ class Calibrator:
             result = self.find_bars(screen)
             
             if result:
+                # Find skill bars after HP/MP bars are found
+                skill_bars_result = self.find_skill_bars(screen)
+                if skill_bars_result[0] is not None and skill_bars_result[1] is not None:
+                    print('[Calibration] Skill bars found successfully!')
+                else:
+                    print('[Calibration] Warning: Skill bars not found, but HP/MP calibration succeeded')
+                
+                # Print detailed calibration summary
+                self.print_calibration_summary()
                 print('[Calibration] Calibration completed successfully!')
+                print(f'[Calibration] Debug images saved to: {self.debug_dir}')
                 return True
             else:
                 print('[Calibration] Calibration failed: Could not find HP/MP bars')
+                print(f'[Calibration] Check debug images in: {self.debug_dir}')
                 return False
                 
         except Exception as e:
@@ -226,6 +362,62 @@ class Calibrator:
             import traceback
             traceback.print_exc()
             return False
+    
+    def print_calibration_summary(self):
+        """Print a summary of what was calibrated"""
+        print('\n' + '='*60)
+        print('[Calibration] CALIBRATION SUMMARY')
+        print('='*60)
+        
+        if self.hp_position:
+            print(f'[Calibration] ✓ HP Bar: Position {self.hp_position}, Dimensions {self.hp_dimensions}')
+        else:
+            print('[Calibration] ✗ HP Bar: NOT FOUND')
+        
+        if self.mp_position:
+            print(f'[Calibration] ✓ MP Bar: Position {self.mp_position}, Dimensions {self.mp_dimensions}')
+        else:
+            print('[Calibration] ✗ MP Bar: NOT FOUND')
+        
+        if self.skills_bar1_position and self.skills_bar2_position:
+            print(f'[Calibration] ✓ Skill Bar 1: Position {self.skills_bar1_position}')
+            print(f'[Calibration] ✓ Skill Bar 2: Position {self.skills_bar2_position}')
+            print(f'[Calibration] ✓ Skill Bar Spacing: {self.skills_spacing} pixels')
+        else:
+            print('[Calibration] ✗ Skill Bars: NOT FOUND')
+        
+        print('='*60)
+        print('[Calibration] To verify calibration, check these debug images:')
+        print(f'[Calibration]   - calibrar_original.png (full screen capture)')
+        print(f'[Calibration]   - calibrar_contours.png (detected HP/MP contours)')
+        print(f'[Calibration]   - calibrar_hp_found.png (extracted HP bar)')
+        print(f'[Calibration]   - calibrar_mp_found.png (extracted MP bar)')
+        if self.skills_bar1_position:
+            print(f'[Calibration]   - calibrar_skill_bars_found.png (skill bars with green boxes)')
+            print(f'[Calibration]   - calibrar_skills_sequence_area.png (skill area)')
+        print('='*60 + '\n')
+    
+    def is_calibrated(self):
+        """
+        Check if calibration is complete
+        
+        Returns:
+            dict: Status of calibration with details
+        """
+        status = {
+            'hp_calibrated': self.hp_position is not None,
+            'mp_calibrated': self.mp_position is not None,
+            'skills_calibrated': (self.skills_bar1_position is not None and 
+                                 self.skills_bar2_position is not None),
+            'fully_calibrated': (self.hp_position is not None and 
+                               self.mp_position is not None),
+            'hp_position': self.hp_position,
+            'mp_position': self.mp_position,
+            'skills_bar1_position': self.skills_bar1_position,
+            'skills_bar2_position': self.skills_bar2_position,
+            'skills_spacing': self.skills_spacing
+        }
+        return status
     
     def get_hp_percentage(self, hwnd):
         """

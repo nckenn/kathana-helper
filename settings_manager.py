@@ -49,7 +49,19 @@ def save_settings():
             'system_message_area': config.system_message_area.copy(),
             'auto_change_target_enabled': config.auto_change_target_enabled,
             'unstuck_timeout': config.unstuck_timeout,
-            'selected_window': config.selected_window if config.selected_window else ""
+            'is_mage': config.is_mage,
+            'selected_window': config.selected_window if config.selected_window else "",
+            'buffs_config': {str(i): {
+                'enabled': config.buffs_config[i]['enabled'],
+                'image_path': config.buffs_config[i]['image_path'],
+                'key': config.buffs_config[i]['key']
+            } for i in range(8)},
+            'skill_sequence_config': {str(i): {
+                'enabled': config.skill_sequence_config[i]['enabled'],
+                'image_path': config.skill_sequence_config[i].get('image_path'),
+                'key': config.skill_sequence_config[i].get('key', ''),
+                'bypass': config.skill_sequence_config[i].get('bypass', False)
+            } for i in range(8)}
         }
         
         # Get current GUI values if available
@@ -86,6 +98,8 @@ def save_settings():
                     settings['auto_change_target_enabled'] = gui.auto_change_target_var.get()
                 if hasattr(gui, 'unstuck_timeout_var'):
                     settings['unstuck_timeout'] = float(gui.unstuck_timeout_var.get())
+                if hasattr(gui, 'is_mage_var'):
+                    settings['is_mage'] = gui.is_mage_var.get()
         except (ValueError, AttributeError, ImportError) as e:
             print(f"Warning: Could not save some GUI values: {e}")
         
@@ -197,8 +211,38 @@ def load_settings():
         if 'mouse_clicker_coords' in settings:
             config.mouse_clicker_coords.update(settings['mouse_clicker_coords'])
         
+        if 'is_mage' in settings:
+            config.is_mage = settings['is_mage']
+        
         if 'selected_window' in settings:
             config.selected_window = settings['selected_window']
+        
+        # Load buffs configuration
+        if 'buffs_config' in settings:
+            for idx_str, buff_data in settings['buffs_config'].items():
+                try:
+                    idx = int(idx_str)
+                    if 0 <= idx < 8:
+                        config.buffs_config[idx]['enabled'] = buff_data.get('enabled', False)
+                        config.buffs_config[idx]['image_path'] = buff_data.get('image_path', None)
+                        config.buffs_config[idx]['key'] = buff_data.get('key', '')
+                except (ValueError, KeyError):
+                    continue
+            print("Loaded buffs configuration")
+        
+        # Load skill sequence configuration
+        if 'skill_sequence_config' in settings:
+            for idx_str, skill_data in settings['skill_sequence_config'].items():
+                try:
+                    idx = int(idx_str)
+                    if 0 <= idx < 8:
+                        config.skill_sequence_config[idx]['enabled'] = skill_data.get('enabled', False)
+                        config.skill_sequence_config[idx]['image_path'] = skill_data.get('image_path', None)
+                        config.skill_sequence_config[idx]['key'] = skill_data.get('key', '')
+                        config.skill_sequence_config[idx]['bypass'] = skill_data.get('bypass', False)
+                except (ValueError, KeyError):
+                    continue
+            print("Loaded skill sequence configuration")
         
         print(f"Settings loaded from {config.SETTINGS_FILE}")
         return True

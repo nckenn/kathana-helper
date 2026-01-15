@@ -77,6 +77,107 @@ def smart_loot():
         # Note: is_looting flag will be cleared by check_enemy_for_auto_attack after LOOTING_DURATION
 
 
+def check_buffs():
+    """Check and activate buffs if needed"""
+    if not config.buffs_manager or not config.calibrator:
+        return
+    
+    # Check if any enabled buffs are configured (have image paths and are enabled)
+    buffs_configured = any(
+        config.buffs_config[i]['image_path'] and config.buffs_config[i]['enabled'] 
+        for i in range(8)
+    )
+    if not buffs_configured:
+        return
+    
+    # Check if skill bars are calibrated
+    if (not config.calibrator.skills_bar1_position or 
+        not config.calibrator.skills_bar2_position):
+        return
+    
+    try:
+        import cv2
+        import os
+        
+        # Get window handle
+        if hasattr(config.connected_window, 'handle'):
+            hwnd = config.connected_window.handle
+        else:
+            hwnd = config.connected_window
+        
+        # Capture screen
+        screen = config.calibrator.capture_window(hwnd)
+        if screen is not None:
+            # Extract area_skills from stored coordinates
+            x_min, y_min, x_max, y_max = config.area_skills
+            
+            # Ensure coordinates are within screen bounds
+            h, w = screen.shape[:2]
+            if (x_min >= 0 and y_min >= 0 and x_max <= w and y_max <= h):
+                area_skills = screen[y_min:y_max, x_min:x_max]
+                
+                # Calculate area_buffs_activos (40 pixels above skills area)
+                buff_height_start = max(0, y_min - 40)
+                buff_height_end = y_min
+                buff_width_start = x_min
+                buff_width_end = x_max
+                
+                if (buff_height_start >= 0 and buff_height_end <= h and
+                    buff_width_start >= 0 and buff_width_end <= w and
+                    buff_height_start < buff_height_end):
+                    area_buffs_activos = screen[buff_height_start:buff_height_end, buff_width_start:buff_width_end]
+                    
+                    # Call buffs manager update
+                    config.buffs_manager.update_and_activate_buffs(
+                        hwnd, screen, area_skills, area_buffs_activos, 
+                        x_min, y_min, run_active=config.bot_running
+                    )
+    except Exception as e:
+        print(f"[Buffs] Error checking buffs: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+def check_skill_sequence():
+    """Check and execute skill sequence if needed"""
+    if not config.skill_sequence_manager or not config.calibrator:
+        return
+    
+    # Check if any enabled skills are configured (have image paths and are enabled)
+    skills_configured = any(
+        config.skill_sequence_config[i].get('image_path') and config.skill_sequence_config[i]['enabled'] 
+        for i in range(8)
+    )
+    if not skills_configured:
+        return
+    
+    # Check if skill bars are calibrated
+    if not config.area_skills:
+        return
+    
+    try:
+        import cv2
+        import os
+        
+        # Get window handle
+        if hasattr(config.connected_window, 'handle'):
+            hwnd = config.connected_window.handle
+        else:
+            hwnd = config.connected_window
+        
+        # Capture screen
+        screen = config.calibrator.capture_window(hwnd)
+        if screen is not None:
+            # Call skill sequence manager to execute sequence
+            config.skill_sequence_manager.execute_skill_sequence(
+                hwnd, screen, config.area_skills, run_active=config.bot_running
+            )
+    except Exception as e:
+        print(f"[SkillSequence] Error checking skill sequence: {e}")
+        import traceback
+        traceback.print_exc()
+
+
 def check_mouse_clicker():
     """Check and trigger mouse clicker based on interval (anti-stuck)"""
     if not config.mouse_clicker_enabled:
@@ -125,6 +226,10 @@ def reset_bot_state():
     config.mp_readings.clear()
     config.enemy_hp_readings.clear()
     
+    # Reset skill sequence state
+    if config.skill_sequence_manager:
+        config.skill_sequence_manager.reset_sequence()
+    
     # Set flag to force initial auto-target on bot start (if auto attack enabled)
     config.force_initial_target = config.auto_attack_enabled
     
@@ -154,7 +259,10 @@ def bot_loop():
                     config.force_initial_target = False
                     print("[Bot Start] Forced initial auto-targeting")
                 
+                # High priority: Auto pots and buffs (buffs should be checked early for combat effectiveness)
                 autopots.check_auto_pots()
+                check_buffs()  # High priority - check buffs early
+                # Skill sequence is now executed inside check_auto_attack when enemy is found
                 auto_attack.check_auto_attack()
                 auto_unstuck.check_auto_unstuck()
                 check_skill_slots()

@@ -29,9 +29,27 @@ def get_virtual_key_code(key):
     return key_mappings.get(key.lower(), ord(key.upper()) if len(key) == 1 else 0)
 
 
-def send_silent_key(hwnd, vk_code):
-    """Send a key press directly to a window handle without interfering with chat"""
+def send_silent_key(hwnd, vk_code, use_scan_code=False):
+    """Send a key press directly to a window handle without interfering with chat
+    Supports scan codes for function keys (F1-F12) for better compatibility"""
     try:
+        # Handle function keys with scan codes if requested
+        if use_scan_code and vk_code >= 0x70 and vk_code <= 0x7B:  # F1-F12
+            try:
+                from ctypes import windll
+                user32 = windll.user32
+                scan_code = user32.MapVirtualKeyW(vk_code, 0)
+                lparam_down = 1 | scan_code << 16
+                lparam_up = 3221225473 | scan_code << 16
+                # Use PostMessage for function keys (asynchronous, better for some games)
+                win32api.PostMessage(hwnd, win32con.WM_KEYDOWN, vk_code, lparam_down)
+                sleep(0.08)
+                win32api.PostMessage(hwnd, win32con.WM_KEYUP, vk_code, lparam_up)
+                return True
+            except Exception as e:
+                print(f"Error using scan code, falling back to simple method: {e}")
+        
+        # Standard method for regular keys (use SendMessage for synchronous behavior)
         win32api.SendMessage(hwnd, win32con.WM_KEYDOWN, vk_code, 0)
         sleep(0.01)
         win32api.SendMessage(hwnd, win32con.WM_KEYUP, vk_code, 0)
@@ -42,15 +60,19 @@ def send_silent_key(hwnd, vk_code):
 
 
 def send_input(key):
-    """Send input silently to connected window without interfering with chat"""
+    """Send input silently to connected window without interfering with chat
+    Supports function keys (F1-F12) with scan codes for better compatibility"""
     try:
         if config.connected_window:
             try:
                 hwnd = config.connected_window.handle
                 vk_code = get_virtual_key_code(key)
                 
-                if vk_code and send_silent_key(hwnd, vk_code):
-                    return
+                if vk_code:
+                    # Use scan codes for function keys (F1-F12)
+                    use_scan_code = (vk_code >= 0x70 and vk_code <= 0x7B)
+                    if send_silent_key(hwnd, vk_code, use_scan_code=use_scan_code):
+                        return
             except Exception as e:
                 print(f"Silent input failed, falling back to regular input: {e}")
             

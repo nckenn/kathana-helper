@@ -765,6 +765,14 @@ class RetargetManager:
         target_key = config.action_slots['target']['key']
         input_handler.send_input(target_key)
         
+        # Trigger attack action after target action (sequence: target -> attack)
+        # Skip attack if mage mode is enabled
+        if config.action_slots['attack']['enabled'] and not config.is_mage:
+            attack_key = config.action_slots['attack']['key']
+            # Small delay to ensure target action completes before attack
+            time.sleep(0.1)
+            input_handler.send_input(attack_key)
+        
         # Minimal delay to ensure mob name appears after targeting (optimized for speed)
         delay = (RETARGET_DELAY_RECURSIVE if recursion_depth > 0 
                  else RETARGET_DELAY_INITIAL)
@@ -912,11 +920,21 @@ def check_auto_attack():
                 EnemyStateManager.reset_enemy_state()
                 _auto_target_manager.reset_search_timer()
                 
+                # Reset skill sequence when enemy is lost
+                if config.skill_sequence_manager:
+                    config.skill_sequence_manager.reset_sequence()
+                
                 if not config.is_looting:
                     _auto_target_manager.try_auto_target("enemy killed")
                 return
             
             EnemyStateManager.reset_enemy_state()
+            
+            # Reset skill sequence when no enemy found
+            if config.skill_sequence_manager:
+                config.skill_sequence_manager.enemy_found_previous = False
+                config.skill_sequence_manager.skill_sequence_index = 0
+                config.skill_sequence_manager.skill_waiting_activation = False
             
             # Try auto-targeting if not looting and interval has passed
             if not config.is_looting:
@@ -935,6 +953,9 @@ def check_auto_attack():
                     bot_logic.smart_loot()
                     _auto_target_manager.reset_search_timer()
                     _auto_target_manager.try_auto_target("enemy died")
+                    # Reset skill sequence when enemy dies
+                    if config.skill_sequence_manager:
+                        config.skill_sequence_manager.reset_sequence()
                     return
                 
                 # Update HP readings with smoothing
@@ -946,6 +967,17 @@ def check_auto_attack():
                 EnemyHpProcessor.update_stagnant_tracking(
                     current_time, enemy_hp_percentage
                 )
+                
+                # Execute skill sequence when enemy is found
+                if config.skill_sequence_manager and config.area_skills:
+                    try:
+                        screen = config.calibrator.capture_window(hwnd)
+                        if screen is not None:
+                            config.skill_sequence_manager.execute_skill_sequence(
+                                hwnd, screen, config.area_skills, enemy_found=True, run_active=config.bot_running
+                            )
+                    except Exception as e:
+                        print(f"[AutoAttack] Error executing skill sequence: {e}")
                 
                 # Periodic mob verification during combat
                 if (config.mob_detection_enabled and config.mob_target_list and 
@@ -964,6 +996,9 @@ def check_auto_attack():
                                     f"combat: {detected_mob} - retargeting"
                                 )
                                 EnemyStateManager.reset_enemy_state()
+                                # Reset skill sequence when changing target
+                                if config.skill_sequence_manager:
+                                    config.skill_sequence_manager.reset_sequence()
                                 # Minimal delay before retargeting (optimized for speed)
                                 if MOB_VERIFICATION_DELAY > 0:
                                     time.sleep(MOB_VERIFICATION_DELAY)
@@ -988,6 +1023,9 @@ def check_auto_attack():
                         EnemyStateManager.reset_enemy_state()
                         _auto_target_manager.reset_search_timer()
                         _auto_target_manager.try_auto_target("enemy died")
+                        # Reset skill sequence when enemy dies
+                        if config.skill_sequence_manager:
+                            config.skill_sequence_manager.reset_sequence()
                         return
             else:
                 # First reading - no smoothing
@@ -1004,6 +1042,10 @@ def check_auto_attack():
                         current_time, enemy_hp_percentage
                     )
                     
+                    # Reset skill sequence for new enemy
+                    if config.skill_sequence_manager:
+                        config.skill_sequence_manager.reset_sequence()
+                    
                     # Verify mob detection after targeting
                     if config.mob_detection_enabled:
                         detected_mob = result.get('name')
@@ -1018,6 +1060,9 @@ def check_auto_attack():
                                     f"targeting: {detected_mob} - retargeting"
                                 )
                                 EnemyStateManager.reset_enemy_state()
+                                # Reset skill sequence when retargeting
+                                if config.skill_sequence_manager:
+                                    config.skill_sequence_manager.reset_sequence()
                                 # Minimal delay before retargeting (optimized for speed)
                                 if MOB_VERIFICATION_DELAY > 0:
                                     time.sleep(MOB_VERIFICATION_DELAY)

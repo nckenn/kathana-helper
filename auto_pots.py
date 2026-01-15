@@ -1,6 +1,6 @@
 """
 Auto-pots module for automatically using potions when HP/MP is low
-Based on the decompiled Autopots.py functionality
+Auto-pots functionality for automatic potion usage
 """
 import time
 import random
