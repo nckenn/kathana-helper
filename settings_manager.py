@@ -3,7 +3,46 @@ Settings management - save and load bot configuration
 """
 import json
 import os
+import sys
 import config
+
+
+def convert_to_relative_path(absolute_path):
+    """Convert an absolute path to relative path for saving in configuration"""
+    if not absolute_path:
+        return None
+    
+    # If already relative, return as-is
+    if not os.path.isabs(absolute_path):
+        return os.path.normpath(absolute_path)
+    
+    try:
+        # Determine base path
+        if getattr(sys, 'frozen', False):
+            base_path = sys._MEIPASS
+        else:
+            base_path = os.path.dirname(os.path.abspath(__file__))
+        
+        # Normalize paths
+        absolute_path = os.path.normpath(absolute_path)
+        base_path = os.path.normpath(base_path)
+        
+        # Try to extract relative path
+        try:
+            relative_path = os.path.relpath(absolute_path, base_path)
+            return os.path.normpath(relative_path)
+        except ValueError:
+            # Paths on different drives (Windows) - try to extract 'jobs' folder part
+            path_parts = absolute_path.split(os.sep)
+            if 'jobs' in path_parts:
+                jobs_idx = path_parts.index('jobs')
+                relative_parts = path_parts[jobs_idx:]
+                return os.path.join(*relative_parts)
+            # Can't convert, return None (shouldn't happen in normal usage)
+            return None
+    except Exception as e:
+        print(f"Warning: Could not convert path {absolute_path} to relative: {e}")
+        return None
 
 
 def save_settings():
@@ -53,14 +92,13 @@ def save_settings():
             'selected_window': config.selected_window if config.selected_window else "",
             'buffs_config': {str(i): {
                 'enabled': config.buffs_config[i]['enabled'],
-                'image_path': config.buffs_config[i]['image_path'],
+                'image_path': convert_to_relative_path(config.buffs_config[i].get('image_path')),  # Convert to relative
                 'key': config.buffs_config[i]['key']
             } for i in range(8)},
             'skill_sequence_config': {str(i): {
                 'enabled': config.skill_sequence_config[i]['enabled'],
-                'image_path': config.skill_sequence_config[i].get('image_path'),
-                'key': config.skill_sequence_config[i].get('key', ''),
-                'bypass': config.skill_sequence_config[i].get('bypass', False)
+                'image_path': convert_to_relative_path(config.skill_sequence_config[i].get('image_path')),  # Convert to relative
+                'key': config.skill_sequence_config[i].get('key', '')
             } for i in range(8)}
         }
         
@@ -224,7 +262,11 @@ def load_settings():
                     idx = int(idx_str)
                     if 0 <= idx < 8:
                         config.buffs_config[idx]['enabled'] = buff_data.get('enabled', False)
-                        config.buffs_config[idx]['image_path'] = buff_data.get('image_path', None)
+                        # Convert absolute paths to relative when loading
+                        image_path = buff_data.get('image_path', None)
+                        if image_path and os.path.isabs(image_path):
+                            image_path = convert_to_relative_path(image_path)
+                        config.buffs_config[idx]['image_path'] = image_path
                         config.buffs_config[idx]['key'] = buff_data.get('key', '')
                 except (ValueError, KeyError):
                     continue
@@ -237,9 +279,12 @@ def load_settings():
                     idx = int(idx_str)
                     if 0 <= idx < 8:
                         config.skill_sequence_config[idx]['enabled'] = skill_data.get('enabled', False)
-                        config.skill_sequence_config[idx]['image_path'] = skill_data.get('image_path', None)
+                        # Convert absolute paths to relative when loading
+                        image_path = skill_data.get('image_path', None)
+                        if image_path and os.path.isabs(image_path):
+                            image_path = convert_to_relative_path(image_path)
+                        config.skill_sequence_config[idx]['image_path'] = image_path
                         config.skill_sequence_config[idx]['key'] = skill_data.get('key', '')
-                        config.skill_sequence_config[idx]['bypass'] = skill_data.get('bypass', False)
                 except (ValueError, KeyError):
                     continue
             print("Loaded skill sequence configuration")

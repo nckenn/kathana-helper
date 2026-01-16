@@ -88,9 +88,9 @@ The executable will be created in the `dist` folder.
   - Enable/disable individual skills
   - Select skill images from Jobs folder
   - Register keyboard keys for each skill
-  - Bypass option to skip skills not found
   - Automatically resets when enemy dies or changes target
   - Executes skills in sequence when enemy is found
+  - Advances to next skill when current skill disappears
 
 - **Calibration**: Automatic detection of HP/MP bars and skill areas
 - **Mob Filtering**: Target only specific mobs from a configurable list

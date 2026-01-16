@@ -233,22 +233,21 @@ class BotGUI:
                         self.buffs_vars[i].set(config.buffs_config[i]['enabled'])
                         # Update key
                         self.buffs_keys[i].set(config.buffs_config[i]['key'])
-                        # Load image if exists - convert relative paths to absolute
+                        # Load image if exists - resolve relative path
                         if config.buffs_config[i]['image_path']:
                             image_path = self.convert_to_absolute_path(config.buffs_config[i]['image_path'])
                             if image_path and os.path.exists(image_path):
-                                # Update config with absolute path
-                                config.buffs_config[i]['image_path'] = image_path
-                                self.buffs_state[i]['image_path'] = image_path
+                                # Keep relative path in config, use absolute for loading
+                                self.buffs_state[i]['image_path'] = config.buffs_config[i]['image_path']
                                 # Load and display the image
                                 self.load_buff_image(i, image_path)
-                                # Sync with buffs manager
+                                # Sync with buffs manager (use relative path)
                                 if config.buffs_manager:
                                     if config.buffs_config[i]['enabled']:
-                                        config.buffs_manager.set_buff(i, image_path)
+                                        config.buffs_manager.set_buff(i, config.buffs_config[i]['image_path'])
                                     else:
                                         config.buffs_manager.clear_buff(i)
-                                print(f"  Applied buff {i+1}: enabled={config.buffs_config[i]['enabled']}, key={config.buffs_config[i]['key']}, path={image_path}")
+                                print(f"  Applied buff {i+1}: enabled={config.buffs_config[i]['enabled']}, key={config.buffs_config[i]['key']}, path={config.buffs_config[i]['image_path']}")
                             else:
                                 print(f"  Buff {i+1} image path not found: {config.buffs_config[i]['image_path']}")
                                 self.clear_buff_skill(i)
@@ -268,26 +267,23 @@ class BotGUI:
                     try:
                         # Update enabled state
                         self.skill_sequence_vars[i].set(config.skill_sequence_config[i]['enabled'])
-                        # Update bypass state
-                        self.skill_sequence_bypass_vars[i].set(config.skill_sequence_config[i].get('bypass', False))
                         # Update key
                         self.skill_sequence_keys[i].set(config.skill_sequence_config[i].get('key', ''))
-                        # Load image if exists - convert relative paths to absolute
+                        # Load image if exists - resolve relative path
                         if config.skill_sequence_config[i].get('image_path'):
                             image_path = self.convert_to_absolute_path(config.skill_sequence_config[i]['image_path'])
                             if image_path and os.path.exists(image_path):
-                                # Update config with absolute path
-                                config.skill_sequence_config[i]['image_path'] = image_path
-                                self.skill_sequence_state[i]['image_path'] = image_path
+                                # Keep relative path in config, use absolute for loading
+                                self.skill_sequence_state[i]['image_path'] = config.skill_sequence_config[i]['image_path']
                                 # Load and display the image
                                 self.load_skill_sequence_image(i, image_path)
-                                # Sync with skill sequence manager
+                                # Sync with skill sequence manager (use relative path)
                                 if config.skill_sequence_manager:
                                     if config.skill_sequence_config[i]['enabled']:
-                                        config.skill_sequence_manager.set_skill(i, image_path)
+                                        config.skill_sequence_manager.set_skill(i, config.skill_sequence_config[i]['image_path'])
                                     else:
                                         config.skill_sequence_manager.clear_skill(i)
-                                print(f"  Applied skill sequence {i+1}: enabled={config.skill_sequence_config[i]['enabled']}, key={config.skill_sequence_config[i].get('key', '')}, bypass={config.skill_sequence_config[i].get('bypass', False)}, path={image_path}")
+                                print(f"  Applied skill sequence {i+1}: enabled={config.skill_sequence_config[i]['enabled']}, key={config.skill_sequence_config[i].get('key', '')}, path={config.skill_sequence_config[i]['image_path']}")
                             else:
                                 print(f"  Skill Sequence {i+1} image path not found: {config.skill_sequence_config[i]['image_path']}")
                                 self.clear_skill_sequence_skill(i)
@@ -338,6 +334,9 @@ class BotGUI:
         self.is_minimized = False
         self.minimized_window = None
         self.saved_window_position = None  # Store window position when minimizing
+        
+        # Track last active tab in skill selector
+        self.last_skill_selector_tab = None
         
         # Check OCR availability on startup
         self.check_ocr_on_startup()
@@ -438,7 +437,7 @@ class BotGUI:
         status_tab = tabview.add("Status")
         settings_tab = tabview.add("Settings")
         skill_sequence_tab = tabview.add("Skill Sequence")
-        skills_tab = tabview.add("Skill Slots")
+        skills_tab = tabview.add("Skill Interval")
         buffs_tab = tabview.add("Buffs")
         calibration_tab = tabview.add("Calibration")
         mouse_clicker_tab = tabview.add("Mouse Clicker")
@@ -720,7 +719,6 @@ class BotGUI:
         self.skill_sequence_vars = {}
         self.skill_sequence_keys = []
         self.skill_sequence_canvases = []
-        self.skill_sequence_bypass_vars = {}
         self.skill_sequence_state = []
         
         # Title label
@@ -728,10 +726,16 @@ class BotGUI:
                                            font=ctk.CTkFont(size=14, weight="bold"))
         skill_sequence_title.grid(row=0, column=0, columnspan=4, sticky="w", padx=15, pady=(15, 10))
         
-        # Create skill sequence slots in a grid (4 rows x 2 columns)
+        # Create skill sequence slots in a grid (first column: 1-4, second column: 5-8)
         for i in range(8):
-            row = (i // 2) + 1
-            col = (i % 2) * 2
+            if i < 4:
+                # First column: slots 1-4
+                row = i + 1
+                col = 0
+            else:
+                # Second column: slots 5-8
+                row = i - 3  # i=4->row=1, i=5->row=2, i=6->row=3, i=7->row=4
+                col = 2
             
             # Create frame for each skill sequence slot
             skill_slot_frame = ctk.CTkFrame(skill_sequence_frame, corner_radius=8)
@@ -747,14 +751,6 @@ class BotGUI:
                                       command=lambda idx=i: self.update_skill_sequence_enabled(idx),
                                       font=ctk.CTkFont(size=11))
             checkbox.grid(row=0, column=0, padx=10, pady=5, sticky="w")
-            
-            # Bypass checkbox
-            self.skill_sequence_bypass_vars[i] = tk.BooleanVar(value=config.skill_sequence_config[i].get('bypass', False))
-            bypass_checkbox = ctk.CTkCheckBox(skill_slot_frame, text="Bypass", 
-                                             variable=self.skill_sequence_bypass_vars[i],
-                                             command=lambda idx=i: self.update_skill_sequence_bypass(idx),
-                                             font=ctk.CTkFont(size=10))
-            bypass_checkbox.grid(row=0, column=1, padx=5, pady=5, sticky="w")
             
             # Skill image canvas (clickable to select skill)
             canvas_frame = ctk.CTkFrame(skill_slot_frame, fg_color="transparent")
@@ -795,9 +791,7 @@ class BotGUI:
             if config.skill_sequence_config[i].get('image_path'):
                 image_path = self.convert_to_absolute_path(config.skill_sequence_config[i]['image_path'])
                 if image_path and os.path.exists(image_path):
-                    # Update config with absolute path
-                    config.skill_sequence_config[i]['image_path'] = image_path
-                    self.skill_sequence_state[i]['image_path'] = image_path
+                    # load_skill_sequence_image will convert to relative and store in config
                     self.load_skill_sequence_image(i, image_path)
                 else:
                     print(f"Skill Sequence {i+1} image path not found: {config.skill_sequence_config[i]['image_path']}")
@@ -813,7 +807,7 @@ class BotGUI:
         config.skill_sequence_manager = skill_sequence_manager.SkillSequenceManager(num_skills=8)
         config.skill_sequence_manager.set_ui_reference(self)
         
-        # Skill slots frame - moved to Skill Slots tab
+        # Skill slots frame - moved to Skill Interval tab
         skill_frame = skills_tab
         
         # Create skill slot controls in a grid
@@ -909,10 +903,16 @@ class BotGUI:
                                    font=ctk.CTkFont(size=14, weight="bold"))
         buffs_title.grid(row=0, column=0, columnspan=4, sticky="w", padx=15, pady=(15, 10))
         
-        # Create buff slots in a grid (4 rows x 2 columns)
+        # Create buff slots in a grid (first column: 1-4, second column: 5-8)
         for i in range(8):
-            row = (i // 2) + 1
-            col = (i % 2) * 2
+            if i < 4:
+                # First column: slots 1-4
+                row = i + 1
+                col = 0
+            else:
+                # Second column: slots 5-8
+                row = i - 3  # i=4->row=1, i=5->row=2, i=6->row=3, i=7->row=4
+                col = 2
             
             # Create frame for each buff slot
             buff_slot_frame = ctk.CTkFrame(buffs_frame, corner_radius=8)
@@ -968,9 +968,7 @@ class BotGUI:
             if config.buffs_config[i]['image_path']:
                 image_path = self.convert_to_absolute_path(config.buffs_config[i]['image_path'])
                 if image_path and os.path.exists(image_path):
-                    # Update config with absolute path
-                    config.buffs_config[i]['image_path'] = image_path
-                    self.buffs_state[i]['image_path'] = image_path
+                    # load_buff_image will convert to relative and store in config
                     self.load_buff_image(i, image_path)
                 else:
                     print(f"Buff {i+1} image path not found: {config.buffs_config[i]['image_path']}")
@@ -1389,7 +1387,7 @@ class BotGUI:
         print(f"Buff {idx + 1} {status}")
     
     def load_buff_image(self, idx, image_path):
-        """Load and display buff image"""
+        """Load and display buff image (image_path should be absolute for loading)"""
         try:
             from PIL import Image, ImageTk
             pil_image = Image.open(image_path)
@@ -1399,13 +1397,17 @@ class BotGUI:
             canvas.delete('all')
             canvas.create_image(24, 24, image=image)
             canvas.image = image
-            canvas.image_path = image_path
-            self.buffs_state[idx]['image_path'] = image_path
-            config.buffs_config[idx]['image_path'] = image_path
-            # Sync with buffs_manager
+            canvas.image_path = image_path  # Store absolute for display
+            
+            # Convert to relative path for storage in config
+            relative_path = self.convert_to_relative_path(image_path)
+            self.buffs_state[idx]['image_path'] = relative_path
+            config.buffs_config[idx]['image_path'] = relative_path
+            
+            # Sync with buffs_manager (use relative path)
             if config.buffs_manager:
-                config.buffs_manager.set_buff(idx, image_path)
-                print(f"[Buffs] Buff {idx + 1} synced with buffs_manager: {image_path}")
+                config.buffs_manager.set_buff(idx, relative_path)
+                print(f"[Buffs] Buff {idx + 1} synced with buffs_manager: {relative_path}")
         except Exception as e:
             print(f"Error loading buff image: {e}")
             import traceback
@@ -1432,9 +1434,27 @@ class BotGUI:
             # Create popup window
             popup = ctk.CTkToplevel(self.root)
             popup.title(title)
-            popup.geometry("550x450")
             popup.transient(self.root)
             popup.grab_set()
+            
+            # Position popup relative to main window's current position
+            self.root.update_idletasks()  # Ensure root window position is updated
+            root_x = self.root.winfo_x()
+            root_y = self.root.winfo_y()
+            root_width = self.root.winfo_width()
+            root_height = self.root.winfo_height()
+            
+            # Calculate center position relative to main window
+            popup_width = 550
+            popup_height = 450
+            popup_x = root_x + (root_width // 2) - (popup_width // 2)
+            popup_y = root_y + (root_height // 2) - (popup_height // 2)
+            
+            # Ensure popup stays on screen
+            popup_x = max(0, popup_x)
+            popup_y = max(0, popup_y)
+            
+            popup.geometry(f"{popup_width}x{popup_height}+{popup_x}+{popup_y}")
             
             # Jobs folder path
             jobs_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'jobs')
@@ -1447,7 +1467,11 @@ class BotGUI:
             # Get all job folders
             job_folders = [f for f in os.listdir(jobs_folder) 
                           if os.path.isdir(os.path.join(jobs_folder, f)) and not f.startswith('.')]
-            job_folders.sort()
+            # Natural sort (handles numbers correctly: Item 1, Item 2, Item 10 instead of Item 1, Item 10, Item 2)
+            import re
+            def natural_sort_key(text):
+                return [int(c) if c.isdigit() else c.lower() for c in re.split(r'(\d+)', text)]
+            job_folders.sort(key=natural_sort_key)
             
             if not job_folders:
                 messagebox.showinfo("No Jobs", "No job folders found in Jobs directory")
@@ -1462,6 +1486,9 @@ class BotGUI:
             tabview = ctk.CTkTabview(main_container, corner_radius=8)
             tabview.pack(fill="both", expand=True, pady=(0, 10))
             
+            # Track tab names for later selection
+            tab_names = []
+            
             # Create a tab for each job
             for job_name in job_folders:
                 job_path = os.path.join(jobs_folder, job_name)
@@ -1473,6 +1500,7 @@ class BotGUI:
                 
                 # Create tab for this job
                 job_tab = tabview.add(job_name)
+                tab_names.append(job_name)
                 
                 # Create scrollable frame for skills in this job tab
                 scroll_frame = ctk.CTkScrollableFrame(job_tab)
@@ -1482,7 +1510,9 @@ class BotGUI:
                 row = 0
                 col = 0
                 
-                for img_file in sorted(images):
+                # Natural sort images (handles numbers correctly)
+                images_sorted = sorted(images, key=natural_sort_key)
+                for img_file in images_sorted:
                     try:
                         img_path = os.path.join(job_path, img_file)
                         pil_image = Image.open(img_path)
@@ -1504,10 +1534,18 @@ class BotGUI:
                         img_button.image = image
                         img_button.image_path = img_path
                         
-                        # Bind click event
-                        img_button.bind('<Button-1>', 
-                                       lambda e, path=img_path, p=popup, arg=callback_arg: 
-                                       callback_func(arg, path, p))
+                        # Bind click event - track tab before calling callback
+                        def on_skill_click(e, path=img_path, p=popup, arg=callback_arg):
+                            # Track current tab before closing
+                            try:
+                                current_tab = tabview.get()
+                                if current_tab:
+                                    self.last_skill_selector_tab = current_tab
+                            except:
+                                pass
+                            callback_func(arg, path, p)
+                        
+                        img_button.bind('<Button-1>', on_skill_click)
                         
                         # Hover effect
                         def on_enter(e, frame=skill_frame):
@@ -1531,9 +1569,63 @@ class BotGUI:
                 for i in range(6):
                     scroll_frame.grid_columnconfigure(i, weight=0)
             
-            # Close button
+            # Track tab changes to remember last active tab
+            def track_tab_change():
+                try:
+                    current_tab = tabview.get()
+                    if current_tab:
+                        self.last_skill_selector_tab = current_tab
+                except:
+                    pass
+            
+            # Override tab selection to track changes
+            original_set = tabview.set
+            def tracked_set(tab_name):
+                original_set(tab_name)
+                self.last_skill_selector_tab = tab_name
+            
+            tabview.set = tracked_set
+            
+            # Set the last active tab if it exists (after window is ready)
+            def restore_last_tab():
+                if self.last_skill_selector_tab and self.last_skill_selector_tab in tab_names:
+                    try:
+                        # Use the tracked_set function to properly set the tab
+                        tracked_set(self.last_skill_selector_tab)
+                    except Exception as e:
+                        print(f"Error restoring tab {self.last_skill_selector_tab}: {e}")
+                        pass  # Tab might not exist, use default
+            
+            # Update window to ensure tabview is ready, then restore tab
+            popup.update_idletasks()
+            # Use after() to ensure tabview is fully initialized before setting tab
+            popup.after(50, restore_last_tab)
+            
+            # Also track when popup is destroyed to save current tab
+            def on_popup_destroy():
+                try:
+                    current_tab = tabview.get()
+                    if current_tab:
+                        self.last_skill_selector_tab = current_tab
+                except:
+                    pass
+                popup.destroy()
+            
+            # Override popup destroy to track tab before closing
+            popup.protocol("WM_DELETE_WINDOW", on_popup_destroy)
+            
+            # Close button - track tab before closing
+            def close_and_track():
+                try:
+                    current_tab = tabview.get()
+                    if current_tab:
+                        self.last_skill_selector_tab = current_tab
+                except:
+                    pass
+                popup.destroy()
+            
             close_button = ctk.CTkButton(main_container, text="Close", 
-                                        command=popup.destroy, width=100)
+                                        command=close_and_track, width=100)
             close_button.pack(pady=10)
             
         except Exception as e:
@@ -1627,7 +1719,7 @@ class BotGUI:
         print(f"Skill Sequence {skill_index + 1} skill selected: {image_path}")
     
     def load_skill_sequence_image(self, idx, image_path):
-        """Load and display skill sequence image"""
+        """Load and display skill sequence image (image_path should be absolute for loading)"""
         try:
             from PIL import Image, ImageTk
             pil_image = Image.open(image_path)
@@ -1637,13 +1729,17 @@ class BotGUI:
             canvas.delete('all')
             canvas.create_image(24, 24, image=image)
             canvas.image = image
-            canvas.image_path = image_path
-            self.skill_sequence_state[idx]['image_path'] = image_path
-            config.skill_sequence_config[idx]['image_path'] = image_path
-            # Sync with skill sequence manager
+            canvas.image_path = image_path  # Store absolute for display
+            
+            # Convert to relative path for storage in config
+            relative_path = self.convert_to_relative_path(image_path)
+            self.skill_sequence_state[idx]['image_path'] = relative_path
+            config.skill_sequence_config[idx]['image_path'] = relative_path
+            
+            # Sync with skill sequence manager (use relative path)
             if config.skill_sequence_manager:
-                config.skill_sequence_manager.set_skill(idx, image_path)
-                print(f"[SkillSequence] Skill {idx + 1} synced with skill_sequence_manager: {image_path}")
+                config.skill_sequence_manager.set_skill(idx, relative_path)
+                print(f"[SkillSequence] Skill {idx + 1} synced with skill_sequence_manager: {relative_path}")
         except Exception as e:
             print(f"Error loading skill sequence image: {e}")
             import traceback
@@ -1672,11 +1768,6 @@ class BotGUI:
                 config.skill_sequence_manager.clear_skill(idx)
         status = "enabled" if config.skill_sequence_config[idx]['enabled'] else "disabled"
         print(f"Skill Sequence {idx + 1} {status}")
-    
-    def update_skill_sequence_bypass(self, idx):
-        """Update skill sequence bypass status"""
-        config.skill_sequence_config[idx]['bypass'] = self.skill_sequence_bypass_vars[idx].get()
-        print(f"Skill Sequence {idx + 1} bypass: {config.skill_sequence_config[idx]['bypass']}")
     
     def register_skill_sequence_key(self, idx):
         """Register a key for skill sequence by capturing keyboard input"""
@@ -1754,21 +1845,14 @@ class BotGUI:
         """Convert a relative path to absolute path for loading from configuration"""
         if not relative_path:
             return None
-        try:
-            if getattr(sys, 'frozen', False):
-                # Running as compiled executable
-                base_path = sys._MEIPASS
-            else:
-                # Running as script
-                base_path = os.path.dirname(os.path.abspath(__file__))
-            absolute_path = os.path.join(base_path, relative_path)
-            # Normalize the path
-            absolute_path = os.path.normpath(absolute_path)
-            return absolute_path
-        except Exception as e:
-            # If conversion fails, return the original path (might already be absolute)
-            print(f"Warning: Could not convert path {relative_path} to absolute: {e}")
-            return relative_path
+        
+        # Use the config helper function to resolve relative paths
+        return config.resolve_resource_path(relative_path)
+    
+    def convert_to_relative_path(self, absolute_path):
+        """Convert an absolute path to relative path for saving in configuration"""
+        # Use the settings_manager function
+        return settings_manager.convert_to_relative_path(absolute_path)
     
     def update_action_slot(self, action_key):
         """Update action slot enabled status"""

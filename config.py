@@ -101,10 +101,10 @@ last_enemy_hp_capture_time = 0
 last_auto_target_time = 0
 enemy_target_time = 0
 last_smart_loot_time = 0
-SMART_LOOT_COOLDOWN = 0.5  # Reduced cooldown to allow more frequent looting attempts
+SMART_LOOT_COOLDOWN = 0.2  # Cooldown between loot attempts (reduced for faster looting, allows retry if first fails)
 is_looting = False  # Flag to prevent auto-targeting during looting
 looting_start_time = 0
-LOOTING_DURATION = 1.5  # Duration to prevent auto-targeting after looting starts
+LOOTING_DURATION = 2.0  # Duration to prevent auto-targeting after looting starts (increased to allow loot to complete)
 unstuck_timeout = 8.0
 last_damage_detected_time = 0
 last_damage_value = None
@@ -167,8 +167,7 @@ skill_sequence_config = {
     i: {
         'enabled': False,
         'image_path': None,
-        'key': '',
-        'bypass': False  # If True, skip to next skill if current skill not found
+        'key': ''
     } for i in range(8)
 }
 
@@ -189,3 +188,38 @@ def safe_update_gui(update_func):
         gui_update_queue.put(update_func, block=False)
     except queue.Full:
         pass  # Skip update if queue is full to prevent blocking
+
+
+def resolve_resource_path(relative_path):
+    """
+    Resolve a relative resource path that works in both development and PyInstaller builds.
+    
+    Args:
+        relative_path: Relative path string (e.g., "jobs/Nakayuda/1.BMP")
+        
+    Returns:
+        Resolved absolute path, or None if path doesn't exist
+    """
+    if not relative_path:
+        return None
+    
+    import os
+    import sys
+    
+    # Normalize the path
+    relative_path = os.path.normpath(relative_path)
+    
+    # Determine base path based on execution environment
+    if getattr(sys, 'frozen', False):
+        # Running as compiled executable (PyInstaller)
+        base_path = sys._MEIPASS
+    else:
+        # Running as script
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    
+    # Join base path with relative path
+    resolved_path = os.path.join(base_path, relative_path)
+    resolved_path = os.path.normpath(resolved_path)
+    
+    # Return path if it exists, otherwise None
+    return resolved_path if os.path.exists(resolved_path) else None

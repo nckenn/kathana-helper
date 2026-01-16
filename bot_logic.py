@@ -45,36 +45,68 @@ def trigger_skill(slot_num):
 
 
 def smart_loot():
-    """Smart loot function - triggers looting when enemy is killed with multiple attempts"""
+    """
+    Smart loot function - triggers looting when enemy is killed with multiple attempts.
+    Improved version with better timing, more attempts, and delayed start to ensure loot appears.
+    """
     try:
         current_time = time.time()
-        if current_time - config.last_smart_loot_time < config.SMART_LOOT_COOLDOWN:
-            return
         
+        # Check cooldown to prevent spam (but allow if enough time has passed)
+        # Only apply cooldown if we actually executed loot before (not just attempted)
+        time_since_last = current_time - config.last_smart_loot_time
+        if time_since_last < config.SMART_LOOT_COOLDOWN:
+            # Only skip if we're still in looting state (meaning previous loot is still active)
+            if config.is_looting and (current_time - config.looting_start_time) < config.LOOTING_DURATION:
+                print(f"[Smart Loot] Skipped - already looting (started {current_time - config.looting_start_time:.2f}s ago)")
+                return
+            # If cooldown is very short, allow it (might be a retry)
+            elif time_since_last < 0.1:
+                print(f"[Smart Loot] Skipped - too soon after last attempt ({time_since_last:.2f}s)")
+                return
+        
+        # Check if pick action is enabled
         if not config.action_slots['pick']['enabled']:
+            print("[Smart Loot] Skipped - pick action not enabled")
             return
         
         action_key = config.action_slots['pick']['key']
+        if not action_key:
+            print("[Smart Loot] Skipped - no pick key configured")
+            return
+        
+        # Update last loot time immediately to prevent duplicate calls
         config.last_smart_loot_time = current_time
         
         # Set looting flag to prevent auto-targeting during looting
         config.is_looting = True
         config.looting_start_time = current_time
         
+        print(f"[Smart Loot] Starting loot sequence (key: {action_key})")
+        
+        # Initial delay to allow loot to appear (loot sometimes appears slightly after death)
+        initial_delay = 0.15
+        time.sleep(initial_delay)
+        
         # Multiple loot attempts with delays to ensure items are picked up
-        # Sometimes loot appears slightly after enemy death, so we try multiple times
-        num_attempts = 3
-        attempt_delay = 0.2  # Delay between attempts
+        # Increased attempts and better spacing for more reliable looting
+        num_attempts = 4
+        attempt_delay = 0.25  # Slightly increased delay between attempts
         
         for attempt in range(num_attempts):
             input_handler.send_input(action_key)
             if attempt < num_attempts - 1:  # Don't sleep after last attempt
                 time.sleep(attempt_delay)
         
-        print(f"Smart loot triggered ({num_attempts} attempts, key: {action_key})")
+        print(f"[Smart Loot] Completed ({num_attempts} attempts with {initial_delay}s initial delay)")
+        
     except Exception as e:
-        print(f"Error in smart loot: {e}")
-        # Note: is_looting flag will be cleared by check_enemy_for_auto_attack after LOOTING_DURATION
+        print(f"[Smart Loot] Error: {e}")
+        import traceback
+        traceback.print_exc()
+        # Reset flags on error
+        config.is_looting = False
+        # Note: is_looting flag will be cleared by check_auto_attack after LOOTING_DURATION
 
 
 def check_buffs():
@@ -108,30 +140,27 @@ def check_buffs():
         # Capture screen
         screen = config.calibrator.capture_window(hwnd)
         if screen is not None:
-            # Extract area_skills from stored coordinates
-            x_min, y_min, x_max, y_max = config.area_skills
+            # Check if area_skills is available
+            if not config.area_skills:
+                return
             
-            # Ensure coordinates are within screen bounds
+            # Extract area_skills from stored coordinates
+            x1, y1, x2, y2 = config.area_skills
+            area_skills = screen[y1:y2, x1:x2]
+            
+            # Calculate area_buffs_activos (40 pixels above skills area)
             h, w = screen.shape[:2]
-            if (x_min >= 0 and y_min >= 0 and x_max <= w and y_max <= h):
-                area_skills = screen[y_min:y_max, x_min:x_max]
-                
-                # Calculate area_buffs_activos (40 pixels above skills area)
-                buff_height_start = max(0, y_min - 40)
-                buff_height_end = y_min
-                buff_width_start = x_min
-                buff_width_end = x_max
-                
-                if (buff_height_start >= 0 and buff_height_end <= h and
-                    buff_width_start >= 0 and buff_width_end <= w and
-                    buff_height_start < buff_height_end):
-                    area_buffs_activos = screen[buff_height_start:buff_height_end, buff_width_start:buff_width_end]
-                    
-                    # Call buffs manager update
-                    config.buffs_manager.update_and_activate_buffs(
-                        hwnd, screen, area_skills, area_buffs_activos, 
-                        x_min, y_min, run_active=config.bot_running
-                    )
+            buff_height_start = y1 - 40
+            buff_height_end = y1
+            buff_width_start = x1
+            buff_width_end = x2
+            area_buffs_activos = screen[buff_height_start:buff_height_end, buff_width_start:buff_width_end]
+            
+            # Call buffs manager update
+            config.buffs_manager.update_and_activate_buffs(
+                hwnd, screen, area_skills, area_buffs_activos, 
+                x1, y1, run_active=config.bot_running
+            )
     except Exception as e:
         print(f"[Buffs] Error checking buffs: {e}")
         import traceback
@@ -140,42 +169,10 @@ def check_buffs():
 
 def check_skill_sequence():
     """Check and execute skill sequence if needed"""
-    if not config.skill_sequence_manager or not config.calibrator:
-        return
-    
-    # Check if any enabled skills are configured (have image paths and are enabled)
-    skills_configured = any(
-        config.skill_sequence_config[i].get('image_path') and config.skill_sequence_config[i]['enabled'] 
-        for i in range(8)
-    )
-    if not skills_configured:
-        return
-    
-    # Check if skill bars are calibrated
-    if not config.area_skills:
-        return
-    
-    try:
-        import cv2
-        import os
-        
-        # Get window handle
-        if hasattr(config.connected_window, 'handle'):
-            hwnd = config.connected_window.handle
-        else:
-            hwnd = config.connected_window
-        
-        # Capture screen
-        screen = config.calibrator.capture_window(hwnd)
-        if screen is not None:
-            # Call skill sequence manager to execute sequence
-            config.skill_sequence_manager.execute_skill_sequence(
-                hwnd, screen, config.area_skills, run_active=config.bot_running
-            )
-    except Exception as e:
-        print(f"[SkillSequence] Error checking skill sequence: {e}")
-        import traceback
-        traceback.print_exc()
+    # Note: This function is kept for compatibility but skill sequence is now
+    # executed from auto_attack.py when enemy is found
+    # Skill sequence should only execute when enemy is found, not independently
+    pass
 
 
 def check_mouse_clicker():

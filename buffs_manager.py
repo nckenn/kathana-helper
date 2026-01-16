@@ -22,7 +22,7 @@ class BuffsManager:
         self.ui_reference = None
     
     def set_buff(self, idx, image_path):
-        """Set a buff image path for a specific index"""
+        """Set a buff image path for a specific index (should be relative path)"""
         if 0 <= idx < len(self.buffs):
             self.buffs[idx] = image_path
             print(f'[BuffsManager] Buff {idx + 1} set to: {image_path}')
@@ -78,7 +78,13 @@ class BuffsManager:
                 continue
             
             print(f'[DEBUG] Processing buff {idx + 1}: {image_path}')
-            template = cv2.imread(image_path, cv2.IMREAD_COLOR)
+            # Resolve relative path before loading template
+            resolved_path = config.resolve_resource_path(image_path)
+            if not resolved_path:
+                print(f'[DEBUG] Could not resolve path for buff {idx + 1}: {image_path}')
+                continue
+            
+            template = cv2.imread(resolved_path, cv2.IMREAD_COLOR)
             if template is None:
                 print(f'[DEBUG] Could not load template for buff {idx + 1}')
                 continue

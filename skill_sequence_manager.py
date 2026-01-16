@@ -24,7 +24,7 @@ class SkillSequenceManager:
         self.enemy_found_previous = False
     
     def set_skill(self, idx, image_path):
-        """Set a skill image path for a specific index"""
+        """Set a skill image path for a specific index (should be relative path)"""
         if 0 <= idx < len(self.skills):
             self.skills[idx] = image_path
             print(f'[SkillSequenceManager] Skill {idx + 1} set to: {image_path}')
@@ -61,10 +61,40 @@ class SkillSequenceManager:
         - Checks if skill is present in area_skills (template matching > 0.7)
         - If skill found and waiting_activation is False, send key and set waiting_activation
         - If skill disappears (was waiting_activation), advance to next skill
-        - If bypass is enabled and skill not found, skip to next skill
         - Resets sequence when new enemy is detected or enemy is lost
         """
         if not run_active:
+            return
+        
+        if not CV2_AVAILABLE:
+            return
+        
+        # Check if area_skills is available (should be tuple (x1, y1, x2, y2))
+        if not area_skills or not isinstance(area_skills, (tuple, list)) or len(area_skills) != 4:
+            return
+        
+        # Build skill_sequence list from config (paths should be relative)
+        skill_sequence = []
+        for idx in range(len(self.skills)):
+            if (self.skills[idx] and 
+                config.skill_sequence_config[idx]['enabled']):
+                skill_sequence.append(self.skills[idx])
+            else:
+                skill_sequence.append(None)
+        
+        # Resolve relative paths and filter to valid skills
+        valid_skills = []
+        skill_index_map = {}  # Map resolved paths to original indices
+        for i, relative_path in enumerate(skill_sequence):
+            if relative_path:
+                resolved_path = config.resolve_resource_path(relative_path)
+                if resolved_path and os.path.exists(resolved_path):
+                    valid_skills.append(resolved_path)
+                    skill_index_map[resolved_path] = i
+        
+        n = len(valid_skills)
+        
+        if n == 0:
             return
         
         # Reset sequence when enemy state changes (new enemy detected or enemy lost)
@@ -84,30 +114,6 @@ class SkillSequenceManager:
         if not enemy_found:
             return
         
-        if not CV2_AVAILABLE:
-            return
-        
-        if not area_skills:
-            return
-        
-        # Build skill_sequence list from config
-        skill_sequence = []
-        for idx in range(len(self.skills)):
-            if (self.skills[idx] and 
-                config.skill_sequence_config[idx]['enabled']):
-                skill_sequence.append(self.skills[idx])
-            else:
-                skill_sequence.append(None)
-        
-        valid_skills = [s for s in skill_sequence if s and os.path.exists(s)]
-        n = len(valid_skills)
-        
-        if n == 0:
-            return
-        
-        # Build bypass_list
-        bypass_list = [config.skill_sequence_config[i].get('bypass', False) for i in range(8)]
-        
         # Reset if skill count changed
         if not hasattr(self, 'last_skill_count') or self.last_skill_count != n:
             self.skill_sequence_index = 0
@@ -123,72 +129,46 @@ class SkillSequenceManager:
         if not hasattr(self, 'skill_waiting_activation'):
             self.skill_waiting_activation = False
         
+        # Extract area from screen
+        x1, y1, x2, y2 = area_skills
+        area = screen[y1:y2, x1:x2]
+        
         # Get current skill index
         idx = self.skill_sequence_index % n
         skill_path = valid_skills[idx]
         
         # Find original skill index for this path
-        original_idx = None
-        for i in range(len(skill_sequence)):
-            if skill_sequence[i] == skill_path:
-                original_idx = i
-                break
+        original_idx = skill_index_map.get(skill_path)
         
         if original_idx is None:
             return
         
-        # Extract area from screen
-        x_min, y_min, x_max, y_max = area_skills
-        h, w = screen.shape[:2]
-        
-        # Ensure coordinates are within screen bounds
-        if (x_min < 0 or y_min < 0 or x_max > w or y_max > h or 
-            x_max <= x_min or y_max <= y_min):
-            return
-        
-        area = screen[y_min:y_max, x_min:x_max]
-        
-        # Load template
+        # Load template (skill_path is already resolved)
         template = cv2.imread(skill_path, cv2.IMREAD_COLOR)
         if template is None:
+            print(f'[SKILL-SEQUENCE] Could not load template from: {skill_path}')
             return
         
         # Check if area is large enough
-        if area.shape[0] < template.shape[0] or area.shape[1] < template.shape[1]:
-            return
-        
-        # Template matching
-        res = cv2.matchTemplate(area, template, cv2.TM_CCOEFF_NORMED)
-        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
-        
-        # Get bypass status
-        bypass_active = False
-        if bypass_list is not None and original_idx < len(bypass_list):
-            bypass_active = bypass_list[original_idx]
-        
-        if max_val > 0.7:
-            # Skill found
-            current_time = time.time()
-            if current_time - self.ultimo_tiempo_skill >= 0.1:
-                key_input = self.get_skill_key(original_idx)
-                if key_input:
-                    print(f'[SKILL-SEQUENCE] Skill {original_idx + 1} found, sending key: {key_input}')
-                    input_handler.send_input(key_input)
-                else:
-                    print(f'[SKILL-SEQUENCE] No key configured for skill {original_idx + 1}')
-                self.ultimo_tiempo_skill = current_time
-            self.skill_waiting_activation = True
-        else:
-            # Skill not found
-            if bypass_active:
-                # Bypass enabled: skip to next skill
-                print(f'[SKILL-SEQUENCE] Skill {original_idx + 1} not found with bypass enabled, skipping to next')
-                self.skill_sequence_index += 1
-                if self.skill_sequence_index >= n:
-                    print('[SKILL-SEQUENCE] Last skill, resetting sequence')
-                    self.skill_sequence_index = 0
-                self.skill_waiting_activation = False
+        if area.shape[0] >= template.shape[0] and area.shape[1] >= template.shape[1]:
+            # Template matching
+            res = cv2.matchTemplate(area, template, cv2.TM_CCOEFF_NORMED)
+            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
+            
+            if max_val > 0.7:
+                # Skill found
+                current_time = time.time()
+                if current_time - self.ultimo_tiempo_skill >= 0.1:
+                    key_input = self.get_skill_key(original_idx)
+                    if key_input:
+                        print(f'[SKILL-SEQUENCE] Skill {original_idx + 1} present, sending key: {key_input}')
+                        input_handler.send_input(key_input)
+                    else:
+                        print(f'[SKILL-SEQUENCE] No key configured for skill {original_idx + 1}')
+                    self.ultimo_tiempo_skill = current_time
+                self.skill_waiting_activation = True
             else:
+                # Skill not found
                 if self.skill_waiting_activation:
                     # Skill disappeared after activation, advance to next
                     print(f'[SKILL-SEQUENCE] Skill {original_idx + 1} disappeared, advancing to next')
@@ -197,3 +177,5 @@ class SkillSequenceManager:
                         print('[SKILL-SEQUENCE] Last skill executed, resetting sequence')
                         self.skill_sequence_index = 0
                     self.skill_waiting_activation = False
+        else:
+            print(f'[SKILL-SEQUENCE] Template or area invalid for skill {original_idx + 1}')

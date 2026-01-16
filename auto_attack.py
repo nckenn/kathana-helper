@@ -602,16 +602,18 @@ def detect_enemy_for_auto_attack(hwnd, targets=None):
                'name': str or None, 'ocr_text': str or None}
     """
     if not config.calibrator or config.calibrator.mp_position is None:
+        print('No MP position memorized')
         return EnemyDetectionResult().to_dict()
     
     try:
+        # Get MP position as reference (must be available)
+        mp_x, mp_y = config.calibrator.mp_position
+        print(f'MP position (memorized): ({mp_x}, {mp_y})')
+        
         # Capture screen
         screen = config.calibrator.capture_window(hwnd)
         if screen is None:
             return EnemyDetectionResult().to_dict()
-        
-        # Get MP position as reference
-        mp_x, mp_y = config.calibrator.mp_position
         
         # Initialize detector
         detector = EnemyHpBarDetector()
@@ -678,11 +680,14 @@ def detect_enemy_for_auto_attack(hwnd, targets=None):
         
         # If we found a red bar, calculate HP percentage
         if best_y is not None and best_width > 0:
-            enemy_x = search_x + best_first
+            # Calculate enemy position
+            enemy_x = mp_x + SEARCH_AREA_OFFSET_X + best_first
             enemy_y = search_y + best_y + HP_BAR_CENTER_OFFSET
             position = (enemy_x, enemy_y)
             
             hp_percentage = detector.calculate_hp_percentage(best_width)
+            
+            print(f'Enemy detected at: ({enemy_x}, {enemy_y}) - HP: {hp_percentage:.1f}% - Method: precise red bar')
             
             # Save debug image of found bar
             bar_found = search_area[
@@ -701,6 +706,7 @@ def detect_enemy_for_auto_attack(hwnd, targets=None):
                 ocr_text=ocr_text
             ).to_dict()
         else:
+            print('No red HP bar detected in this iteration')
             return EnemyDetectionResult(
                 found=False,
                 name=detected_name,
@@ -765,9 +771,13 @@ class RetargetManager:
         target_key = config.action_slots['target']['key']
         input_handler.send_input(target_key)
         
+        # Check if mob filter is enabled
+        mob_filter_enabled = config.mob_detection_enabled and config.mob_target_list
+        
         # Trigger attack action after target action (sequence: target -> attack)
+        # Only if mob filter is NOT enabled (if enabled, attack will be triggered after mob filter check)
         # Skip attack if mage mode is enabled
-        if config.action_slots['attack']['enabled'] and not config.is_mage:
+        if not mob_filter_enabled and not config.is_mage:
             attack_key = config.action_slots['attack']['key']
             # Small delay to ensure target action completes before attack
             time.sleep(0.1)
@@ -810,6 +820,14 @@ class RetargetManager:
                 reset_state_on_skip=reset_state_on_skip,
                 context=context
             )
+        
+        # Trigger attack action after mob filter check (if mob filter is enabled)
+        # Skip attack if mage mode is enabled
+        if mob_filter_enabled and not config.is_mage:
+            attack_key = config.action_slots['attack']['key']
+            # Small delay to ensure target action completes before attack
+            time.sleep(0.1)
+            input_handler.send_input(attack_key)
         
         return {
             'success': True,
@@ -914,8 +932,18 @@ def check_auto_attack():
         
         # Handle case when no enemy is found
         if not has_red_bar:
-            if len(config.enemy_hp_readings) > 0 or config.enemy_target_time > 0:
-                # Enemy was killed - immediately retarget
+            # Check if we had an enemy recently (multiple conditions to catch all cases)
+            had_enemy = (
+                len(config.enemy_hp_readings) > 0 or 
+                config.enemy_target_time > 0 or
+                config.current_target_mob is not None or
+                config.current_enemy_name is not None
+            )
+            
+            if had_enemy:
+                # Enemy was killed - trigger smart loot first
+                # This handles the case where enemy bar disappears (enemy died)
+                print(f"[Auto Attack] Enemy bar disappeared - triggering smart loot (had_enemy: readings={len(config.enemy_hp_readings)}, target_time={config.enemy_target_time}, mob={config.current_target_mob})")
                 bot_logic.smart_loot()
                 EnemyStateManager.reset_enemy_state()
                 _auto_target_manager.reset_search_timer()
@@ -924,6 +952,10 @@ def check_auto_attack():
                 if config.skill_sequence_manager:
                     config.skill_sequence_manager.reset_sequence()
                 
+                # Wait a bit for loot to complete before retargeting
+                # smart_loot already has delays, but add small buffer
+                # Check is_looting flag after smart_loot returns (it sets the flag internally)
+                time.sleep(0.2)  # Small delay to ensure loot completes
                 if not config.is_looting:
                     _auto_target_manager.try_auto_target("enemy killed")
                 return
@@ -950,9 +982,14 @@ def check_auto_attack():
                 ):
                     enemy_hp_percentage = 0.0
                     EnemyStateManager.reset_enemy_state()
+                    # Trigger smart loot when enemy death is detected via HP jump
+                    print(f"[Auto Attack] Enemy death detected (HP jump) - triggering smart loot")
                     bot_logic.smart_loot()
                     _auto_target_manager.reset_search_timer()
-                    _auto_target_manager.try_auto_target("enemy died")
+                    # Wait a bit for loot to complete before retargeting
+                    time.sleep(0.2)  # Small delay to ensure loot completes
+                    if not config.is_looting:
+                        _auto_target_manager.try_auto_target("enemy died")
                     # Reset skill sequence when enemy dies
                     if config.skill_sequence_manager:
                         config.skill_sequence_manager.reset_sequence()
@@ -1015,14 +1052,18 @@ def check_auto_attack():
                     if (previous_readings and 
                         max(previous_readings) > HP_PREVIOUS_READING_MIN):
                         print(
-                            f"Enemy HP dropped from {max(previous_readings):.1f}% "
+                            f"[Auto Attack] Enemy HP dropped from {max(previous_readings):.1f}% "
                             f"to {raw_enemy_hp_percentage:.1f}% - triggering smart loot"
                         )
+                        # Trigger smart loot when HP drops to death threshold
                         bot_logic.smart_loot()
                         enemy_hp_percentage = 0.0
                         EnemyStateManager.reset_enemy_state()
                         _auto_target_manager.reset_search_timer()
-                        _auto_target_manager.try_auto_target("enemy died")
+                        # Wait a bit for loot to complete before retargeting
+                        time.sleep(0.2)  # Small delay to ensure loot completes
+                        if not config.is_looting:
+                            _auto_target_manager.try_auto_target("enemy died")
                         # Reset skill sequence when enemy dies
                         if config.skill_sequence_manager:
                             config.skill_sequence_manager.reset_sequence()
