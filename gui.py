@@ -326,7 +326,7 @@ class BotGUI:
         
         # Initialize root window with customtkinter
         self.root = ctk.CTk()
-        self.root.title("Kathana Helper by xCrypto v2.0.1")
+        self.root.title("Kathana Helper by xCrypto v2.1.0")
         self.root.geometry("655x800")
         self.root.resizable(True, True)
         
@@ -439,7 +439,6 @@ class BotGUI:
         skill_sequence_tab = tabview.add("Skill Sequence")
         skills_tab = tabview.add("Skill Interval")
         buffs_tab = tabview.add("Buffs")
-        calibration_tab = tabview.add("Calibration")
         mouse_clicker_tab = tabview.add("Mouse Clicker")
         
         # Action slots frame - moved to Status tab
@@ -487,7 +486,7 @@ class BotGUI:
         
         # Enemy Name display
         enemy_name_frame = ctk.CTkFrame(status_frame, fg_color="transparent")
-        enemy_name_frame.grid(row=3, column=0, sticky="w", padx=15, pady=(5, 15))
+        enemy_name_frame.grid(row=3, column=0, sticky="w", padx=15, pady=(5, 5))
         
         enemy_name_label = ctk.CTkLabel(enemy_name_frame, text="Enemy Name:", width=70, anchor='w', font=ctk.CTkFont(size=11))
         enemy_name_label.grid(row=0, column=0, padx=(0, 10))
@@ -495,6 +494,15 @@ class BotGUI:
         self.current_mob_label.grid(row=0, column=1, sticky="w", padx=(0, 10))
         self.unstuck_countdown_label = ctk.CTkLabel(enemy_name_frame, text="Unstuck: ---", font=ctk.CTkFont(size=10), text_color="gray")
         self.unstuck_countdown_label.grid(row=0, column=2)
+        
+        # Auto Repair Count display
+        auto_repair_frame = ctk.CTkFrame(status_frame, fg_color="transparent")
+        auto_repair_frame.grid(row=4, column=0, sticky="w", padx=15, pady=(5, 15))
+        
+        auto_repair_label = ctk.CTkLabel(auto_repair_frame, text="Auto Repair:", width=70, anchor='w', font=ctk.CTkFont(size=11))
+        auto_repair_label.grid(row=0, column=0, padx=(0, 10))
+        self.auto_repair_count_label = ctk.CTkLabel(auto_repair_frame, text="0/3", font=ctk.CTkFont(size=11, weight="bold"), text_color="gray")
+        self.auto_repair_count_label.grid(row=0, column=1, sticky="w")
         
         # Configure status frame grid
         status_frame.columnconfigure(0, weight=1)
@@ -984,20 +992,6 @@ class BotGUI:
         config.buffs_manager = buffs_manager.BuffsManager(num_buffs=8)
         config.buffs_manager.set_ui_reference(self)
         
-        # Calibration Tool frame - moved to Calibration tab
-        calibration_frame = calibration_tab
-        
-        # Create buttons for each calibration
-        ctk.CTkLabel(calibration_frame, text="Set calibration areas:", font=ctk.CTkFont(size=11)).grid(row=0, column=0, columnspan=2, sticky="w", padx=15, pady=(15, 10))
-        
-        # System Message button - store as instance variable
-        self.system_message_calib_btn = ctk.CTkButton(calibration_frame, text="Set System Message", command=self.pick_system_message_coordinates, width=150, corner_radius=6)
-        self.system_message_calib_btn.grid(row=1, column=0, sticky="ew", padx=(15, 5), pady=(5, 15))
-        
-        # Configure calibration frame grid
-        calibration_frame.columnconfigure(0, weight=1)
-        calibration_frame.columnconfigure(1, weight=1)
-        
         # Mouse Clicker frame - moved to Mouse Clicker tab
         mouse_clicker_frame = mouse_clicker_tab
         
@@ -1062,8 +1056,8 @@ class BotGUI:
             self.apply_settings_to_gui()
             print("Settings loaded on startup")
         
-        # Update calibration button texts to show current state
-        self.update_calibration_button_texts()
+        # Update Start/Stop button state based on calibration
+        self.update_toggle_bot_button_state()
         
     def refresh_windows(self):
         """Refresh the list of open windows"""
@@ -1256,6 +1250,20 @@ class BotGUI:
                                     print(f"[Calibration] Skills area set: {config.area_skills}")
                         except Exception as e:
                             print(f"[Calibration] Error calculating skills area: {e}")
+                    
+                    # Store system message area if found
+                    if calibrator.system_message_area:
+                        try:
+                            x, y, width, height = calibrator.system_message_area
+                            config.system_message_area = {
+                                'x': x,
+                                'y': y,
+                                'width': width,
+                                'height': height
+                            }
+                            print(f"[Calibration] System message area set: {config.system_message_area}")
+                        except Exception as e:
+                            print(f"[Calibration] Error storing system message area: {e}")
                     
                     # Update GUI with calibrated values
                     def update_gui():
@@ -2244,7 +2252,7 @@ class BotGUI:
                                       f"Position: ({rel_x}, {rel_y})\nSize: {width}x{height} pixels")
                     
                     # Update button text to show it's been set
-                    self.update_calibration_button_texts()
+                    self.update_toggle_bot_button_state()
                 except Exception as e:
                     print(f"Error in HP bar selection: {e}")
                     picker_window.destroy()
@@ -2426,7 +2434,7 @@ class BotGUI:
                                       f"Position: ({rel_x}, {rel_y})\nSize: {width}x{height} pixels")
                     
                     # Update button text to show it's been set
-                    self.update_calibration_button_texts()
+                    self.update_toggle_bot_button_state()
                 except Exception as e:
                     print(f"Error in MP bar selection: {e}")
                     picker_window.destroy()
@@ -2610,7 +2618,7 @@ class BotGUI:
                                       f"Center: ({center_x}, {center_y})\nSize: {width}x{height} pixels")
                     
                     # Update button text to show it's been set
-                    self.update_calibration_button_texts()
+                    self.update_toggle_bot_button_state()
                 except Exception as e:
                     print(f"Error in mob coordinate selection: {e}")
                     picker_window.destroy()
@@ -2794,7 +2802,7 @@ class BotGUI:
                                       f"Position: ({rel_x}, {rel_y})\nSize: {width}x{height} pixels")
                     
                     # Update button text to show it's been set
-                    self.update_calibration_button_texts()
+                    self.update_toggle_bot_button_state()
                 except Exception as e:
                     print(f"Error in enemy HP bar selection: {e}")
                     picker_window.destroy()
@@ -2960,7 +2968,7 @@ class BotGUI:
                                       f"Center: ({center_x}, {center_y})\nSize: {width}x{height} pixels")
                     
                     # Update button text to show it's been set
-                    self.update_calibration_button_texts()
+                    self.update_toggle_bot_button_state()
                 except Exception as e:
                     print(f"Error in system message coordinate selection: {e}")
                     picker_window.destroy()
@@ -2993,10 +3001,12 @@ class BotGUI:
 
         
         # Check if System Message is set
-        if config.system_message_area.get('width', 0) > 0 and config.system_message_area.get('height', 0) > 0:
-            self.system_message_calib_btn.configure(text="✓ System Message")
-        else:
-            self.system_message_calib_btn.configure(text="Set System Message")
+        # (Calibration tab removed) - only update this if the legacy button exists.
+        if hasattr(self, "system_message_calib_btn"):
+            if config.system_message_area.get('width', 0) > 0 and config.system_message_area.get('height', 0) > 0:
+                self.system_message_calib_btn.configure(text="✓ System Message")
+            else:
+                self.system_message_calib_btn.configure(text="Set System Message")
         
         # Update toggle bot button state based on calibration
         self.update_toggle_bot_button_state()
@@ -3199,6 +3209,27 @@ class BotGUI:
                 import auto_unstuck
                 auto_unstuck.update_unstuck_countdown_display(time.time())
             
+            # Update auto repair count
+            if hasattr(self, 'auto_repair_count_label'):
+                try:
+                    import auto_repair
+                    current_count = auto_repair.get_repair_count()
+                    trigger_count = auto_repair.get_repair_trigger_count()
+                    
+                    # Update text and color based on count
+                    count_text = f"{current_count}/{trigger_count}"
+                    if current_count == 0:
+                        text_color = "gray"
+                    elif current_count < trigger_count:
+                        text_color = "yellow"
+                    else:
+                        text_color = "red"  # Ready to trigger
+                    
+                    self.auto_repair_count_label.configure(text=count_text, text_color=text_color)
+                except Exception as e:
+                    # Silently fail if auto_repair not available
+                    pass
+            
             # Update minimized window if it exists
             if self.is_minimized and self.minimized_window:
                 try:
@@ -3300,7 +3331,7 @@ class BotGUI:
         
         # Create new window for minimized view
         self.minimized_window = ctk.CTkToplevel(self.root)
-        self.minimized_window.title("Kathana Helper xCrypto v2.0.1")
+        self.minimized_window.title("Kathana Helper xCrypto v2.1.1")
         
         # Position minimized window at the same location as main window
         if self.saved_window_position:

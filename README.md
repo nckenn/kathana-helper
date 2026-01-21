@@ -40,6 +40,7 @@ python main.py
 
 #### Using the spec file (Recommended)
 ```bash
+python tools/download_easyocr_models.py
 pyinstaller kathana_helper.spec
 ```
 

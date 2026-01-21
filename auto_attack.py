@@ -38,6 +38,7 @@ NAME_AREA_HEIGHT = 18      # Height of name area (first 18 pixels)
 HP_BAR_HEIGHT = 18         # Height of HP bar strip to search
 MIN_RED_PIXELS_PER_COLUMN = 6  # Minimum red pixels per column to be valid
 HP_BAR_CENTER_OFFSET = 9   # Y offset to center of HP bar
+MIN_HP_BAR_WIDTH = 10     # Minimum HP bar width to consider valid (avoid false positives from small red artifacts)
 
 # HSV color ranges for red detection
 RED_LOWER_1 = np.array([0, 100, 100])
@@ -132,6 +133,8 @@ def extract_enemy_name_easyocr(name_area):
         
         # Convert to RGB for EasyOCR
         img_rgb = cv2.cvtColor(white_chars, cv2.COLOR_BGR2RGB)
+        # Low-RAM safety: cap image size (mostly a no-op here, but keeps behavior consistent)
+        img_rgb = ocr_utils._downscale_for_ocr(img_rgb)
         
         # Count white pixels for debugging
         white_pixels = cv2.countNonZero(mask_white)
@@ -139,18 +142,41 @@ def extract_enemy_name_easyocr(name_area):
         white_percentage = white_pixels / total_pixels * 100
         
         # Try OCR with white-filtered image first
-        results = config.ocr_reader.readtext(
-            img_rgb, 
-            paragraph=False, 
-            detail=1, 
-            contrast_ths=0.1, 
-            adjust_contrast=0.3, 
-            text_threshold=0.5, 
-            link_threshold=0.3, 
-            low_text=0.3, 
-            canvas_size=1280, 
-            mag_ratio=1.0
-        )
+        try:
+            results = config.ocr_reader.readtext(
+                img_rgb,
+                paragraph=False,
+                detail=1,
+                batch_size=int(getattr(config, 'ocr_batch_size', 1) or 1),
+                contrast_ths=0.1,
+                adjust_contrast=0.3,
+                text_threshold=0.5,
+                link_threshold=0.3,
+                low_text=0.3,
+                canvas_size=1280,
+                mag_ratio=1.0
+            )
+        except Exception as e:
+            # If OCR throws a memory error on a beefy machine, auto-switch to low-RAM mode and retry once.
+            msg = str(e).lower()
+            if ('out of memory' in msg or 'memory' in msg) and not ocr_utils.is_low_ram_mode():
+                ocr_utils._LOW_RAM_MODE_CACHED = True
+                img_rgb_retry = ocr_utils._downscale_for_ocr(img_rgb)
+                results = config.ocr_reader.readtext(
+                    img_rgb_retry,
+                    paragraph=False,
+                    detail=1,
+                    batch_size=1,
+                    contrast_ths=0.1,
+                    adjust_contrast=0.3,
+                    text_threshold=0.5,
+                    link_threshold=0.3,
+                    low_text=0.3,
+                    canvas_size=1280,
+                    mag_ratio=1.0
+                )
+            else:
+                raise
         
         if results:
             # Filter results to only letters
@@ -190,7 +216,27 @@ def extract_enemy_name_easyocr(name_area):
         else:
             # Try with original image if filtered version fails
             img_rgb_original = cv2.cvtColor(name_area, cv2.COLOR_BGR2RGB)
-            results_original = config.ocr_reader.readtext(img_rgb_original)
+            img_rgb_original = ocr_utils._downscale_for_ocr(img_rgb_original)
+            try:
+                results_original = config.ocr_reader.readtext(
+                    img_rgb_original,
+                    paragraph=False,
+                    detail=1,
+                    batch_size=int(getattr(config, 'ocr_batch_size', 1) or 1),
+                )
+            except Exception as e:
+                msg = str(e).lower()
+                if ('out of memory' in msg or 'memory' in msg) and not ocr_utils.is_low_ram_mode():
+                    ocr_utils._LOW_RAM_MODE_CACHED = True
+                    img_rgb_original_retry = ocr_utils._downscale_for_ocr(img_rgb_original)
+                    results_original = config.ocr_reader.readtext(
+                        img_rgb_original_retry,
+                        paragraph=False,
+                        detail=1,
+                        batch_size=1,
+                    )
+                else:
+                    raise
             
             if results_original:
                 best_result = max(results_original, key=lambda x: len(x[1]))
@@ -419,15 +465,22 @@ class EnemyHpBarDetector:
         return cv2.bitwise_or(mask1, mask2)
     
     def find_hp_bar(self, mask, search_area):
-        """Find the widest HP bar in the mask"""
+        """
+        Find the widest HP bar in the mask
+        Searches through all possible y positions to find the bar with maximum width
+        """
         best_y = None
         best_width = 0
         best_first = 0
         best_last = 0
         
+        # Search through all possible y positions
         for y in range(0, search_area.shape[0] - HP_BAR_HEIGHT + 1):
+            # Extract strip at this y position
             strip = mask[y:y + HP_BAR_HEIGHT, :]
+            # Sum red pixels per column (axis=0 sums vertically)
             column_sum = np.sum(strip == 255, axis=0)
+            # Find columns with at least MIN_RED_PIXELS_PER_COLUMN red pixels
             valid_columns = np.where(column_sum >= MIN_RED_PIXELS_PER_COLUMN)[0]
             
             if len(valid_columns) > 0:
@@ -435,6 +488,7 @@ class EnemyHpBarDetector:
                 last = valid_columns[-1]
                 width = last - first + 1
                 
+                # Only update if this bar is wider
                 if width > best_width:
                     best_width = width
                     best_y = y
@@ -507,7 +561,9 @@ class EnemyNameValidator:
         if not detected_name:
             return False
         detected_name_normalized = normalize_text(detected_name)
-        return ('avara kara' in detected_name_normalized or 
+        # Check for exact match 'Avara Kara' or normalized versions
+        return (contains_complete_word('Avara Kara', detected_name) or
+                'avara kara' in detected_name_normalized or 
                 'avara' in detected_name_normalized)
     
     @staticmethod
@@ -615,25 +671,35 @@ def detect_enemy_for_auto_attack(hwnd, targets=None):
         if screen is None:
             return EnemyDetectionResult().to_dict()
         
-        # Initialize detector
+        # Initialize detector and debug directory
         detector = EnemyHpBarDetector()
+        debug_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'debug')
+        if not os.path.exists(debug_dir):
+            os.makedirs(debug_dir)
         
-        # Extract search area
-        search_area, search_x, search_y = detector.extract_search_area(
-            screen, mp_x, mp_y
-        )
+        # Extract search area: screen[search_y:search_y + 35, mp_x - 1:mp_x - 1 + 163]
+        search_y = mp_y + SEARCH_AREA_OFFSET_Y  # mp_y + 19
+        search_area = screen[search_y:search_y + SEARCH_AREA_HEIGHT, mp_x - 1:mp_x - 1 + SEARCH_AREA_WIDTH]
         
         if search_area.size == 0 or search_area.shape[0] < NAME_AREA_HEIGHT:
             return EnemyDetectionResult().to_dict()
         
-        # Extract enemy name area
-        name_area = detector.extract_name_area(search_area)
+        # Extract enemy name area: first 18 pixels of search area
+        name_area = search_area[0:NAME_AREA_HEIGHT, :]
+        
+        # Save debug image of name area
+        cv2.imwrite(os.path.join(debug_dir, 'name_area_debug.png'), name_area)
+        print(f'[DEBUG] Name area saved: {name_area.shape[1]}x{name_area.shape[0]} pixels')
         
         # Extract enemy name using OCR
         detected_name, ocr_text = extract_enemy_name_easyocr(name_area)
         
         # Check for Avara (mob to avoid)
-        if EnemyNameValidator.check_avara_detection(detected_name):
+        detected_name_normalized = normalize_text(detected_name)
+        if (EnemyNameValidator.check_avara_detection(detected_name) or
+            contains_complete_word('Avara Kara', detected_name) or
+            'avara kara' in detected_name_normalized or
+            'avara' in detected_name_normalized):
             print(f'[TARGET] Enemy detected \'{detected_name}\' contains Avara. Avoiding attack.')
             return EnemyDetectionResult(
                 found=False,
@@ -667,10 +733,15 @@ def detect_enemy_for_auto_attack(hwnd, targets=None):
                     ocr_text=ocr_text
                 ).to_dict()
         
-        # Create red mask for HP bar detection
-        mask = detector.create_red_mask(search_area)
+        # Create red mask for HP bar detection using HSV color ranges
+        hsv = cv2.cvtColor(search_area, cv2.COLOR_BGR2HSV)
+        mask1 = cv2.inRange(hsv, RED_LOWER_1, RED_UPPER_1)
+        mask2 = cv2.inRange(hsv, RED_LOWER_2, RED_UPPER_2)
+        mask = cv2.bitwise_or(mask1, mask2)
         
         # Save debug images
+        cv2.imwrite(os.path.join(debug_dir, 'mask_red.png'), mask)
+        cv2.imwrite(os.path.join(debug_dir, 'search_area.png'), search_area)
         detector.save_debug_images(search_area, mask, name_area)
         
         # Find HP bar
@@ -678,14 +749,19 @@ def detect_enemy_for_auto_attack(hwnd, targets=None):
             mask, search_area
         )
         
-        # If we found a red bar, calculate HP percentage
-        if best_y is not None and best_width > 0:
+        # If we found a red bar, validate and calculate HP percentage
+        # Add minimum width check to avoid false positives from small red artifacts
+        if best_y is not None and best_width > 0 and best_width >= MIN_HP_BAR_WIDTH:
             # Calculate enemy position
-            enemy_x = mp_x + SEARCH_AREA_OFFSET_X + best_first
+            # enemy_x = mp_x - 1 + best_first
+            # enemy_y = search_y + best_y + 9
+            enemy_x = mp_x - 1 + best_first
             enemy_y = search_y + best_y + HP_BAR_CENTER_OFFSET
             position = (enemy_x, enemy_y)
             
-            hp_percentage = detector.calculate_hp_percentage(best_width)
+            # Calculate HP percentage: hp_percentage = best_width / 163 * 100
+            hp_percentage = best_width / SEARCH_AREA_WIDTH * 100
+            hp_percentage = float(max(0, min(100, hp_percentage)))
             
             print(f'Enemy detected at: ({enemy_x}, {enemy_y}) - HP: {hp_percentage:.1f}% - Method: precise red bar')
             
@@ -694,6 +770,10 @@ def detect_enemy_for_auto_attack(hwnd, targets=None):
                 best_y + HP_BAR_CENTER_OFFSET:best_y + HP_BAR_CENTER_OFFSET + HP_BAR_HEIGHT,
                 best_first:best_last + 1
             ]
+            cv2.imwrite(
+                os.path.join(debug_dir, f'bar_found_{enemy_x}_{enemy_y}.png'),
+                bar_found
+            )
             detector.save_debug_images(
                 search_area, mask, name_area, bar_found, enemy_x, enemy_y
             )
@@ -706,7 +786,11 @@ def detect_enemy_for_auto_attack(hwnd, targets=None):
                 ocr_text=ocr_text
             ).to_dict()
         else:
-            print('No red HP bar detected in this iteration')
+            # No valid HP bar found - check if we had a name but no bar (enemy might be dead)
+            if detected_name:
+                print(f'[Enemy HP] Name detected (\'{detected_name}\') but no valid HP bar found - enemy may be dead or out of range')
+            else:
+                print('No red HP bar detected in this iteration')
             return EnemyDetectionResult(
                 found=False,
                 name=detected_name,
@@ -888,6 +972,14 @@ _auto_target_manager = AutoTargetManager()
 
 def check_auto_attack():
     """Check enemy HP bar and update GUI display, auto-target when no target"""
+    # Only monitor enemy HP when auto attack is enabled
+    # If disabled, reset all enemy state and stop monitoring
+    if not config.auto_attack_enabled:
+        config.current_enemy_hp_percentage = 0.0
+        # Reset enemy state to prevent any lingering state
+        EnemyStateManager.reset_enemy_state()
+        return
+    
     if not config.connected_window:
         return
     
@@ -933,6 +1025,7 @@ def check_auto_attack():
         # Handle case when no enemy is found
         if not has_red_bar:
             # Check if we had an enemy recently (multiple conditions to catch all cases)
+            # Also check if we detected a name but no HP bar (enemy might be dead but name still visible briefly)
             had_enemy = (
                 len(config.enemy_hp_readings) > 0 or 
                 config.enemy_target_time > 0 or
@@ -940,10 +1033,23 @@ def check_auto_attack():
                 config.current_enemy_name is not None
             )
             
-            if had_enemy:
+            # Additional check: if we detected a name but no HP bar, enemy is likely dead
+            # This handles cases where the name might still be visible but HP bar is gone
+            name_detected_but_no_bar = (
+                result.get('name') and 
+                not result.get('found') and
+                result.get('hp', 0) == 0
+            )
+            
+            if had_enemy or name_detected_but_no_bar:
                 # Enemy was killed - trigger smart loot first
                 # This handles the case where enemy bar disappears (enemy died)
-                print(f"[Auto Attack] Enemy bar disappeared - triggering smart loot (had_enemy: readings={len(config.enemy_hp_readings)}, target_time={config.enemy_target_time}, mob={config.current_target_mob})")
+                reason = "name detected but no HP bar" if name_detected_but_no_bar else "enemy bar disappeared"
+                print(
+                    f"[Auto Attack] Enemy disappeared ({reason}) - triggering smart loot "
+                    f"(had_enemy: readings={len(config.enemy_hp_readings)}, "
+                    f"target_time={config.enemy_target_time}, mob={config.current_target_mob})"
+                )
                 bot_logic.smart_loot()
                 EnemyStateManager.reset_enemy_state()
                 _auto_target_manager.reset_search_timer()
@@ -952,10 +1058,8 @@ def check_auto_attack():
                 if config.skill_sequence_manager:
                     config.skill_sequence_manager.reset_sequence()
                 
-                # Wait a bit for loot to complete before retargeting
-                # smart_loot already has delays, but add small buffer
-                # Check is_looting flag after smart_loot returns (it sets the flag internally)
-                time.sleep(0.2)  # Small delay to ensure loot completes
+                # smart_loot() now handles timing and clears is_looting when done
+                # Retarget immediately if looting is complete
                 if not config.is_looting:
                     _auto_target_manager.try_auto_target("enemy killed")
                 return
@@ -986,8 +1090,7 @@ def check_auto_attack():
                     print(f"[Auto Attack] Enemy death detected (HP jump) - triggering smart loot")
                     bot_logic.smart_loot()
                     _auto_target_manager.reset_search_timer()
-                    # Wait a bit for loot to complete before retargeting
-                    time.sleep(0.2)  # Small delay to ensure loot completes
+                    # smart_loot() now handles timing and clears is_looting when done
                     if not config.is_looting:
                         _auto_target_manager.try_auto_target("enemy died")
                     # Reset skill sequence when enemy dies
@@ -1045,6 +1148,7 @@ def check_auto_attack():
                                 return
                 
                 # Check for death (HP dropped from high to very low)
+                # Also check if HP bar width is suspiciously small (might be false positive or dead enemy)
                 if (raw_enemy_hp_percentage <= HP_DEATH_THRESHOLD and 
                     config.enemy_target_time > 0 and 
                     len(config.enemy_hp_readings) > 1):
@@ -1060,14 +1164,34 @@ def check_auto_attack():
                         enemy_hp_percentage = 0.0
                         EnemyStateManager.reset_enemy_state()
                         _auto_target_manager.reset_search_timer()
-                        # Wait a bit for loot to complete before retargeting
-                        time.sleep(0.2)  # Small delay to ensure loot completes
+                        # smart_loot() now handles timing and clears is_looting when done
                         if not config.is_looting:
                             _auto_target_manager.try_auto_target("enemy died")
                         # Reset skill sequence when enemy dies
                         if config.skill_sequence_manager:
                             config.skill_sequence_manager.reset_sequence()
                         return
+                
+                # Additional check: if HP is very low and we've been tracking this enemy,
+                # it might be dead (handles cases where HP bar is still visible but enemy is dead)
+                if (raw_enemy_hp_percentage <= HP_DEATH_THRESHOLD and 
+                    config.enemy_target_time > 0 and
+                    current_time - config.enemy_target_time > 1.0):  # Enemy tracked for at least 1 second
+                    print(
+                        f"[Auto Attack] Enemy HP very low ({raw_enemy_hp_percentage:.1f}%) "
+                        f"after tracking for {current_time - config.enemy_target_time:.1f}s - "
+                        f"assuming enemy is dead, triggering smart loot"
+                    )
+                    bot_logic.smart_loot()
+                    enemy_hp_percentage = 0.0
+                    EnemyStateManager.reset_enemy_state()
+                    _auto_target_manager.reset_search_timer()
+                    # smart_loot() now handles timing and clears is_looting when done
+                    if not config.is_looting:
+                        _auto_target_manager.try_auto_target("enemy died (low HP)")
+                    if config.skill_sequence_manager:
+                        config.skill_sequence_manager.reset_sequence()
+                    return
             else:
                 # First reading - no smoothing
                 config.enemy_hp_readings.append(raw_enemy_hp_percentage)

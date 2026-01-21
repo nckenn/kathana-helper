@@ -58,6 +58,7 @@ datas = [
     ("jobs", "jobs"),  # Skill images folder for buffs and skill sequence (all job folders and images)
     ("skill_bar_1.bmp", "."),  # Skill bar template for calibration
     ("skill_bar_2.bmp", "."),  # Skill bar template for calibration
+    ("easyocr_models", "easyocr_models"),  # Bundled EasyOCR model weights (offline OCR)
 ]
 
 a = Analysis(
@@ -85,7 +86,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name="Kathana Helper v2.0.1",
+    name="Kathana Helper v2.1.1",
     debug=False,
     strip=False,
     upx=True,

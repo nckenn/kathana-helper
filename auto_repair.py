@@ -3,9 +3,18 @@ Auto repair functionality - monitors system messages for item break warnings
 Triggers repair when 'is about to break' warning is detected 3 times
 """
 import time
+import hashlib
+import os
 import config
 import ocr_utils
 import input_handler
+try:
+    import cv2
+    import numpy as np
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
+    print('[CV2] OpenCV not available. Install with: pip install opencv-python')
 
 
 # ============================================================================
@@ -110,6 +119,102 @@ class CalibrationValidator:
                 config.system_message_area.get('height', 0) > 0)
 
 
+class ImageChangeDetector:
+    """Detects changes in system message area to avoid unnecessary OCR"""
+    
+    def __init__(self):
+        self.last_image_hash = None
+        self.last_ocr_time = 0
+        self.min_ocr_interval = 0.1  # Minimum time between OCR calls even if image changes
+        self.last_message_area = None  # Store last extracted area for debug
+    
+    def extract_message_area_from_screen(self, screen):
+        """Extract system message area from full screen (follows pattern from buffs/skill sequence)"""
+        if screen is None:
+            return None
+        
+        try:
+            x = config.system_message_area['x']
+            y = config.system_message_area['y']
+            width = config.system_message_area['width']
+            height = config.system_message_area['height']
+            
+            if width <= 0 or height <= 0:
+                return None
+            
+            # Calculate bounds (center-based like buffs)
+            center_x = x
+            center_y = y
+            half_width = width // 2
+            half_height = height // 2
+            
+            left = center_x - half_width
+            top = center_y - half_height
+            right = center_x + half_width
+            bottom = center_y + half_height
+            
+            # Extract region from screen (like area_skills extraction)
+            h, w = screen.shape[:2]
+            if (left >= 0 and top >= 0 and right <= w and bottom <= h):
+                message_area = screen[top:bottom, left:right]
+                return message_area
+            
+            return None
+        except Exception:
+            return None
+    
+    def calculate_image_hash(self, img_array):
+        """Calculate a hash of the image array for change detection"""
+        if img_array is None:
+            return None
+        try:
+            # Convert numpy array to bytes and hash (fast comparison)
+            img_bytes = img_array.tobytes()
+            return hashlib.md5(img_bytes).hexdigest()
+        except Exception:
+            return None
+    
+    def has_image_changed(self, screen, current_time):
+        """Check if the system message area image has changed (follows pattern from buffs)"""
+        # Enforce minimum interval between OCR calls
+        if current_time - self.last_ocr_time < self.min_ocr_interval:
+            return False
+        
+        # Extract message area from screen (like buffs extract area_skills)
+        message_area = self.extract_message_area_from_screen(screen)
+        if message_area is None:
+            return False
+        
+        # Store for debug saving
+        self.last_message_area = message_area.copy()
+        
+        # Calculate hash
+        current_hash = self.calculate_image_hash(message_area)
+        if current_hash is None:
+            return False
+        
+        # Check if hash changed
+        if current_hash != self.last_image_hash:
+            self.last_image_hash = current_hash
+            self.last_ocr_time = current_time
+            return True
+        
+        return False
+    
+    def save_debug_image(self):
+        """Save debug image of system message area (like buffs save debug images)"""
+        if not CV2_AVAILABLE or self.last_message_area is None:
+            return
+        
+        try:
+            debug_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'debug')
+            if not os.path.exists(debug_dir):
+                os.makedirs(debug_dir)
+            cv2.imwrite(os.path.join(debug_dir, 'system_message_area.png'), self.last_message_area)
+        except Exception as e:
+            print(f"[Auto Repair] Error saving debug image: {e}")
+
+
 # ============================================================================
 # Main Function
 # ============================================================================
@@ -117,6 +222,17 @@ class CalibrationValidator:
 # Global instances
 _break_warning_tracker = BreakWarningTracker()
 _repair_state_manager = RepairStateManager()
+_image_change_detector = ImageChangeDetector()
+
+
+def get_repair_count():
+    """Get current break warning detection count for UI display"""
+    return _break_warning_tracker.get_count()
+
+
+def get_repair_trigger_count():
+    """Get the trigger count required for repair"""
+    return BREAK_WARNING_TRIGGER_COUNT
 
 
 def check_auto_repair():
@@ -152,14 +268,80 @@ def check_auto_repair():
     
     config.last_auto_repair_check_time = current_time
     
-    # Read system message
-    message_text = ocr_utils.read_system_message_ocr(debug_prefix="[Auto Repair]")
+    # Follow pattern from buffs/skill sequence: capture full screen once, extract region
+    if not config.calibrator:
+        return
+    
+    try:
+        # Get window handle
+        if hasattr(config.connected_window, 'handle'):
+            hwnd = config.connected_window.handle
+        else:
+            hwnd = config.connected_window
+        
+        # Capture full screen (like auto_attack and buffs do)
+        screen = config.calibrator.capture_window(hwnd)
+        if screen is None:
+            return
+        
+        # Fast check: Only proceed if image has changed (avoids expensive OCR on identical frames)
+        # This follows the pattern: extract region from screen, check for changes
+        if not _image_change_detector.has_image_changed(screen, current_time):
+            return
+        
+        # Save debug image when change detected (like buffs save debug images)
+        _image_change_detector.save_debug_image()
+        
+        # Read system message (only when image changed)
+        message_text = ocr_utils.read_system_message_ocr(debug_prefix="[Auto Repair]")
+        
+        # Debug: Log when message is read (but no break warning detected)
+        if message_text:
+            # Check what text was read
+            if isinstance(message_text, dict):
+                lines = message_text.get('lines', [])
+                full_text = message_text.get('full', '')
+                if lines:
+                    # Only log if it contains relevant keywords to avoid spam
+                    text_lower = full_text.lower()
+                    if 'about' in text_lower or 'break' in text_lower:
+                        print(f"[Auto Repair] OCR read message (checking for break warning): {full_text[:100]}")
+                else:
+                    print(f"[Auto Repair] OCR returned empty lines")
+            else:
+                print(f"[Auto Repair] OCR returned non-dict: {type(message_text)}")
+        else:
+            # Only log occasionally to avoid spam
+            if not hasattr(check_auto_repair, 'last_no_message_log'):
+                check_auto_repair.last_no_message_log = 0
+            if current_time - check_auto_repair.last_no_message_log > 5.0:
+                print(f"[Auto Repair] OCR returned no message (system message area may be empty or OCR failed)")
+                check_auto_repair.last_no_message_log = current_time
+        
+    except Exception as e:
+        print(f"[Auto Repair] Error in check: {e}")
+        import traceback
+        traceback.print_exc()
+        return
     
     if not message_text:
         return
     
     # Check for break warning
     break_warning_detected = ocr_utils.check_item_break_warning(message_text)
+    
+    # Debug: Log keyword check result
+    if not break_warning_detected:
+        # Only log occasionally when we have text but no match
+        if isinstance(message_text, dict):
+            full_text = message_text.get('full', '')
+            text_lower = full_text.lower()
+            if 'about' in text_lower or 'break' in text_lower:
+                if not hasattr(check_auto_repair, 'last_no_match_log'):
+                    check_auto_repair.last_no_match_log = 0
+                if current_time - check_auto_repair.last_no_match_log > 2.0:
+                    print(f"[Auto Repair] Text contains 'about' or 'break' but pattern 'is about to break' not found: {full_text[:100]}")
+                    check_auto_repair.last_no_match_log = current_time
     
     if break_warning_detected:
         # Add detection

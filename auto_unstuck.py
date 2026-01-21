@@ -117,12 +117,16 @@ class UnstuckExecutor:
     
     @staticmethod
     def retarget_after_unstuck():
-        """Retarget after unstuck and verify mob if needed (uses RetargetManager)"""
-        # Use unified retargeting method with recursive retry
-        auto_attack.RetargetManager.retarget_with_mob_check(
-            reset_state_on_skip=True,
-            context="after unstuck"
-        )
+        """Retarget after unstuck and verify mob if needed (uses AutoTargetManager)"""
+        # Reset skill sequence BEFORE retargeting (consistent with other retarget scenarios)
+        # When unstuck happens, we're abandoning current combat state, so reset sequence first
+        if config.skill_sequence_manager:
+            config.skill_sequence_manager.reset_sequence()
+            print("[Auto Unstuck] Skill sequence reset before retargeting")
+        
+        # Use try_auto_target for consistency with rest of codebase
+        # It handles looting checks, auto-attack enabled checks, and uses RetargetManager internally
+        auto_attack._auto_target_manager.try_auto_target("after unstuck")
     
     @staticmethod
     def execute_unstuck(current_hp, time_stagnant):

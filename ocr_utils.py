@@ -9,6 +9,172 @@ import win32gui
 from PIL import ImageGrab
 import config
 import window_utils
+import os
+
+try:
+    import cv2
+except Exception:
+    cv2 = None
+
+
+def _apply_ssl_cert_workaround():
+    """Work around SSL 'unable to get local issuer certificate' on some Windows machines.
+
+    EasyOCR downloads model files the first time it runs. On misconfigured machines, Python's
+    certificate store can be broken; pointing SSL_CERT_FILE to certifi's CA bundle often fixes it.
+    """
+    try:
+        # Only set if the user/environment hasn't already configured it.
+        if os.environ.get("SSL_CERT_FILE"):
+            return
+        import certifi  # type: ignore
+        os.environ["SSL_CERT_FILE"] = certifi.where()
+    except Exception:
+        # If certifi isn't present or anything fails, we just leave it alone.
+        pass
+
+
+def _get_easyocr_local_model_dir():
+    """Return path to bundled EasyOCR models folder if present, else None."""
+    try:
+        # Works both in dev and PyInstaller builds.
+        return config.resolve_resource_path("easyocr_models")
+    except Exception:
+        return None
+
+
+def _build_easyocr_reader_kwargs():
+    """Build kwargs for easyocr.Reader with backwards compatibility."""
+    kwargs = {"verbose": False}
+    model_dir = _get_easyocr_local_model_dir()
+    if model_dir:
+        # Tell EasyOCR to use bundled models and avoid any network access.
+        kwargs["model_storage_directory"] = model_dir
+        kwargs["user_network_directory"] = model_dir
+        kwargs["download_enabled"] = False
+    return kwargs
+
+
+_LOW_RAM_MODE_CACHED = None
+
+
+def _get_total_physical_memory_bytes_windows():
+    """Return total physical RAM on Windows, or None if unavailable."""
+    try:
+        import ctypes
+
+        class MEMORYSTATUSEX(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        status = MEMORYSTATUSEX()
+        status.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+        ok = ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status))
+        if not ok:
+            return None
+        return int(status.ullTotalPhys)
+    except Exception:
+        return None
+
+
+def is_low_ram_mode() -> bool:
+    """Decide whether to run OCR in low-RAM safe mode."""
+    global _LOW_RAM_MODE_CACHED
+    if _LOW_RAM_MODE_CACHED is not None:
+        return _LOW_RAM_MODE_CACHED
+
+    override = getattr(config, "ocr_low_ram_mode", None)
+    if override is True:
+        _LOW_RAM_MODE_CACHED = True
+        return True
+    if override is False:
+        _LOW_RAM_MODE_CACHED = False
+        return False
+
+    # AUTO: treat <= threshold GB as "low RAM" for OCR stability.
+    total = _get_total_physical_memory_bytes_windows()
+    if total is None:
+        _LOW_RAM_MODE_CACHED = True  # safest fallback
+        return True
+    gb = total / (1024 ** 3)
+    threshold = float(getattr(config, "ocr_low_ram_threshold_gb", 10.0) or 10.0)
+    _LOW_RAM_MODE_CACHED = gb <= threshold
+    return _LOW_RAM_MODE_CACHED
+
+
+def _apply_low_ram_runtime_limits():
+    """Best-effort process-wide limits to reduce PyTorch/EasyOCR RAM spikes."""
+    if not is_low_ram_mode():
+        return
+    try:
+        # Limit BLAS/OpenMP thread pools (common source of RAM spikes on CPU).
+        os.environ.setdefault("OMP_NUM_THREADS", str(getattr(config, 'ocr_cpu_threads', 1)))
+        os.environ.setdefault("MKL_NUM_THREADS", str(getattr(config, 'ocr_cpu_threads', 1)))
+        os.environ.setdefault("NUMEXPR_NUM_THREADS", str(getattr(config, 'ocr_cpu_threads', 1)))
+    except Exception:
+        pass
+
+    # If torch is available, also limit torch threads.
+    try:
+        import torch
+        threads = int(getattr(config, 'ocr_cpu_threads', 1) or 1)
+        torch.set_num_threads(threads)
+        if hasattr(torch, "set_num_interop_threads"):
+            torch.set_num_interop_threads(max(1, min(threads, 2)))
+    except Exception:
+        pass
+
+
+def _downscale_for_ocr(img_array: np.ndarray) -> np.ndarray:
+    """Downscale big images/photos to keep OCR memory stable on 8 GB systems."""
+    if img_array is None:
+        return img_array
+    if not is_low_ram_mode():
+        return img_array
+
+    h, w = img_array.shape[:2]
+    if h <= 0 or w <= 0:
+        return img_array
+
+    max_side = int(getattr(config, 'ocr_max_image_side', 2000) or 2000)
+    max_pixels = int(getattr(config, 'ocr_max_pixels', 3_000_000) or 3_000_000)
+
+    # First pass: cap max side length.
+    scale = 1.0
+    current_max_side = max(h, w)
+    if current_max_side > max_side:
+        scale = min(scale, max_side / float(current_max_side))
+
+    # Second pass: cap total pixels (more robust for very wide/tall images).
+    pixels = h * w
+    if pixels > max_pixels:
+        scale = min(scale, (max_pixels / float(pixels)) ** 0.5)
+
+    if scale >= 0.999:
+        return img_array
+
+    new_w = max(1, int(w * scale))
+    new_h = max(1, int(h * scale))
+
+    # Prefer OpenCV for speed if available; otherwise fall back to PIL.
+    try:
+        if cv2 is not None:
+            return cv2.resize(img_array, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        from PIL import Image
+        pil = Image.fromarray(img_array)
+        pil = pil.resize((new_w, new_h), resample=Image.BILINEAR)
+        return np.array(pil)
+    except Exception:
+        return img_array
 
 
 def check_ocr_availability():
@@ -22,10 +188,19 @@ def check_ocr_availability():
         - troubleshooting: Specific troubleshooting steps based on error type
     """
     try:
+        # Only needed if EasyOCR must download models (i.e., not bundled).
+        if not _get_easyocr_local_model_dir():
+            _apply_ssl_cert_workaround()
+        _apply_low_ram_runtime_limits()
         # Try GPU first if enabled
-        if config.ocr_use_gpu:
+        if config.ocr_use_gpu and not is_low_ram_mode():
             try:
-                test_reader = easyocr.Reader(['en'], gpu=True, verbose=False)
+                reader_kwargs = _build_easyocr_reader_kwargs()
+                try:
+                    test_reader = easyocr.Reader(['en'], gpu=True, **reader_kwargs)
+                except TypeError:
+                    # Older EasyOCR versions may not support some kwargs.
+                    test_reader = easyocr.Reader(['en'], gpu=True, verbose=False)
                 # Test with a simple image (white rectangle)
                 test_image = np.ones((50, 200, 3), dtype=np.uint8) * 255
                 test_reader.readtext(test_image, detail=0)
@@ -38,7 +213,11 @@ def check_ocr_availability():
         
         # Try CPU
         try:
-            test_reader = easyocr.Reader(['en'], gpu=False, verbose=False)
+            reader_kwargs = _build_easyocr_reader_kwargs()
+            try:
+                test_reader = easyocr.Reader(['en'], gpu=False, **reader_kwargs)
+            except TypeError:
+                test_reader = easyocr.Reader(['en'], gpu=False, verbose=False)
             # Test with a simple image (white rectangle)
             test_image = np.ones((50, 200, 3), dtype=np.uint8) * 255
             test_reader.readtext(test_image, detail=0)
@@ -82,6 +261,16 @@ def _get_troubleshooting_steps(error_msg, mode):
             "   • Install PyTorch with CUDA: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118\n"
             "   • Verify: python -c \"import torch; print(torch.cuda.is_available())\"\n"
             "3. Try CPU mode by setting ocr_use_gpu = False in config.py"
+        )
+    elif ('ssl' in error_lower and 'certificate' in error_lower) or 'unable to get local issuer certificate' in error_lower:
+        return (
+            "SSL certificate error detected while downloading OCR model files.\n\n"
+            "This is not a RAM issue; EasyOCR can't download its models due to broken/missing root certificates.\n\n"
+            "Solutions:\n"
+            "1. Update certs (recommended): pip install --upgrade certifi\n"
+            "2. If you're behind a proxy/antivirus doing HTTPS inspection, disable it or add a bypass for Python/GitHub\n"
+            "3. Ensure system date/time is correct\n"
+            "4. Restart the app after fixing\n"
         )
     elif 'torch' in error_lower or 'pytorch' in error_lower:
         return (
@@ -157,24 +346,39 @@ def initialize_ocr_reader():
     if not config.ocr_available:
         print("OCR is not available on this system (checked on startup)")
         return False
+
+    # Only needed if EasyOCR must download models (i.e., not bundled).
+    if not _get_easyocr_local_model_dir():
+        _apply_ssl_cert_workaround()
+    _apply_low_ram_runtime_limits()
     
     if config.ocr_reader is None:
         print("Initializing EasyOCR (this may take a moment)...")
         
         # Try GPU first if enabled
-        if config.ocr_use_gpu:
+        if config.ocr_use_gpu and not is_low_ram_mode():
             try:
-                config.ocr_reader = easyocr.Reader(['en'], gpu=True, verbose=False)
+                reader_kwargs = _build_easyocr_reader_kwargs()
+                try:
+                    config.ocr_reader = easyocr.Reader(['en'], gpu=True, **reader_kwargs)
+                except TypeError:
+                    config.ocr_reader = easyocr.Reader(['en'], gpu=True, verbose=False)
                 print("EasyOCR initialized successfully with GPU acceleration!")
                 return True
             except Exception as e:
                 print(f"GPU initialization failed: {e}")
                 print("Falling back to CPU mode...")
                 # Fall through to CPU initialization
+        elif is_low_ram_mode() and config.ocr_use_gpu:
+            print("OCR low-RAM mode enabled (auto): forcing CPU mode for stability on low-memory systems")
         
         # Use CPU (either because GPU is disabled or GPU failed)
         try:
-            config.ocr_reader = easyocr.Reader(['en'], gpu=False, verbose=False)
+            reader_kwargs = _build_easyocr_reader_kwargs()
+            try:
+                config.ocr_reader = easyocr.Reader(['en'], gpu=False, **reader_kwargs)
+            except TypeError:
+                config.ocr_reader = easyocr.Reader(['en'], gpu=False, verbose=False)
             print("EasyOCR initialized successfully with CPU mode!")
         except Exception as e:
             print(f"Error initializing EasyOCR: {e}")
@@ -235,7 +439,31 @@ def read_system_message_ocr(debug_prefix="[System Message]"):
                 return None
         
         img_array = np.array(img)
-        results = config.ocr_reader.readtext(img_array, detail=1, paragraph=False)
+        img_array = _downscale_for_ocr(img_array)
+        try:
+            results = config.ocr_reader.readtext(
+                img_array,
+                detail=1,
+                paragraph=False,
+                batch_size=int(getattr(config, 'ocr_batch_size', 1) or 1),
+            )
+        except Exception as e:
+            # If OCR fails with memory issues on a non-low-ram machine, retry once with
+            # forced low-RAM constraints + stronger downscale.
+            msg = str(e).lower()
+            if ('out of memory' in msg or 'memory' in msg) and not is_low_ram_mode():
+                global _LOW_RAM_MODE_CACHED
+                _LOW_RAM_MODE_CACHED = True
+                _apply_low_ram_runtime_limits()
+                img_array_retry = _downscale_for_ocr(img_array)
+                results = config.ocr_reader.readtext(
+                    img_array_retry,
+                    detail=1,
+                    paragraph=False,
+                    batch_size=1,
+                )
+            else:
+                raise
         
         if results and len(results) > 0:
             text_lines = []
@@ -323,11 +551,13 @@ def check_item_break_warning(ocr_result):
     
     try:
         # Check lines for "is about to break" pattern
+        # More flexible pattern to handle OCR variations (e.g., "isabout", "aboutto", etc.)
+        # Pattern: must contain "is", "about", "to", and "break" in that order (allowing some flexibility)
+        pattern = r'is.*?about.*?to.*?break'
+        
         if break_lines:
             for line in reversed(break_lines):
-                # Pattern: "something is about to break"
-                # Case-insensitive match
-                pattern = r'is\s+about\s+to\s+break'
+                # Case-insensitive match with flexible spacing
                 if re.search(pattern, line, re.IGNORECASE):
                     current_time = time.time()
                     if not hasattr(check_item_break_warning, 'last_debug_time'):
@@ -337,18 +567,48 @@ def check_item_break_warning(ocr_result):
                         check_item_break_warning.last_debug_time = current_time
                     return True
         
-        # Fallback: check full text
+        # Fallback: check full text (all lines combined)
         text_to_parse = space_text if space_text else full_text
         if text_to_parse:
-            pattern = r'is\s+about\s+to\s+break'
             if re.search(pattern, text_to_parse, re.IGNORECASE):
                 current_time = time.time()
                 if not hasattr(check_item_break_warning, 'last_debug_time'):
                     check_item_break_warning.last_debug_time = 0
                 if current_time - check_item_break_warning.last_debug_time > 2.0:
-                    print(f"[Auto Repair] Item break warning detected (fallback)")
+                    print(f"[Auto Repair] Item break warning detected (fallback): {text_to_parse[:80]}")
                     check_item_break_warning.last_debug_time = current_time
                 return True
+        
+        # Additional fallback: Check if we have all keywords even if pattern doesn't match exactly
+        # This handles cases where OCR might split words incorrectly
+        if break_lines:
+            for line in reversed(break_lines):
+                line_lower = line.lower()
+                # Check if all required words are present (in any order but should be close)
+                has_is = 'is' in line_lower
+                has_about = 'about' in line_lower
+                has_to = 'to' in line_lower
+                has_break = 'break' in line_lower
+                
+                if has_is and has_about and has_to and has_break:
+                    # Try to find positions to verify order
+                    pos_is = line_lower.find('is')
+                    pos_about = line_lower.find('about')
+                    pos_to = line_lower.find(' to ')  # Space before/after 'to' to avoid matching 'to' in words
+                    if pos_to == -1:
+                        pos_to = line_lower.find('to', pos_about)
+                    pos_break = line_lower.find('break')
+                    
+                    # Check if they appear in roughly the right order (allow some flexibility)
+                    if (pos_is < pos_break and pos_about < pos_break and 
+                        (pos_to == -1 or (pos_about < pos_to < pos_break))):
+                        current_time = time.time()
+                        if not hasattr(check_item_break_warning, 'last_debug_time'):
+                            check_item_break_warning.last_debug_time = 0
+                        if current_time - check_item_break_warning.last_debug_time > 2.0:
+                            print(f"[Auto Repair] Item break warning detected (flexible match): {line[:80]}")
+                            check_item_break_warning.last_debug_time = current_time
+                        return True
                 
     except Exception as e:
         current_time = time.time()

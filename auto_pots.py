@@ -28,9 +28,29 @@ class AutoPots:
             hwnd = config.connected_window.handle
             current_time = time.time()
             
-            # Calculate HP/MP percentages (only once per cycle)
-            hp_percent = config.calibrator.get_hp_percentage(hwnd)
-            mp_percent = config.calibrator.get_mp_percentage(hwnd)
+            # Throttle HP/MP capture to reduce CPU usage
+            # Only capture if enough time has passed since last capture
+            should_check_hp = (config.auto_hp_enabled and 
+                              (current_time - config.last_hp_capture_time >= config.HP_CAPTURE_INTERVAL))
+            should_check_mp = (config.auto_mp_enabled and 
+                              (current_time - config.last_mp_capture_time >= config.MP_CAPTURE_INTERVAL))
+            
+            # If neither HP nor MP needs checking, skip expensive screen capture
+            if not should_check_hp and not should_check_mp:
+                return
+            
+            # Calculate HP/MP percentages (only when needed)
+            if should_check_hp:
+                hp_percent = config.calibrator.get_hp_percentage(hwnd)
+                config.last_hp_capture_time = current_time
+            else:
+                hp_percent = config.current_hp_percentage  # Use cached value
+            
+            if should_check_mp:
+                mp_percent = config.calibrator.get_mp_percentage(hwnd)
+                config.last_mp_capture_time = current_time
+            else:
+                mp_percent = config.current_mp_percentage  # Use cached value
             
             # Clamp values to 0-100
             hp_percent = max(0, min(100, hp_percent))

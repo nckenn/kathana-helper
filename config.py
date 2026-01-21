@@ -71,7 +71,7 @@ MOB_IMAGES_FOLDER = "mob_images"
 system_message_area = {'x': 0, 'y': 0, 'width': 0, 'height': 0}
 last_repair_time = 0
 REPAIR_COOLDOWN = 5.0
-AUTO_REPAIR_CHECK_INTERVAL = 1.0
+AUTO_REPAIR_CHECK_INTERVAL = 0.1  # Check frequently (every 0.1s), but OCR only runs when image changes (image change detection)
 last_auto_repair_check_time = 0
 
 # Mob detection optimization
@@ -84,6 +84,17 @@ ocr_reader = None  # EasyOCR reader instance (lazy loaded)
 ocr_use_gpu = True  # Try to use GPU if available, fallback to CPU if not
 ocr_available = False  # Set to True if OCR check passes on startup
 ocr_mode = None  # 'gpu', 'cpu', or None - indicates which mode OCR is using
+
+# OCR low-RAM safety
+# - If None: auto-detect based on system RAM (recommended default for mixed machines).
+# - If True: force conservative runtime settings (recommended for 8 GB systems).
+# - If False: allow higher-performance settings (may use more RAM).
+ocr_low_ram_mode = None
+ocr_low_ram_threshold_gb = 10.0   # AUTO mode: <= this RAM enables low-RAM safety
+ocr_batch_size = 1               # EasyOCR readtext batch size (1 is safest)
+ocr_max_image_side = 2000        # Downscale images so max(h, w) <= this before OCR
+ocr_max_pixels = 3_000_000       # If image exceeds this, downscale even more aggressively
+ocr_cpu_threads = 1              # Limit CPU threads (prevents RAM spikes on PyTorch)
 
 # Settings file
 SETTINGS_FILE = "bot_settings.json"
@@ -104,7 +115,7 @@ last_smart_loot_time = 0
 SMART_LOOT_COOLDOWN = 0.2  # Cooldown between loot attempts (reduced for faster looting, allows retry if first fails)
 is_looting = False  # Flag to prevent auto-targeting during looting
 looting_start_time = 0
-LOOTING_DURATION = 2.0  # Duration to prevent auto-targeting after looting starts (increased to allow loot to complete)
+LOOTING_DURATION = 1.0  # Duration to prevent auto-targeting after looting starts (reduced for faster retargeting)
 unstuck_timeout = 8.0
 last_damage_detected_time = 0
 last_damage_value = None

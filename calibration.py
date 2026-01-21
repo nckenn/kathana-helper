@@ -24,6 +24,7 @@ class Calibrator:
         self.skills_bar1_position = None  # (x, y) position of first skill bar
         self.skills_bar2_position = None  # (x, y) position of second skill bar
         self.skills_spacing = None  # Spacing between skill bars in pixels
+        self.system_message_area = None  # (x, y, width, height) for system message region
         self.debug_dir = os.path.join(os.path.dirname(__file__), 'debug')
         
         # Create debug directory if it doesn't exist
@@ -37,7 +38,7 @@ class Calibrator:
     def save_debug_image(self, image, name):
         """Save a debug image"""
         try:
-            filename = f'calibrar_{name}.png'
+            filename = f'calibrate_{name}.png'
             filepath = os.path.join(self.debug_dir, filename)
             cv2.imwrite(filepath, image)
             print(f'[Calibration] Debug image saved: {filename}')
@@ -320,6 +321,187 @@ class Calibrator:
             self.save_debug_image(screen_img, 'skill_bars_error')
             return (None, None)
     
+    def find_system_message_area(self, screen_img):
+        """
+        Find system message area using chat scrollbar as reference
+        
+        Args:
+            screen_img: Screen image in BGR format
+        Returns:
+            tuple: (x, y, width, height) or None if not found
+        """
+        try:
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            scrollbar_path = os.path.join(current_dir, 'chat_bar_1.png')
+            
+            print(f'[Calibration] Looking for chat scrollbar at: {scrollbar_path}')
+            
+            # Check if template file exists
+            if not os.path.exists(scrollbar_path):
+                print(f'[Calibration] ERROR: File {scrollbar_path} does not exist')
+                self.save_debug_image(screen_img, 'system_message_missing_file')
+                return None
+            
+            # Load template image
+            scrollbar_template = cv2.imread(scrollbar_path)
+            
+            if scrollbar_template is None:
+                print(f'[Calibration] ERROR: Could not load image {scrollbar_path}')
+                self.save_debug_image(screen_img, 'system_message_load_error')
+                return None
+            
+            # Get template dimensions
+            template_h, template_w = scrollbar_template.shape[:2]
+            
+            print(f'[Calibration] Chat scrollbar template dimensions: {template_w}x{template_h}')
+            
+            # Save loaded template for debugging
+            self.save_debug_image(scrollbar_template, 'chat_scrollbar_loaded')
+            
+            # Convert to grayscale for template matching
+            gray_screen = cv2.cvtColor(screen_img, cv2.COLOR_BGR2GRAY)
+            gray_template = cv2.cvtColor(scrollbar_template, cv2.COLOR_BGR2GRAY)
+            
+            # Perform template matching
+            result = cv2.matchTemplate(gray_screen, gray_template, cv2.TM_CCOEFF_NORMED)
+            
+            # Get best match location
+            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+            
+            print(f'[Calibration] Chat scrollbar match: {max_val:.4f} at {max_loc}')
+            
+            # Threshold for acceptable match
+            threshold = 0.65
+            
+            if max_val >= threshold:
+                scrollbar_x, scrollbar_y = max_loc
+
+                # Optional vertical offset to nudge the scrollbar reference + chat area downward
+                # (useful if the match is slightly above the actual text region)
+                vertical_offset_px = 4
+                scrollbar_y = max(0, scrollbar_y + vertical_offset_px)
+                
+                # Calculate system message area
+                # In your UI, the scrollbar sits on the LEFT edge of the chat panel.
+                # The actual system message/chat text region is to the RIGHT of the scrollbar
+                # and should have the SAME height as the scrollbar.
+                
+                screen_h, screen_w = screen_img.shape[:2]
+                
+                # Height is exactly the scrollbar height (clamped to screen)
+                chat_top = max(0, scrollbar_y)
+                chat_bottom = min(screen_h, scrollbar_y + template_h)
+                chat_height = max(0, chat_bottom - chat_top)
+
+                # Text region begins immediately to the right of the scrollbar (no gap)
+                gap_from_scrollbar = 0
+                chat_left = scrollbar_x + template_w + gap_from_scrollbar
+                chat_left = max(0, min(screen_w, chat_left))
+
+                # Determine the RIGHT boundary by locating a second UI anchor (`chat_bar_2.png`)
+                # This is more stable than scanning for dark pixels.
+                anchor_path = os.path.join(current_dir, 'chat_bar_2.png')
+                anchor_template = None
+                anchor_loc = None
+                anchor_w = 0
+                anchor_h = 0
+
+                if os.path.exists(anchor_path):
+                    anchor_template = cv2.imread(anchor_path)
+                    if anchor_template is not None:
+                        anchor_h, anchor_w = anchor_template.shape[:2]
+                        self.save_debug_image(anchor_template, 'chat_bar_2_loaded')
+
+                        gray_anchor = cv2.cvtColor(anchor_template, cv2.COLOR_BGR2GRAY)
+                        anchor_result = cv2.matchTemplate(gray_screen, gray_anchor, cv2.TM_CCOEFF_NORMED)
+                        _, anchor_max_val, _, anchor_max_loc = cv2.minMaxLoc(anchor_result)
+                        print(f'[Calibration] Char bar 2 match: {anchor_max_val:.4f} at {anchor_max_loc}')
+
+                        anchor_threshold = 0.60
+                        if anchor_max_val >= anchor_threshold:
+                            anchor_loc = anchor_max_loc
+                        else:
+                            print(f'[Calibration] Warning: chat_bar_2 match below threshold ({anchor_max_val:.4f} < {anchor_threshold})')
+                    else:
+                        print(f'[Calibration] ERROR: Could not load image {anchor_path}')
+                else:
+                    print(f'[Calibration] Warning: File {anchor_path} does not exist')
+
+                # Compute width based on distance from scrollbar to the anchor
+                # If anchor is found, we use its RIGHT edge as the boundary (with a small margin).
+                right_margin_from_anchor = 2
+                if anchor_loc is not None:
+                    anchor_x, anchor_y = anchor_loc
+                    chat_right = max(chat_left, (anchor_x + anchor_w) - right_margin_from_anchor)
+                else:
+                    # Fallback if anchor not found: keep a conservative width
+                    chat_right = min(screen_w, chat_left + 320)
+
+                chat_width = max(0, chat_right - chat_left)
+
+                # Calculate center and dimensions for system_message_area format
+                chat_center_x = chat_left + chat_width // 2
+                chat_center_y = chat_top + chat_height // 2
+                
+                # Store as (x, y, width, height) where x,y is center
+                self.system_message_area = (chat_center_x, chat_center_y, chat_width, chat_height)
+                
+                # Create debug image showing found scrollbar and calculated area
+                debug_img = screen_img.copy()
+                
+                # Draw scrollbar location (apply vertical offset so debug matches calibrated area)
+                cv2.rectangle(
+                    debug_img,
+                    (scrollbar_x, scrollbar_y),
+                    (scrollbar_x + template_w, scrollbar_y + template_h),
+                    (0, 255, 0),
+                    2
+                )
+                
+                # Draw calculated chat area
+                left = chat_left
+                top = chat_top
+                right = min(screen_w, chat_left + chat_width)
+                bottom = chat_bottom
+                cv2.rectangle(debug_img, (left, top), (right, bottom), (255, 0, 0), 2)
+
+                # Draw detected width boundary for easier visual tuning
+                try:
+                    boundary_x = right
+                    cv2.line(debug_img, (boundary_x, top), (boundary_x, bottom), (255, 255, 0), 2)
+                except Exception:
+                    pass
+
+                # Draw anchor location if found
+                if anchor_loc is not None and anchor_w > 0 and anchor_h > 0:
+                    ax, ay = anchor_loc
+                    cv2.rectangle(debug_img, (ax, ay), (ax + anchor_w, ay + anchor_h), (0, 255, 255), 2)
+                
+                self.save_debug_image(debug_img, 'system_message_area_found')
+                
+                print(f'[Calibration] Chat scrollbar found at: {max_loc}')
+                print(f'[Calibration] System message area calculated: center=({chat_center_x}, {chat_center_y}), size={chat_width}x{chat_height}')
+                
+                return self.system_message_area
+            else:
+                print('[Calibration] Chat scrollbar not found with sufficient confidence')
+                print(f'[Calibration] Match value: {max_val:.4f} (minimum threshold: {threshold})')
+                
+                # Create debug image showing failed match
+                debug_img = screen_img.copy()
+                cv2.rectangle(debug_img, max_loc, 
+                             (max_loc[0] + template_w, max_loc[1] + template_h), (0, 0, 255), 2)
+                self.save_debug_image(debug_img, 'system_message_area_not_found')
+                
+                return None
+                
+        except Exception as e:
+            print(f'[Calibration] Error finding system message area: {e}')
+            import traceback
+            traceback.print_exc()
+            self.save_debug_image(screen_img, 'system_message_area_error')
+            return None
+    
     def calibrate(self, hwnd):
         """
         Perform calibration by capturing the window and finding bars
@@ -346,6 +528,13 @@ class Calibrator:
                     print('[Calibration] Skill bars found successfully!')
                 else:
                     print('[Calibration] Warning: Skill bars not found, but HP/MP calibration succeeded')
+                
+                # Find system message area using chat scrollbar
+                system_message_result = self.find_system_message_area(screen)
+                if system_message_result is not None:
+                    print('[Calibration] System message area found successfully!')
+                else:
+                    print('[Calibration] Warning: System message area not found, but HP/MP calibration succeeded')
                 
                 # Print detailed calibration summary
                 self.print_calibration_summary()
@@ -386,15 +575,23 @@ class Calibrator:
         else:
             print('[Calibration] ✗ Skill Bars: NOT FOUND')
         
+        if self.system_message_area:
+            x, y, w, h = self.system_message_area
+            print(f'[Calibration] ✓ System Message Area: Center=({x}, {y}), Size={w}x{h}')
+        else:
+            print('[Calibration] ✗ System Message Area: NOT FOUND')
+        
         print('='*60)
         print('[Calibration] To verify calibration, check these debug images:')
-        print(f'[Calibration]   - calibrar_original.png (full screen capture)')
-        print(f'[Calibration]   - calibrar_contours.png (detected HP/MP contours)')
-        print(f'[Calibration]   - calibrar_hp_found.png (extracted HP bar)')
-        print(f'[Calibration]   - calibrar_mp_found.png (extracted MP bar)')
+        print(f'[Calibration]   - calibrate_original.png (full screen capture)')
+        print(f'[Calibration]   - calibrate_contours.png (detected HP/MP contours)')
+        print(f'[Calibration]   - calibrate_hp_found.png (extracted HP bar)')
+        print(f'[Calibration]   - calibrate_mp_found.png (extracted MP bar)')
         if self.skills_bar1_position:
-            print(f'[Calibration]   - calibrar_skill_bars_found.png (skill bars with green boxes)')
-            print(f'[Calibration]   - calibrar_skills_sequence_area.png (skill area)')
+            print(f'[Calibration]   - calibrate_skill_bars_found.png (skill bars with green boxes)')
+            print(f'[Calibration]   - calibrate_skills_sequence_area.png (skill area)')
+        if self.system_message_area:
+            print(f'[Calibration]   - calibrate_system_message_area_found.png (scrollbar and chat area)')
         print('='*60 + '\n')
     
     def is_calibrated(self):
@@ -415,7 +612,9 @@ class Calibrator:
             'mp_position': self.mp_position,
             'skills_bar1_position': self.skills_bar1_position,
             'skills_bar2_position': self.skills_bar2_position,
-            'skills_spacing': self.skills_spacing
+            'skills_spacing': self.skills_spacing,
+            'system_message_calibrated': self.system_message_area is not None,
+            'system_message_area': self.system_message_area
         }
         return status
     

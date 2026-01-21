@@ -52,18 +52,11 @@ def smart_loot():
     try:
         current_time = time.time()
         
-        # Check cooldown to prevent spam (but allow if enough time has passed)
-        # Only apply cooldown if we actually executed loot before (not just attempted)
-        time_since_last = current_time - config.last_smart_loot_time
-        if time_since_last < config.SMART_LOOT_COOLDOWN:
-            # Only skip if we're still in looting state (meaning previous loot is still active)
-            if config.is_looting and (current_time - config.looting_start_time) < config.LOOTING_DURATION:
-                print(f"[Smart Loot] Skipped - already looting (started {current_time - config.looting_start_time:.2f}s ago)")
-                return
-            # If cooldown is very short, allow it (might be a retry)
-            elif time_since_last < 0.1:
-                print(f"[Smart Loot] Skipped - too soon after last attempt ({time_since_last:.2f}s)")
-                return
+        # Check if already looting to prevent duplicate calls
+        # Only skip if we're still actively looting (not just based on time)
+        if config.is_looting and (current_time - config.looting_start_time) < config.LOOTING_DURATION:
+            print(f"[Smart Loot] Skipped - already looting (started {current_time - config.looting_start_time:.2f}s ago)")
+            return
         
         # Check if pick action is enabled
         if not config.action_slots['pick']['enabled']:
@@ -84,22 +77,22 @@ def smart_loot():
         
         print(f"[Smart Loot] Starting loot sequence (key: {action_key})")
         
-        # Initial delay to allow loot to appear (loot sometimes appears slightly after death)
-        initial_delay = 0.15
-        time.sleep(initial_delay)
-        
-        # Multiple loot attempts with delays to ensure items are picked up
-        # Increased attempts and better spacing for more reliable looting
+        # No initial delay - loot immediately after kill detection
+        # Multiple loot attempts with minimal delays to ensure items are picked up
         num_attempts = 4
-        attempt_delay = 0.25  # Slightly increased delay between attempts
+        attempt_delay = 0.1  # Reduced delay between attempts for faster looting
         
         for attempt in range(num_attempts):
             input_handler.send_input(action_key)
             if attempt < num_attempts - 1:  # Don't sleep after last attempt
                 time.sleep(attempt_delay)
         
-        print(f"[Smart Loot] Completed ({num_attempts} attempts with {initial_delay}s initial delay)")
-        
+        print(f"[Smart Loot] Completed ({num_attempts} attempts)")
+
+        # Loot sequence is done; allow auto-targeting again immediately.
+        # (Auto-attack callers often retarget right after smart_loot() returns.)
+        config.is_looting = False
+
     except Exception as e:
         print(f"[Smart Loot] Error: {e}")
         import traceback
@@ -126,6 +119,17 @@ def check_buffs():
     if (not config.calibrator.skills_bar1_position or 
         not config.calibrator.skills_bar2_position):
         return
+    
+    # Throttle buff checking to reduce CPU usage (check every 0.5s instead of every 0.1s)
+    current_time = time.time()
+    if not hasattr(check_buffs, 'last_check_time'):
+        check_buffs.last_check_time = 0
+    BUFF_CHECK_INTERVAL = 0.5  # Check buffs every 0.5 seconds
+    
+    if current_time - check_buffs.last_check_time < BUFF_CHECK_INTERVAL:
+        return
+    
+    check_buffs.last_check_time = current_time
     
     try:
         import cv2
@@ -257,16 +261,24 @@ def bot_loop():
                     print("[Bot Start] Forced initial auto-targeting")
                 
                 # High priority: Auto pots and buffs (buffs should be checked early for combat effectiveness)
-                autopots.check_auto_pots()
-                check_buffs()  # High priority - check buffs early
+                # Only check if features are enabled to avoid unnecessary work
+                if config.auto_hp_enabled or config.auto_mp_enabled:
+                    autopots.check_auto_pots()
+                check_buffs()  # High priority - check buffs early (has internal throttling)
                 # Skill sequence is now executed inside check_auto_attack when enemy is found
-                auto_attack.check_auto_attack()
-                auto_unstuck.check_auto_unstuck()
-                check_skill_slots()
-                auto_repair.check_auto_repair()
-                check_mouse_clicker()
+                if config.auto_attack_enabled:
+                    auto_attack.check_auto_attack()
+                if config.auto_change_target_enabled:
+                    auto_unstuck.check_auto_unstuck()
+                check_skill_slots()  # Lightweight - just checks intervals
+                if config.auto_repair_enabled:
+                    auto_repair.check_auto_repair()
+                if config.mouse_clicker_enabled:
+                    check_mouse_clicker()
             
-        time.sleep(0.1)
+        # Sleep slightly longer since most functions now have internal throttling
+        # This reduces CPU usage while maintaining responsiveness
+        time.sleep(0.15)
     
     # Clean up when bot stops
     print("Bot loop stopped")
