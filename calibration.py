@@ -25,6 +25,8 @@ class Calibrator:
         self.skills_bar2_position = None  # (x, y) position of second skill bar
         self.skills_spacing = None  # Spacing between skill bars in pixels
         self.system_message_area = None  # (x, y, width, height) for system message region
+        self.enemy_hp_area = None  # (x, y, width, height) for enemy HP bar area
+        self.enemy_name_area = None  # (x, y, width, height) for enemy name area
         self.debug_dir = os.path.join(os.path.dirname(__file__), 'debug')
         
         # Create debug directory if it doesn't exist
@@ -208,9 +210,17 @@ class Calibrator:
             tuple: (bar1_position, bar2_position) or (None, None) if not found
         """
         try:
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            bar1_path = os.path.join(current_dir, 'skill_bar_1.bmp')
-            bar2_path = os.path.join(current_dir, 'skill_bar_2.bmp')
+            # Use resolve_resource_path for PyInstaller compatibility
+            bar1_path = config.resolve_resource_path('skill_bar_1.bmp')
+            bar2_path = config.resolve_resource_path('skill_bar_2.bmp')
+            
+            # Fallback to old method for development if resolve_resource_path returns None
+            if bar1_path is None:
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                bar1_path = os.path.join(current_dir, 'skill_bar_1.bmp')
+            if bar2_path is None:
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                bar2_path = os.path.join(current_dir, 'skill_bar_2.bmp')
             
             print(f'[Calibration] Looking for skill bar 1 at: {bar1_path}')
             print(f'[Calibration] Looking for skill bar 2 at: {bar2_path}')
@@ -321,6 +331,138 @@ class Calibrator:
             self.save_debug_image(screen_img, 'skill_bars_error')
             return (None, None)
     
+    def find_enemy_hp_and_name_area(self, screen_img):
+        """
+        Find enemy HP bar and name area using MP position as reference
+        
+        Args:
+            screen_img: Screen image in BGR format
+        Returns:
+            tuple: (enemy_hp_area, enemy_name_area) or (None, None) if not found
+        """
+        if self.mp_position is None:
+            print('[Calibration] Cannot find enemy HP/name area: MP position not calibrated')
+            return (None, None)
+        
+        try:
+            mp_x, mp_y = self.mp_position
+            
+            # Constants for enemy detection area (matching auto_attack.py)
+            SEARCH_AREA_OFFSET_Y = 19  # Pixels below MP position
+            SEARCH_AREA_WIDTH = 163    # Width of search area
+            SEARCH_AREA_HEIGHT = 35    # Height of search area
+            SEARCH_AREA_OFFSET_X = -1  # X offset from MP position
+            NAME_AREA_HEIGHT = 18      # Height of name area
+            
+            screen_h, screen_w = screen_img.shape[:2]
+            
+            # Calculate search area bounds
+            search_x = max(0, mp_x + SEARCH_AREA_OFFSET_X)
+            search_y = max(0, mp_y + SEARCH_AREA_OFFSET_Y)
+            search_x2 = min(screen_w, search_x + SEARCH_AREA_WIDTH)
+            search_y2 = min(screen_h, search_y + SEARCH_AREA_HEIGHT)
+            
+            # Ensure valid area
+            if search_x2 <= search_x or search_y2 <= search_y:
+                print('[Calibration] Invalid search area bounds for enemy detection')
+                return (None, None)
+            
+            # Extract search area
+            search_area = screen_img[search_y:search_y2, search_x:search_x2]
+            
+            if search_area.size == 0 or search_area.shape[0] < NAME_AREA_HEIGHT:
+                print('[Calibration] Search area too small for enemy detection')
+                return (None, None)
+            
+            # Extract enemy name area (first 18 pixels)
+            name_area = search_area[0:NAME_AREA_HEIGHT, :]
+            
+            # Convert to HSV for red detection (HP bar)
+            hsv = cv2.cvtColor(search_area, cv2.COLOR_BGR2HSV)
+            
+            # Red color ranges for HP bar detection
+            lower_red1 = np.array([0, 100, 100])
+            upper_red1 = np.array([10, 255, 255])
+            lower_red2 = np.array([160, 100, 100])
+            upper_red2 = np.array([180, 255, 255])
+            
+            red_mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
+            red_mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
+            red_mask = cv2.bitwise_or(red_mask1, red_mask2)
+            
+            # Look for HP bar in the area below name (rows 18-35)
+            hp_search_region = red_mask[NAME_AREA_HEIGHT:, :]
+            
+            # Find contours in HP search region
+            hp_contours, _ = cv2.findContours(hp_search_region, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            hp_found = False
+            hp_x, hp_y, hp_w, hp_h = 0, 0, 0, 0
+            
+            # Look for a red bar with reasonable dimensions
+            for contour in hp_contours:
+                x, y, w, h = cv2.boundingRect(contour)
+                # HP bar should be roughly 10-163 pixels wide and 6-18 pixels tall
+                if w >= 10 and w <= 163 and h >= 6 and h <= 18:
+                    hp_x = x
+                    hp_y = y + NAME_AREA_HEIGHT  # Adjust Y to absolute position in search area
+                    hp_w = w
+                    hp_h = h
+                    hp_found = True
+                    break
+            
+            # Store areas as (center_x, center_y, width, height)
+            if hp_found:
+                # Enemy HP area: relative to screen
+                enemy_hp_x = search_x + hp_x
+                enemy_hp_y = search_y + hp_y
+                enemy_hp_center_x = enemy_hp_x + hp_w // 2
+                enemy_hp_center_y = enemy_hp_y + hp_h // 2
+                self.enemy_hp_area = (enemy_hp_center_x, enemy_hp_center_y, hp_w, hp_h)
+            else:
+                # Still set area even if no HP bar found (for calibration purposes)
+                # Use the expected area location
+                enemy_hp_x = search_x
+                enemy_hp_y = search_y + NAME_AREA_HEIGHT
+                enemy_hp_center_x = enemy_hp_x + SEARCH_AREA_WIDTH // 2
+                enemy_hp_center_y = enemy_hp_y + 9  # Center of HP bar region
+                self.enemy_hp_area = (enemy_hp_center_x, enemy_hp_center_y, SEARCH_AREA_WIDTH, 18)
+            
+            # Enemy name area: relative to screen
+            name_center_x = search_x + SEARCH_AREA_WIDTH // 2
+            name_center_y = search_y + NAME_AREA_HEIGHT // 2
+            self.enemy_name_area = (name_center_x, name_center_y, SEARCH_AREA_WIDTH, NAME_AREA_HEIGHT)
+            
+            # Create debug image
+            debug_img = screen_img.copy()
+            cv2.rectangle(debug_img, (search_x, search_y), (search_x2, search_y2), (255, 255, 0), 2)
+            if hp_found:
+                cv2.rectangle(debug_img, 
+                             (search_x + hp_x, search_y + hp_y), 
+                             (search_x + hp_x + hp_w, search_y + hp_y + hp_h), 
+                             (0, 255, 0), 2)
+            cv2.rectangle(debug_img, 
+                         (search_x, search_y), 
+                         (search_x2, search_y + NAME_AREA_HEIGHT), 
+                         (0, 255, 255), 2)
+            self.save_debug_image(debug_img, 'enemy_hp_name_area')
+            self.save_debug_image(name_area, 'enemy_name_area_extracted')
+            
+            if hp_found:
+                print(f'[Calibration] Enemy HP bar found at search area position ({hp_x}, {hp_y})')
+            else:
+                print('[Calibration] Enemy HP bar not found, but area calibrated for detection')
+            print(f'[Calibration] Enemy name area calibrated: center=({name_center_x}, {name_center_y}), size={SEARCH_AREA_WIDTH}x{NAME_AREA_HEIGHT}')
+            
+            return (self.enemy_hp_area, self.enemy_name_area)
+            
+        except Exception as e:
+            print(f'[Calibration] Error finding enemy HP/name area: {e}')
+            import traceback
+            traceback.print_exc()
+            self.save_debug_image(screen_img, 'enemy_hp_name_error')
+            return (None, None)
+    
     def find_system_message_area(self, screen_img):
         """
         Find system message area using chat scrollbar as reference
@@ -331,8 +473,13 @@ class Calibrator:
             tuple: (x, y, width, height) or None if not found
         """
         try:
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            scrollbar_path = os.path.join(current_dir, 'chat_bar_1.png')
+            # Use resolve_resource_path for PyInstaller compatibility
+            scrollbar_path = config.resolve_resource_path('chat_bar_1.png')
+            
+            if scrollbar_path is None:
+                # Fallback to old method for development
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                scrollbar_path = os.path.join(current_dir, 'chat_bar_1.png')
             
             print(f'[Calibration] Looking for chat scrollbar at: {scrollbar_path}')
             
@@ -400,13 +547,19 @@ class Calibrator:
 
                 # Determine the RIGHT boundary by locating a second UI anchor (`chat_bar_2.png`)
                 # This is more stable than scanning for dark pixels.
-                anchor_path = os.path.join(current_dir, 'chat_bar_2.png')
+                anchor_path = config.resolve_resource_path('chat_bar_2.png')
+                
+                if anchor_path is None:
+                    # Fallback to old method for development
+                    current_dir = os.path.dirname(os.path.abspath(__file__))
+                    anchor_path = os.path.join(current_dir, 'chat_bar_2.png')
+                
                 anchor_template = None
                 anchor_loc = None
                 anchor_w = 0
                 anchor_h = 0
 
-                if os.path.exists(anchor_path):
+                if anchor_path and os.path.exists(anchor_path):
                     anchor_template = cv2.imread(anchor_path)
                     if anchor_template is not None:
                         anchor_h, anchor_w = anchor_template.shape[:2]
@@ -529,6 +682,13 @@ class Calibrator:
                 else:
                     print('[Calibration] Warning: Skill bars not found, but HP/MP calibration succeeded')
                 
+                # Find enemy HP and name area
+                enemy_result = self.find_enemy_hp_and_name_area(screen)
+                if enemy_result[0] is not None and enemy_result[1] is not None:
+                    print('[Calibration] Enemy HP and name area found successfully!')
+                else:
+                    print('[Calibration] Warning: Enemy HP/name area not found, but HP/MP calibration succeeded')
+                
                 # Find system message area using chat scrollbar
                 system_message_result = self.find_system_message_area(screen)
                 if system_message_result is not None:
@@ -552,34 +712,95 @@ class Calibrator:
             traceback.print_exc()
             return False
     
+    def get_calibration_summary(self):
+        """
+        Get a formatted summary string of what was calibrated
+        
+        Returns:
+            str: Formatted summary string for GUI display
+        """
+        # Check if calibration is successful
+        hp_ok = self.hp_position is not None
+        mp_ok = self.mp_position is not None
+        skills_ok = self.skills_bar1_position is not None and self.skills_bar2_position is not None
+        enemy_ok = self.enemy_hp_area is not None and self.enemy_name_area is not None
+        system_msg_ok = self.system_message_area is not None
+        
+        # Build summary string
+        summary_lines = []
+        summary_lines.append("CALIBRATION SUMMARY")
+        summary_lines.append("=" * 40)
+        
+        # Show checkmarks only if successful, otherwise show X
+        if hp_ok:
+            summary_lines.append("✓ HP Bar")
+        else:
+            summary_lines.append("✗ HP Bar: NOT FOUND")
+        
+        if mp_ok:
+            summary_lines.append("✓ MP Bar")
+        else:
+            summary_lines.append("✗ MP Bar: NOT FOUND")
+        
+        if skills_ok:
+            summary_lines.append("✓ Skill Bars")
+        else:
+            summary_lines.append("✗ Skill Bars: NOT FOUND")
+        
+        if enemy_ok:
+            summary_lines.append("✓ Enemy HP")
+            summary_lines.append("✓ Enemy Name")
+        else:
+            summary_lines.append("✗ Enemy HP: NOT FOUND")
+            summary_lines.append("✗ Enemy Name: NOT FOUND")
+        
+        if system_msg_ok:
+            summary_lines.append("✓ System Message")
+        else:
+            summary_lines.append("✗ System Message: NOT FOUND")
+        
+        return "\n".join(summary_lines)
+    
     def print_calibration_summary(self):
         """Print a summary of what was calibrated"""
         print('\n' + '='*60)
         print('[Calibration] CALIBRATION SUMMARY')
         print('='*60)
         
-        if self.hp_position:
-            print(f'[Calibration] ✓ HP Bar: Position {self.hp_position}, Dimensions {self.hp_dimensions}')
+        # Check if calibration is successful
+        hp_ok = self.hp_position is not None
+        mp_ok = self.mp_position is not None
+        skills_ok = self.skills_bar1_position is not None and self.skills_bar2_position is not None
+        enemy_ok = self.enemy_hp_area is not None and self.enemy_name_area is not None
+        system_msg_ok = self.system_message_area is not None
+        
+        # Show checkmarks only if successful, otherwise show X
+        if hp_ok:
+            print('[Calibration] ✓ HP Bar')
         else:
             print('[Calibration] ✗ HP Bar: NOT FOUND')
         
-        if self.mp_position:
-            print(f'[Calibration] ✓ MP Bar: Position {self.mp_position}, Dimensions {self.mp_dimensions}')
+        if mp_ok:
+            print('[Calibration] ✓ MP Bar')
         else:
             print('[Calibration] ✗ MP Bar: NOT FOUND')
         
-        if self.skills_bar1_position and self.skills_bar2_position:
-            print(f'[Calibration] ✓ Skill Bar 1: Position {self.skills_bar1_position}')
-            print(f'[Calibration] ✓ Skill Bar 2: Position {self.skills_bar2_position}')
-            print(f'[Calibration] ✓ Skill Bar Spacing: {self.skills_spacing} pixels')
+        if skills_ok:
+            print('[Calibration] ✓ Skill Bars')
         else:
             print('[Calibration] ✗ Skill Bars: NOT FOUND')
         
-        if self.system_message_area:
-            x, y, w, h = self.system_message_area
-            print(f'[Calibration] ✓ System Message Area: Center=({x}, {y}), Size={w}x{h}')
+        if enemy_ok:
+            print('[Calibration] ✓ Enemy HP')
+            print('[Calibration] ✓ Enemy Name')
         else:
-            print('[Calibration] ✗ System Message Area: NOT FOUND')
+            print('[Calibration] ✗ Enemy HP: NOT FOUND')
+            print('[Calibration] ✗ Enemy Name: NOT FOUND')
+        
+        if system_msg_ok:
+            print('[Calibration] ✓ System Message')
+        else:
+            print('[Calibration] ✗ System Message: NOT FOUND')
         
         print('='*60)
         print('[Calibration] To verify calibration, check these debug images:')
@@ -587,10 +808,13 @@ class Calibrator:
         print(f'[Calibration]   - calibrate_contours.png (detected HP/MP contours)')
         print(f'[Calibration]   - calibrate_hp_found.png (extracted HP bar)')
         print(f'[Calibration]   - calibrate_mp_found.png (extracted MP bar)')
-        if self.skills_bar1_position:
+        if skills_ok:
             print(f'[Calibration]   - calibrate_skill_bars_found.png (skill bars with green boxes)')
             print(f'[Calibration]   - calibrate_skills_sequence_area.png (skill area)')
-        if self.system_message_area:
+        if enemy_ok:
+            print(f'[Calibration]   - calibrate_enemy_hp_name_area.png (enemy HP and name area)')
+            print(f'[Calibration]   - calibrate_enemy_name_area_extracted.png (enemy name area)')
+        if system_msg_ok:
             print(f'[Calibration]   - calibrate_system_message_area_found.png (scrollbar and chat area)')
         print('='*60 + '\n')
     
@@ -614,7 +838,11 @@ class Calibrator:
             'skills_bar2_position': self.skills_bar2_position,
             'skills_spacing': self.skills_spacing,
             'system_message_calibrated': self.system_message_area is not None,
-            'system_message_area': self.system_message_area
+            'system_message_area': self.system_message_area,
+            'enemy_hp_calibrated': self.enemy_hp_area is not None,
+            'enemy_name_calibrated': self.enemy_name_area is not None,
+            'enemy_hp_area': self.enemy_hp_area,
+            'enemy_name_area': self.enemy_name_area
         }
         return status
     

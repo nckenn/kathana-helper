@@ -21,9 +21,6 @@ except ImportError:
 # Constants
 # ============================================================================
 
-# Break warning detection
-BREAK_WARNING_TRIGGER_COUNT = 3  # Number of detections required to trigger repair
-
 # Timing constants
 CALIBRATION_WARN_INTERVAL = 30.0  # Seconds between calibration warnings
 DETECTION_LOG_INTERVAL = 2.0  # Seconds between detection logs
@@ -54,7 +51,7 @@ class BreakWarningTracker:
     
     def should_trigger_repair(self):
         """Check if repair should be triggered"""
-        return self.get_count() >= BREAK_WARNING_TRIGGER_COUNT
+        return self.get_count() >= config.BREAK_WARNING_TRIGGER_COUNT
 
 
 class RepairExecutor:
@@ -125,8 +122,10 @@ class ImageChangeDetector:
     def __init__(self):
         self.last_image_hash = None
         self.last_ocr_time = 0
-        self.min_ocr_interval = 0.1  # Minimum time between OCR calls even if image changes
+        self.min_ocr_interval = 2.0  # Minimum time between OCR calls even if image changes (increased to reduce load)
         self.last_message_area = None  # Store last extracted area for debug
+        self.last_empty_ocr_time = 0  # Track when we last got empty OCR result
+        self.empty_ocr_cooldown = 3600.0  # Skip OCR for 1 hour after getting empty result
     
     def extract_message_area_from_screen(self, screen):
         """Extract system message area from full screen (follows pattern from buffs/skill sequence)"""
@@ -180,6 +179,10 @@ class ImageChangeDetector:
         if current_time - self.last_ocr_time < self.min_ocr_interval:
             return False
         
+        # Skip OCR if we recently got empty result (avoid repeated OCR on empty messages)
+        if current_time - self.last_empty_ocr_time < self.empty_ocr_cooldown:
+            return False
+        
         # Extract message area from screen (like buffs extract area_skills)
         message_area = self.extract_message_area_from_screen(screen)
         if message_area is None:
@@ -200,6 +203,10 @@ class ImageChangeDetector:
             return True
         
         return False
+    
+    def mark_empty_ocr(self, current_time):
+        """Mark that we got an empty OCR result to avoid repeated checks"""
+        self.last_empty_ocr_time = current_time
     
     def save_debug_image(self):
         """Save debug image of system message area (like buffs save debug images)"""
@@ -232,7 +239,7 @@ def get_repair_count():
 
 def get_repair_trigger_count():
     """Get the trigger count required for repair"""
-    return BREAK_WARNING_TRIGGER_COUNT
+    return config.BREAK_WARNING_TRIGGER_COUNT
 
 
 def check_auto_repair():
@@ -260,6 +267,20 @@ def check_auto_repair():
         return
     
     current_time = time.time()
+    
+    # OPTIMIZATION: Skip repair checks during active skill execution
+    # This prevents delays in skill sequence combos
+    if config.skill_sequence_manager:
+        # Skip if skill is waiting for activation (skill was just triggered)
+        if (hasattr(config.skill_sequence_manager, 'skill_waiting_activation') and 
+            config.skill_sequence_manager.skill_waiting_activation):
+            return
+        
+        # Skip if skill was executed recently (within last 0.3 seconds) - short window to avoid combo delays
+        if (hasattr(config.skill_sequence_manager, 'ultimo_tiempo_skill') and
+            config.skill_sequence_manager.ultimo_tiempo_skill > 0 and
+            current_time - config.skill_sequence_manager.ultimo_tiempo_skill < 0.3):
+            return
     
     # Throttle checks based on interval
     if (current_time - config.last_auto_repair_check_time < 
@@ -311,6 +332,8 @@ def check_auto_repair():
             else:
                 print(f"[Auto Repair] OCR returned non-dict: {type(message_text)}")
         else:
+            # Mark empty OCR to avoid repeated checks
+            _image_change_detector.mark_empty_ocr(current_time)
             # Only log occasionally to avoid spam
             if not hasattr(check_auto_repair, 'last_no_message_log'):
                 check_auto_repair.last_no_message_log = 0
@@ -352,7 +375,7 @@ def check_auto_repair():
         if _repair_state_manager.should_log_detection(current_time):
             print(
                 f"[Auto Repair] Item break warning detected "
-                f"(count: {detection_count}/{BREAK_WARNING_TRIGGER_COUNT})"
+                f"(count: {detection_count}/{config.BREAK_WARNING_TRIGGER_COUNT})"
             )
         
         # Check if repair should be triggered

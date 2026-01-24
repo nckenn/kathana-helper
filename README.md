@@ -66,7 +66,7 @@ The executable will be created in the `dist` folder.
 - **settings_manager.py**: JSON-based settings persistence
 - **buffs_manager.py**: Automatic buff activation system (up to 8 buffs)
 - **skill_sequence_manager.py**: Skill sequence execution system (up to 8 skills in sequence)
-- **gui.py**: Complete GUI interface using CustomTkinter with tabs for Settings, Skill Sequence, Skill Slots, Buffs, Calibration, and Mouse Clicker
+- **gui.py**: Complete GUI interface using CustomTkinter with tabs for Status, Settings, Skill Sequence, Skill Interval, Buffs, and Mouse Clicker
 
 ## Features
 
@@ -74,9 +74,9 @@ The executable will be created in the `dist` folder.
 - **Auto Attack**: Automatic enemy targeting and attack with mob filtering
 - **Auto Pots**: Automatic HP/MP potion usage based on thresholds
 - **Auto Repair**: Automatic equipment repair when damaged
-- **Auto Unstuck**: Detects and resolves stuck situations
-- **Skill Slots**: Configurable skill rotation with intervals
-- **Mouse Clicker**: Automated mouse clicking at specified intervals
+- **Auto Unstuck**: Detects and resolves stuck situations by changing targets
+- **Skill Interval**: Configurable skill rotation with custom intervals (1-8 and F1-F10 keys)
+- **Mouse Clicker**: Automated mouse clicking at specified intervals and coordinates
 
 ### Advanced Features
 - **Buffs System**: Automatic buff activation (up to 8 buffs)
@@ -93,7 +93,7 @@ The executable will be created in the `dist` folder.
   - Executes skills in sequence when enemy is found
   - Advances to next skill when current skill disappears
 
-- **Calibration**: Automatic detection of HP/MP bars and skill areas
-- **Mob Filtering**: Target only specific mobs from a configurable list
-- **OCR Integration**: Enemy name detection using EasyOCR
+- **Calibration**: Automatic detection of HP/MP bars and skill areas (available in Settings tab)
+- **Mob Filtering**: Target only specific mobs from a configurable list using OCR
+- **OCR Integration**: Enemy name detection using EasyOCR for mob filtering
 

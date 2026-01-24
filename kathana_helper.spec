@@ -58,6 +58,8 @@ datas = [
     ("jobs", "jobs"),  # Skill images folder for buffs and skill sequence (all job folders and images)
     ("skill_bar_1.bmp", "."),  # Skill bar template for calibration
     ("skill_bar_2.bmp", "."),  # Skill bar template for calibration
+    ("chat_bar_1.png", "."),  # Chat scrollbar template for system message area calibration
+    ("chat_bar_2.png", "."),  # Chat anchor template for system message area calibration
     ("easyocr_models", "easyocr_models"),  # Bundled EasyOCR model weights (offline OCR)
 ]
 

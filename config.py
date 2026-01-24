@@ -71,7 +71,8 @@ MOB_IMAGES_FOLDER = "mob_images"
 system_message_area = {'x': 0, 'y': 0, 'width': 0, 'height': 0}
 last_repair_time = 0
 REPAIR_COOLDOWN = 5.0
-AUTO_REPAIR_CHECK_INTERVAL = 0.1  # Check frequently (every 0.1s), but OCR only runs when image changes (image change detection)
+AUTO_REPAIR_CHECK_INTERVAL = 30.0  # Check every 30 seconds to avoid delays in skill sequence execution
+BREAK_WARNING_TRIGGER_COUNT = 1  # Number of detections required to trigger repair
 last_auto_repair_check_time = 0
 
 # Mob detection optimization
@@ -115,7 +116,7 @@ last_smart_loot_time = 0
 SMART_LOOT_COOLDOWN = 0.2  # Cooldown between loot attempts (reduced for faster looting, allows retry if first fails)
 is_looting = False  # Flag to prevent auto-targeting during looting
 looting_start_time = 0
-LOOTING_DURATION = 1.0  # Duration to prevent auto-targeting after looting starts (reduced for faster retargeting)
+LOOTING_DURATION = 1  # Duration to prevent auto-targeting after looting starts (reduced for faster retargeting)
 unstuck_timeout = 8.0
 last_damage_detected_time = 0
 last_damage_value = None

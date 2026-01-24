@@ -20,6 +20,63 @@ import auto_attack
 import ocr_utils
 import calibration
 
+
+class ToolTip:
+    """Create a tooltip for a given widget"""
+    def __init__(self, widget, text='widget info'):
+        self.widget = widget
+        self.text = text
+        self.tipwindow = None
+        self.id = None
+        self.x = self.y = 0
+        self.widget.bind('<Enter>', self.enter)
+        self.widget.bind('<Leave>', self.leave)
+        self.widget.bind('<ButtonPress>', self.leave)
+
+    def enter(self, event=None):
+        self.schedule()
+
+    def leave(self, event=None):
+        self.unschedule()
+        self.hidetip()
+
+    def schedule(self):
+        self.unschedule()
+        self.id = self.widget.after(500, self.showtip)
+
+    def unschedule(self):
+        id = self.id
+        self.id = None
+        if id:
+            self.widget.after_cancel(id)
+
+    def showtip(self, event=None):
+        x = y = 0
+        x, y, cx, cy = self.widget.bbox("insert") if hasattr(self.widget, 'bbox') else (0, 0, 0, 0)
+        x += self.widget.winfo_rootx() + 25
+        y += self.widget.winfo_rooty() + 20
+        # Creates a toplevel window
+        self.tipwindow = tw = tk.Toplevel(self.widget)
+        # Leaves only the label and removes the app window
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry("+%d+%d" % (x, y))
+        label = tk.Label(tw, text=self.text, justify=tk.LEFT,
+                      background="#ffffe0", relief=tk.SOLID, borderwidth=1,
+                      font=("tahoma", "8", "normal"), wraplength=250)
+        label.pack(ipadx=1)
+
+    def hidetip(self):
+        tw = self.tipwindow
+        self.tipwindow = None
+        if tw:
+            tw.destroy()
+
+
+def create_tooltip(widget, text):
+    """Helper function to create a tooltip for a widget"""
+    return ToolTip(widget, text)
+
+
 class BotGUI:
     _instance = None
     
@@ -164,10 +221,18 @@ class BotGUI:
             self.auto_attack_var.set(config.auto_attack_enabled)
             print(f"  Applied auto attack: enabled={config.auto_attack_enabled}")
             
+            # Apply Auto Loot settings
+            if hasattr(self, 'looting_duration_var'):
+                self.looting_duration_var.set(str(config.LOOTING_DURATION))
+                print(f"  Applied looting duration: {config.LOOTING_DURATION} seconds")
+            
             # Apply Auto Repair settings
             if hasattr(self, 'auto_repair_var'):
                 self.auto_repair_var.set(config.auto_repair_enabled)
                 print(f"  Applied auto repair: enabled={config.auto_repair_enabled}")
+            if hasattr(self, 'auto_repair_check_interval_var'):
+                self.auto_repair_check_interval_var.set(str(config.AUTO_REPAIR_CHECK_INTERVAL))
+                print(f"  Applied auto repair check interval: {config.AUTO_REPAIR_CHECK_INTERVAL}s")
             
             # Apply Auto Change Target settings
             if hasattr(self, 'auto_change_target_var'):
@@ -405,14 +470,17 @@ class BotGUI:
         # Connect button
         self.connect_button = ctk.CTkButton(bot_frame, text="Connect", command=self.connect_window, width=120, height=32, corner_radius=6)
         self.connect_button.grid(row=0, column=0, padx=(10, 5), pady=5)
+        create_tooltip(self.connect_button, "Connect to the game window. Select a window from the dropdown and click Connect.")
         
         # Calibrate button
         self.calibrate_button = ctk.CTkButton(bot_frame, text="Calibrate", command=self.calibrate_bars, width=100, height=32, corner_radius=6, state="disabled")
         self.calibrate_button.grid(row=0, column=1, padx=5, pady=5)
+        create_tooltip(self.calibrate_button, "Auto-detects HP/MP bar positions and skill area. Required before starting the bot. Make sure HP/MP bars are visible in-game.")
         
         # Start/Stop toggle button
         self.toggle_bot_button = ctk.CTkButton(bot_frame, text="Start", command=self.toggle_bot, state="disabled", width=100, height=32, corner_radius=6, fg_color="green", hover_color="darkgreen")
         self.toggle_bot_button.grid(row=0, column=2, padx=5, pady=5)
+        create_tooltip(self.toggle_bot_button, "Start or stop the bot. Bot must be calibrated before starting.")
         
         # Separator frame (using a thin frame as separator) - fixed height to match buttons
         separator = ctk.CTkFrame(bot_frame, width=2, height=40, fg_color="gray50")
@@ -495,15 +563,6 @@ class BotGUI:
         self.unstuck_countdown_label = ctk.CTkLabel(enemy_name_frame, text="Unstuck: ---", font=ctk.CTkFont(size=10), text_color="gray")
         self.unstuck_countdown_label.grid(row=0, column=2)
         
-        # Auto Repair Count display
-        auto_repair_frame = ctk.CTkFrame(status_frame, fg_color="transparent")
-        auto_repair_frame.grid(row=4, column=0, sticky="w", padx=15, pady=(5, 15))
-        
-        auto_repair_label = ctk.CTkLabel(auto_repair_frame, text="Auto Repair:", width=70, anchor='w', font=ctk.CTkFont(size=11))
-        auto_repair_label.grid(row=0, column=0, padx=(0, 10))
-        self.auto_repair_count_label = ctk.CTkLabel(auto_repair_frame, text="0/3", font=ctk.CTkFont(size=11, weight="bold"), text_color="gray")
-        self.auto_repair_count_label.grid(row=0, column=1, sticky="w")
-        
         # Configure status frame grid
         status_frame.columnconfigure(0, weight=1)
         
@@ -531,6 +590,7 @@ class BotGUI:
                                          command=self.update_auto_attack,
                                          font=ctk.CTkFont(size=11))
         auto_attack_checkbox.grid(row=0, column=0, sticky="w", pady=5)
+        create_tooltip(auto_attack_checkbox, "Automatically targets and attacks enemies. Requires enemy HP bar calibration.")
         
         # Auto Loot frame
         auto_loot_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
@@ -543,6 +603,16 @@ class BotGUI:
                                          command=lambda: self.update_action_slot('pick'),
                                          font=ctk.CTkFont(size=11))
         auto_loot_checkbox.grid(row=0, column=0, sticky="w", pady=5)
+        create_tooltip(auto_loot_checkbox, "Automatically picks up items after killing enemies. Uses the 'pick' action key (default: F).")
+        
+        # Looting duration input (seconds)
+        self.looting_duration_var = tk.StringVar(value=str(config.LOOTING_DURATION))
+        looting_duration_entry = ctk.CTkEntry(auto_loot_frame, textvariable=self.looting_duration_var, width=50, font=ctk.CTkFont(size=11))
+        looting_duration_entry.grid(row=0, column=1, padx=(10, 5))
+        looting_duration_entry.bind('<KeyRelease>', lambda event: self.update_looting_duration())
+        looting_seconds_label = ctk.CTkLabel(auto_loot_frame, text="seconds", font=ctk.CTkFont(size=11))
+        looting_seconds_label.grid(row=0, column=2, sticky="w")
+        create_tooltip(looting_duration_entry, "Input: Looting duration in seconds. This is how long the bot prevents auto-targeting after looting starts. Lower values allow faster retargeting to the next enemy.")
         
         # Auto Repair frame
         auto_repair_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
@@ -555,6 +625,16 @@ class BotGUI:
                                          command=self.update_auto_repair,
                                          font=ctk.CTkFont(size=11))
         auto_repair_checkbox.grid(row=0, column=0, sticky="w", pady=5)
+        create_tooltip(auto_repair_checkbox, "Automatically repairs items when 'is about to break' warning appears. Requires system message area calibration and OCR.")
+        
+        # Auto repair check interval input
+        self.auto_repair_check_interval_var = tk.StringVar(value=str(config.AUTO_REPAIR_CHECK_INTERVAL))
+        auto_repair_check_interval_entry = ctk.CTkEntry(auto_repair_frame, textvariable=self.auto_repair_check_interval_var, width=50, font=ctk.CTkFont(size=11))
+        auto_repair_check_interval_entry.grid(row=0, column=1, padx=(10, 5))
+        auto_repair_check_interval_entry.bind('<KeyRelease>', lambda event: self.update_auto_repair_check_interval())
+        auto_repair_seconds_label = ctk.CTkLabel(auto_repair_frame, text="seconds", font=ctk.CTkFont(size=11))
+        auto_repair_seconds_label.grid(row=0, column=2, sticky="w")
+        create_tooltip(auto_repair_check_interval_entry, "Input: Auto repair check interval in seconds. How often the bot checks for 'is about to break' warnings. Higher values reduce CPU usage and prevent skill sequence delays. Recommended: 30+ seconds.")
         
         # Mage frame
         mage_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
@@ -567,6 +647,7 @@ class BotGUI:
                                          command=self.update_is_mage,
                                          font=ctk.CTkFont(size=11))
         mage_checkbox.grid(row=0, column=0, sticky="w", pady=5)
+        create_tooltip(mage_checkbox, "Enable if playing as a mage. Prevents attack action from triggering after targeting (mages use skills instead).")
         
         # Column 1: Auto HP, Auto MP, Auto Unstuck
         # Auto HP frame
@@ -580,6 +661,7 @@ class BotGUI:
                                          command=self.update_auto_hp,
                                          font=ctk.CTkFont(size=11))
         auto_hp_checkbox.grid(row=0, column=0, sticky="w", pady=5)
+        create_tooltip(auto_hp_checkbox, "Automatically uses HP potions when HP drops below the threshold. Requires HP bar calibration.")
         
         # HP threshold input (percentage)
         self.hp_threshold_var = tk.StringVar(value=str(config.hp_threshold))
@@ -587,6 +669,7 @@ class BotGUI:
         hp_threshold_entry.grid(row=0, column=1, padx=(10, 5))
         hp_percent_label = ctk.CTkLabel(auto_hp_frame, text="%", font=ctk.CTkFont(size=11))
         hp_percent_label.grid(row=0, column=2, sticky="w")
+        create_tooltip(hp_threshold_entry, "Input: HP percentage threshold (0-100). Enter the HP percentage below which the bot will automatically use HP potions. Example: 70 means potion is used when HP drops below 70%.")
         
         # HP bar area input (x, y, width, height) - hidden, only used internally
         self.hp_x_var = tk.StringVar(value=str(config.hp_bar_area['x']))
@@ -606,6 +689,7 @@ class BotGUI:
                                          command=self.update_auto_mp,
                                          font=ctk.CTkFont(size=11))
         auto_mp_checkbox.grid(row=0, column=0, sticky="w", pady=5)
+        create_tooltip(auto_mp_checkbox, "Automatically uses MP potions when MP drops below the threshold. Requires MP bar calibration.")
         
         # MP threshold input (percentage)
         self.mp_threshold_var = tk.StringVar(value=str(config.mp_threshold))
@@ -613,6 +697,7 @@ class BotGUI:
         mp_threshold_entry.grid(row=0, column=1, padx=(10, 5))
         mp_percent_label = ctk.CTkLabel(auto_mp_frame, text="%", font=ctk.CTkFont(size=11))
         mp_percent_label.grid(row=0, column=2, sticky="w")
+        create_tooltip(mp_threshold_entry, "Input: MP percentage threshold (0-100). Enter the MP percentage below which the bot will automatically use MP potions. Example: 50 means potion is used when MP drops below 50%.")
         
         # MP bar area input (x, y, width, height) - hidden, only used internally
         self.mp_x_var = tk.StringVar(value=str(config.mp_bar_area['x']))
@@ -644,6 +729,7 @@ class BotGUI:
                                                 height=28, 
                                                 corner_radius=6)
         self.recheck_ocr_button.grid(row=0, column=2, padx=(5, 10), pady=10)
+        create_tooltip(self.recheck_ocr_button, "Re-check OCR availability. Use this after installing EasyOCR or fixing GPU/CPU issues.")
         
         # Update OCR status display
         self.update_ocr_status_display()
@@ -659,12 +745,16 @@ class BotGUI:
                                          command=self.update_auto_change_target,
                                          font=ctk.CTkFont(size=11))
         auto_change_target_checkbox.grid(row=0, column=0, sticky="w", pady=5)
+        create_tooltip(auto_change_target_checkbox, "Automatically changes target when enemy HP becomes stagnant (stuck). Detects when enemy HP doesn't decrease for the timeout duration.")
         
         # Unstuck timeout input (seconds)
         self.unstuck_timeout_var = tk.StringVar(value=str(config.unstuck_timeout))
         unstuck_timeout_entry = ctk.CTkEntry(auto_change_target_frame, textvariable=self.unstuck_timeout_var, width=50, font=ctk.CTkFont(size=11))
-        unstuck_timeout_entry.grid(row=0, column=1, padx=(10, 0))
+        unstuck_timeout_entry.grid(row=0, column=1, padx=(10, 5))
         unstuck_timeout_entry.bind('<KeyRelease>', lambda event: self.update_unstuck_timeout())
+        unstuck_seconds_label = ctk.CTkLabel(auto_change_target_frame, text="seconds", font=ctk.CTkFont(size=11))
+        unstuck_seconds_label.grid(row=0, column=2, sticky="w")
+        create_tooltip(unstuck_timeout_entry, "Input: Unstuck timeout in seconds. Time to wait before considering enemy HP stagnant (stuck). If enemy HP doesn't decrease for this duration, bot will switch targets. Lower values = faster target switching. Default: 8 seconds.")
         
         # Configure options frame rows for proper visibility
         settings_frame.rowconfigure(1, weight=0)
@@ -684,6 +774,7 @@ class BotGUI:
                                      command=self.update_mob_detection,
                                      font=ctk.CTkFont(size=11))
         mob_checkbox.grid(row=6, column=0, columnspan=2, sticky="w", padx=15, pady=(0, 5))
+        create_tooltip(mob_checkbox, "Enable mob filtering. Bot will only attack mobs in the target list. Uses OCR to read enemy names. Requires calibration.")
         
         # Target list
         ctk.CTkLabel(settings_frame, text="Target List (one per line, only attack mobs in this list):", font=ctk.CTkFont(size=11)).grid(row=7, column=0, columnspan=2, sticky="w", padx=15, pady=(5, 5))
@@ -705,6 +796,7 @@ class BotGUI:
         self.record_target_btn = ctk.CTkButton(mob_btn_frame, text="Record", command=self.record_target_mob, width=100, corner_radius=6, 
                                   state="normal" if is_calibrated else "disabled")
         self.record_target_btn.grid(row=0, column=2)
+        create_tooltip(self.record_target_btn, "Records the currently targeted enemy name and adds it to the mob target list. Requires calibration and an active target.")
         
         settings_frame.columnconfigure(0, weight=1)
         settings_frame.columnconfigure(1, weight=1)
@@ -850,8 +942,14 @@ class BotGUI:
             # Interval input
             self.skill_intervals[slot] = tk.StringVar(value=str(config.skill_slots[slot]['interval']))
             interval_entry = ctk.CTkEntry(slot_frame, textvariable=self.skill_intervals[slot], width=60, font=ctk.CTkFont(size=11))
-            interval_entry.grid(row=0, column=2, padx=(0, 0))
+            interval_entry.grid(row=0, column=2, padx=(0, 5))
             interval_entry.bind('<KeyRelease>', lambda event, s=slot: self.update_skill_interval(s))
+            # Seconds label
+            seconds_label = ctk.CTkLabel(slot_frame, text="seconds", font=ctk.CTkFont(size=11))
+            seconds_label.grid(row=0, column=3, sticky="w")
+            # Tooltip for skill interval
+            slot_name = f"S{slot}" if isinstance(slot, int) else slot.upper()
+            create_tooltip(interval_entry, f"Input: {slot_name} cooldown interval in seconds. Enter the minimum time (in seconds) that must pass before this skill can be used again. Skill will only trigger if this cooldown has elapsed since last use. Example: 10 means skill can be used every 10 seconds.")
         
         # Section 1: Numeric slots (1-8) - 4 rows x 2 columns
         numeric_label = ctk.CTkLabel(skill_frame, text="Number Keys (1-8):", font=ctk.CTkFont(size=12, weight="bold"))
@@ -1286,10 +1384,13 @@ class BotGUI:
                                 self.record_target_btn.configure(state="normal")
                             # Update toggle bot button state to enable Start button
                             self.update_toggle_bot_button_state()
-                            messagebox.showinfo("Calibration Success", 
-                                f"Calibration completed successfully!\n\n"
-                                f"HP Bar: ({config.hp_bar_area['x']}, {config.hp_bar_area['y']})\n"
-                                f"MP Bar: ({config.mp_bar_area['x']}, {config.mp_bar_area['y']})")
+                            # Get calibration summary from calibrator (stored in config)
+                            if config.calibrator:
+                                summary = config.calibrator.get_calibration_summary()
+                                messagebox.showinfo("Calibration Success", summary)
+                            else:
+                                messagebox.showinfo("Calibration Success", 
+                                    "Calibration completed successfully!")
                         except Exception as e:
                             print(f"[Calibration] Error updating GUI: {e}")
                             self.calibrate_button.configure(state="normal", text="Calibrate")
@@ -1879,6 +1980,20 @@ class BotGUI:
         except ValueError:
             print(f"Invalid interval for action {action_key}")
     
+    def update_looting_duration(self):
+        """Update looting duration value"""
+        try:
+            duration = float(self.looting_duration_var.get())
+            if duration > 0:
+                config.LOOTING_DURATION = duration
+                print(f"Looting duration updated to {config.LOOTING_DURATION} seconds")
+            else:
+                print(f"Invalid looting duration: must be greater than 0")
+                self.looting_duration_var.set(str(config.LOOTING_DURATION))
+        except ValueError:
+            print(f"Invalid looting duration value")
+            self.looting_duration_var.set(str(config.LOOTING_DURATION))
+    
     def update_mob_detection(self):
         """Update mob detection enabled status"""
 
@@ -1901,6 +2016,20 @@ class BotGUI:
         config.auto_repair_enabled = self.auto_repair_var.get()
         status = "enabled" if config.auto_repair_enabled else "disabled"
         print(f"Auto Repair {status}")
+    
+    def update_auto_repair_check_interval(self):
+        """Update auto repair check interval value"""
+        try:
+            interval = float(self.auto_repair_check_interval_var.get())
+            if interval > 0:
+                config.AUTO_REPAIR_CHECK_INTERVAL = interval
+                print(f"Auto repair check interval updated to {config.AUTO_REPAIR_CHECK_INTERVAL}s")
+            else:
+                print(f"Invalid auto repair check interval: must be greater than 0")
+                self.auto_repair_check_interval_var.set(str(config.AUTO_REPAIR_CHECK_INTERVAL))
+        except ValueError:
+            print(f"Invalid auto repair check interval value")
+            self.auto_repair_check_interval_var.set(str(config.AUTO_REPAIR_CHECK_INTERVAL))
     
     def update_is_mage(self):
         """Update mage setting"""
@@ -3208,27 +3337,6 @@ class BotGUI:
             if hasattr(self, 'unstuck_countdown_label'):
                 import auto_unstuck
                 auto_unstuck.update_unstuck_countdown_display(time.time())
-            
-            # Update auto repair count
-            if hasattr(self, 'auto_repair_count_label'):
-                try:
-                    import auto_repair
-                    current_count = auto_repair.get_repair_count()
-                    trigger_count = auto_repair.get_repair_trigger_count()
-                    
-                    # Update text and color based on count
-                    count_text = f"{current_count}/{trigger_count}"
-                    if current_count == 0:
-                        text_color = "gray"
-                    elif current_count < trigger_count:
-                        text_color = "yellow"
-                    else:
-                        text_color = "red"  # Ready to trigger
-                    
-                    self.auto_repair_count_label.configure(text=count_text, text_color=text_color)
-                except Exception as e:
-                    # Silently fail if auto_repair not available
-                    pass
             
             # Update minimized window if it exists
             if self.is_minimized and self.minimized_window:

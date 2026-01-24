@@ -71,21 +71,24 @@ def save_settings():
             'action_slots': clean_action_slots,
             'mob_target_list': config.mob_target_list.copy(),
             'mob_detection_enabled': config.mob_detection_enabled,
-            'target_name_area': config.target_name_area.copy(),
-            'target_hp_bar_area': config.target_hp_bar_area.copy(),
+            # target_name_area is NOT saved - detection/calibration region should not be persisted
+            # target_hp_bar_area is NOT saved - detection/calibration region should not be persisted
             'auto_attack_enabled': config.auto_attack_enabled,
             'auto_hp_enabled': config.auto_hp_enabled,
             'hp_threshold': config.hp_threshold,
-            'hp_bar_area': config.hp_bar_area.copy(),
+            # hp_bar_area is NOT saved - calibration data should not be persisted
             'auto_mp_enabled': config.auto_mp_enabled,
             'mp_threshold': config.mp_threshold,
-            'mp_bar_area': config.mp_bar_area.copy(),
+            # mp_bar_area is NOT saved - calibration data should not be persisted
             'mouse_clicker_enabled': config.mouse_clicker_enabled,
             'mouse_clicker_interval': config.mouse_clicker_interval,
             'mouse_clicker_use_cursor': config.mouse_clicker_use_cursor,
             'mouse_clicker_coords': config.mouse_clicker_coords.copy(),
+            'looting_duration': config.LOOTING_DURATION,
             'auto_repair_enabled': config.auto_repair_enabled,
-            'system_message_area': config.system_message_area.copy(),
+            'break_warning_trigger_count': config.BREAK_WARNING_TRIGGER_COUNT,
+            'auto_repair_check_interval': config.AUTO_REPAIR_CHECK_INTERVAL,
+            # system_message_area is NOT saved - calibration data should not be persisted
             'auto_change_target_enabled': config.auto_change_target_enabled,
             'unstuck_timeout': config.unstuck_timeout,
             'is_mage': config.is_mage,
@@ -109,19 +112,9 @@ def save_settings():
                 gui = BotGUI._instance
                 settings['auto_attack_enabled'] = gui.auto_attack_var.get()
                 settings['hp_threshold'] = int(gui.hp_threshold_var.get())
-                settings['hp_bar_area'] = {
-                    'x': int(gui.hp_x_var.get()),
-                    'y': int(gui.hp_y_var.get()),
-                    'width': int(gui.hp_width_var.get()),
-                    'height': int(gui.hp_height_var.get())
-                }
+                # hp_bar_area is NOT saved - calibration data should not be persisted
                 settings['mp_threshold'] = int(gui.mp_threshold_var.get())
-                settings['mp_bar_area'] = {
-                    'x': int(gui.mp_x_var.get()),
-                    'y': int(gui.mp_y_var.get()),
-                    'width': int(gui.mp_width_var.get()),
-                    'height': int(gui.mp_height_var.get())
-                }
+                # mp_bar_area is NOT saved - calibration data should not be persisted
                 settings['mouse_clicker_enabled'] = gui.mouse_clicker_var.get()
                 settings['mouse_clicker_interval'] = float(gui.mouse_clicker_interval_var.get())
                 settings['mouse_clicker_use_cursor'] = (gui.mouse_clicker_mode_var.get() == "cursor")
@@ -130,8 +123,23 @@ def save_settings():
                     'y': int(gui.mouse_clicker_y_var.get())
                 }
                 settings['selected_window'] = gui.window_var.get() if gui.window_var.get() else ""
+                if hasattr(gui, 'looting_duration_var'):
+                    try:
+                        settings['looting_duration'] = float(gui.looting_duration_var.get())
+                    except ValueError:
+                        settings['looting_duration'] = config.LOOTING_DURATION
                 if hasattr(gui, 'auto_repair_var'):
                     settings['auto_repair_enabled'] = gui.auto_repair_var.get()
+                if hasattr(gui, 'break_warning_trigger_count_var'):
+                    try:
+                        settings['break_warning_trigger_count'] = int(gui.break_warning_trigger_count_var.get())
+                    except ValueError:
+                        settings['break_warning_trigger_count'] = config.BREAK_WARNING_TRIGGER_COUNT
+                if hasattr(gui, 'auto_repair_check_interval_var'):
+                    try:
+                        settings['auto_repair_check_interval'] = float(gui.auto_repair_check_interval_var.get())
+                    except ValueError:
+                        settings['auto_repair_check_interval'] = config.AUTO_REPAIR_CHECK_INTERVAL
                 if hasattr(gui, 'auto_change_target_var'):
                     settings['auto_change_target_enabled'] = gui.auto_change_target_var.get()
                 if hasattr(gui, 'unstuck_timeout_var'):
@@ -199,20 +207,21 @@ def load_settings():
             print("[Settings] Migrated mob_skip_list to mob_target_list (inverted logic)")
         if 'mob_detection_enabled' in settings:
             config.mob_detection_enabled = settings['mob_detection_enabled']
-        if 'target_name_area' in settings:
-            config.target_name_area.update(settings['target_name_area'])
-        elif 'mob_name_coordinates' in settings:
-            config.target_name_area.update(settings['mob_name_coordinates'])
-        if 'target_hp_bar_area' in settings:
-            config.target_hp_bar_area.update(settings['target_hp_bar_area'])
+        # target_name_area / target_hp_bar_area are NOT loaded - detection/calibration regions should not be persisted
+        # (Backward-compat keys like mob_name_coordinates are also intentionally ignored)
         
         # Load auto features
         if 'auto_attack_enabled' in settings:
             config.auto_attack_enabled = settings['auto_attack_enabled']
+        if 'looting_duration' in settings:
+            config.LOOTING_DURATION = settings['looting_duration']
         if 'auto_repair_enabled' in settings:
             config.auto_repair_enabled = settings['auto_repair_enabled']
-        if 'system_message_area' in settings:
-            config.system_message_area.update(settings['system_message_area'])
+        if 'break_warning_trigger_count' in settings:
+            config.BREAK_WARNING_TRIGGER_COUNT = settings['break_warning_trigger_count']
+        if 'auto_repair_check_interval' in settings:
+            config.AUTO_REPAIR_CHECK_INTERVAL = settings['auto_repair_check_interval']
+        # system_message_area is NOT loaded - calibration data should not be persisted
         if 'auto_change_target_enabled' in settings:
             config.auto_change_target_enabled = settings['auto_change_target_enabled']
         if 'unstuck_timeout' in settings:
@@ -223,21 +232,15 @@ def load_settings():
             config.auto_hp_enabled = settings['auto_hp_enabled']
         if 'hp_threshold' in settings:
             config.hp_threshold = settings['hp_threshold']
-        if 'hp_bar_area' in settings:
-            config.hp_bar_area.update(settings['hp_bar_area'])
-        elif 'hp_coordinates' in settings:
-            config.hp_bar_area['x'] = settings['hp_coordinates'].get('x', 152)
-            config.hp_bar_area['y'] = settings['hp_coordinates'].get('y', 69)
+        # hp_bar_area is NOT loaded - calibration data should not be persisted
+        # (calibration must be performed each session)
         
         if 'auto_mp_enabled' in settings:
             config.auto_mp_enabled = settings['auto_mp_enabled']
         if 'mp_threshold' in settings:
             config.mp_threshold = settings['mp_threshold']
-        if 'mp_bar_area' in settings:
-            config.mp_bar_area.update(settings['mp_bar_area'])
-        elif 'mp_coordinates' in settings:
-            config.mp_bar_area['x'] = settings['mp_coordinates'].get('x', 428)
-            config.mp_bar_area['y'] = settings['mp_coordinates'].get('y', 139)
+        # mp_bar_area is NOT loaded - calibration data should not be persisted
+        # (calibration must be performed each session)
         
         # Load mouse clicker settings
         if 'mouse_clicker_enabled' in settings:
