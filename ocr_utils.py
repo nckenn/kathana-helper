@@ -55,107 +55,30 @@ def _build_easyocr_reader_kwargs():
     return kwargs
 
 
-_LOW_RAM_MODE_CACHED = None
-
-
-def _get_total_physical_memory_bytes_windows():
-    """Return total physical RAM on Windows, or None if unavailable."""
-    try:
-        import ctypes
-
-        class MEMORYSTATUSEX(ctypes.Structure):
-            _fields_ = [
-                ("dwLength", ctypes.c_ulong),
-                ("dwMemoryLoad", ctypes.c_ulong),
-                ("ullTotalPhys", ctypes.c_ulonglong),
-                ("ullAvailPhys", ctypes.c_ulonglong),
-                ("ullTotalPageFile", ctypes.c_ulonglong),
-                ("ullAvailPageFile", ctypes.c_ulonglong),
-                ("ullTotalVirtual", ctypes.c_ulonglong),
-                ("ullAvailVirtual", ctypes.c_ulonglong),
-                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
-            ]
-
-        status = MEMORYSTATUSEX()
-        status.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
-        ok = ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status))
-        if not ok:
-            return None
-        return int(status.ullTotalPhys)
-    except Exception:
-        return None
-
-
-def is_low_ram_mode() -> bool:
-    """Decide whether to run OCR in low-RAM safe mode."""
-    global _LOW_RAM_MODE_CACHED
-    if _LOW_RAM_MODE_CACHED is not None:
-        return _LOW_RAM_MODE_CACHED
-
-    override = getattr(config, "ocr_low_ram_mode", None)
-    if override is True:
-        _LOW_RAM_MODE_CACHED = True
-        return True
-    if override is False:
-        _LOW_RAM_MODE_CACHED = False
-        return False
-
-    # AUTO: treat <= threshold GB as "low RAM" for OCR stability.
-    total = _get_total_physical_memory_bytes_windows()
-    if total is None:
-        _LOW_RAM_MODE_CACHED = True  # safest fallback
-        return True
-    gb = total / (1024 ** 3)
-    threshold = float(getattr(config, "ocr_low_ram_threshold_gb", 10.0) or 10.0)
-    _LOW_RAM_MODE_CACHED = gb <= threshold
-    return _LOW_RAM_MODE_CACHED
-
-
-def _apply_low_ram_runtime_limits():
-    """Best-effort process-wide limits to reduce PyTorch/EasyOCR RAM spikes."""
-    if not is_low_ram_mode():
-        return
-    try:
-        # Limit BLAS/OpenMP thread pools (common source of RAM spikes on CPU).
-        os.environ.setdefault("OMP_NUM_THREADS", str(getattr(config, 'ocr_cpu_threads', 1)))
-        os.environ.setdefault("MKL_NUM_THREADS", str(getattr(config, 'ocr_cpu_threads', 1)))
-        os.environ.setdefault("NUMEXPR_NUM_THREADS", str(getattr(config, 'ocr_cpu_threads', 1)))
-    except Exception:
-        pass
-
-    # If torch is available, also limit torch threads.
-    try:
-        import torch
-        threads = int(getattr(config, 'ocr_cpu_threads', 1) or 1)
-        torch.set_num_threads(threads)
-        if hasattr(torch, "set_num_interop_threads"):
-            torch.set_num_interop_threads(max(1, min(threads, 2)))
-    except Exception:
-        pass
-
-
 def _downscale_for_ocr(img_array: np.ndarray) -> np.ndarray:
-    """Downscale big images/photos to keep OCR memory stable on 8 GB systems."""
+    """Downscale large images to prevent memory issues during OCR processing."""
     if img_array is None:
-        return img_array
-    if not is_low_ram_mode():
         return img_array
 
     h, w = img_array.shape[:2]
     if h <= 0 or w <= 0:
         return img_array
 
-    max_side = int(getattr(config, 'ocr_max_image_side', 2000) or 2000)
-    max_pixels = int(getattr(config, 'ocr_max_pixels', 3_000_000) or 3_000_000)
+    # Simple limits: max 2000px on any side, or 3M total pixels
+    max_side = 2000
+    max_pixels = 3_000_000
 
-    # First pass: cap max side length.
-    scale = 1.0
+    # Check if downscaling is needed
     current_max_side = max(h, w)
+    pixels = h * w
+    
+    if current_max_side <= max_side and pixels <= max_pixels:
+        return img_array
+
+    # Calculate scale factor
+    scale = 1.0
     if current_max_side > max_side:
         scale = min(scale, max_side / float(current_max_side))
-
-    # Second pass: cap total pixels (more robust for very wide/tall images).
-    pixels = h * w
     if pixels > max_pixels:
         scale = min(scale, (max_pixels / float(pixels)) ** 0.5)
 
@@ -191,9 +114,8 @@ def check_ocr_availability():
         # Only needed if EasyOCR must download models (i.e., not bundled).
         if not _get_easyocr_local_model_dir():
             _apply_ssl_cert_workaround()
-        _apply_low_ram_runtime_limits()
         # Try GPU first if enabled
-        if config.ocr_use_gpu and not is_low_ram_mode():
+        if config.ocr_use_gpu:
             try:
                 reader_kwargs = _build_easyocr_reader_kwargs()
                 try:
@@ -350,13 +272,12 @@ def initialize_ocr_reader():
     # Only needed if EasyOCR must download models (i.e., not bundled).
     if not _get_easyocr_local_model_dir():
         _apply_ssl_cert_workaround()
-    _apply_low_ram_runtime_limits()
     
     if config.ocr_reader is None:
         print("Initializing EasyOCR (this may take a moment)...")
         
         # Try GPU first if enabled
-        if config.ocr_use_gpu and not is_low_ram_mode():
+        if config.ocr_use_gpu:
             try:
                 reader_kwargs = _build_easyocr_reader_kwargs()
                 try:
@@ -369,8 +290,6 @@ def initialize_ocr_reader():
                 print(f"GPU initialization failed: {e}")
                 print("Falling back to CPU mode...")
                 # Fall through to CPU initialization
-        elif is_low_ram_mode() and config.ocr_use_gpu:
-            print("OCR low-RAM mode enabled (auto): forcing CPU mode for stability on low-memory systems")
         
         # Use CPU (either because GPU is disabled or GPU failed)
         try:
@@ -440,30 +359,12 @@ def read_system_message_ocr(debug_prefix="[System Message]"):
         
         img_array = np.array(img)
         img_array = _downscale_for_ocr(img_array)
-        try:
-            results = config.ocr_reader.readtext(
-                img_array,
-                detail=1,
-                paragraph=False,
-                batch_size=int(getattr(config, 'ocr_batch_size', 1) or 1),
-            )
-        except Exception as e:
-            # If OCR fails with memory issues on a non-low-ram machine, retry once with
-            # forced low-RAM constraints + stronger downscale.
-            msg = str(e).lower()
-            if ('out of memory' in msg or 'memory' in msg) and not is_low_ram_mode():
-                global _LOW_RAM_MODE_CACHED
-                _LOW_RAM_MODE_CACHED = True
-                _apply_low_ram_runtime_limits()
-                img_array_retry = _downscale_for_ocr(img_array)
-                results = config.ocr_reader.readtext(
-                    img_array_retry,
-                    detail=1,
-                    paragraph=False,
-                    batch_size=1,
-                )
-            else:
-                raise
+        results = config.ocr_reader.readtext(
+            img_array,
+            detail=1,
+            paragraph=False,
+            batch_size=1,
+        )
         
         if results and len(results) > 0:
             text_lines = []

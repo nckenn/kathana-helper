@@ -83,14 +83,14 @@ class AutoPots:
     
     def use_hp_pot(self, hwnd, use_rohati_heal=False):
         """
-        Use an HP potion by pressing '0'
+        Use an HP potion by pressing the configured HP key
         If use_rohati_heal is True, executes sequence: E -> R
         
         Args:
             hwnd: Window handle (unused, kept for compatibility)
             use_rohati_heal: If True, use Rohati heal before potion
         """
-        input_handler.send_input('0')
+        input_handler.send_input(config.hp_key)
         time.sleep(random.uniform(0.05, 0.1))
         
         if use_rohati_heal:
@@ -108,10 +108,10 @@ class AutoPots:
     
     def use_mp_pot(self, hwnd):
         """
-        Use an MP potion by pressing '9'
+        Use an MP potion by pressing the configured MP key
         
         Args:
             hwnd: Window handle (unused, kept for compatibility)
         """
-        input_handler.send_input('9')
+        input_handler.send_input(config.mp_key)
         time.sleep(random.uniform(0.05, 0.1))

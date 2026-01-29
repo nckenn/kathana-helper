@@ -157,10 +157,9 @@ def extract_enemy_name_easyocr(name_area):
                 mag_ratio=1.0
             )
         except Exception as e:
-            # If OCR throws a memory error on a beefy machine, auto-switch to low-RAM mode and retry once.
+            # If OCR throws a memory error, retry with downscaled image
             msg = str(e).lower()
-            if ('out of memory' in msg or 'memory' in msg) and not ocr_utils.is_low_ram_mode():
-                ocr_utils._LOW_RAM_MODE_CACHED = True
+            if 'out of memory' in msg or 'memory' in msg:
                 img_rgb_retry = ocr_utils._downscale_for_ocr(img_rgb)
                 results = config.ocr_reader.readtext(
                     img_rgb_retry,
@@ -226,8 +225,7 @@ def extract_enemy_name_easyocr(name_area):
                 )
             except Exception as e:
                 msg = str(e).lower()
-                if ('out of memory' in msg or 'memory' in msg) and not ocr_utils.is_low_ram_mode():
-                    ocr_utils._LOW_RAM_MODE_CACHED = True
+                if 'out of memory' in msg or 'memory' in msg:
                     img_rgb_original_retry = ocr_utils._downscale_for_ocr(img_rgb_original)
                     results_original = config.ocr_reader.readtext(
                         img_rgb_original_retry,
@@ -556,15 +554,30 @@ class EnemyNameValidator:
     """Handles enemy name validation and target matching"""
     
     @staticmethod
-    def check_avara_detection(detected_name):
-        """Check if detected name contains 'Avara' (mob to avoid)"""
-        if not detected_name:
+    def check_avoid_mob_detection(detected_name):
+        """Check if detected name matches any mob in the avoid list"""
+        if not detected_name or not config.mob_avoid_list:
             return False
+        
         detected_name_normalized = normalize_text(detected_name)
-        # Check for exact match 'Avara Kara' or normalized versions
-        return (contains_complete_word('Avara Kara', detected_name) or
-                'avara kara' in detected_name_normalized or 
-                'avara' in detected_name_normalized)
+        
+        # Check each mob in avoid list
+        for avoid_mob in config.mob_avoid_list:
+            avoid_mob_normalized = normalize_text(avoid_mob)
+            
+            # Check for exact word match (e.g., "Avara Kara" matches "Avara Kara")
+            if contains_complete_word(avoid_mob, detected_name):
+                return True
+            
+            # Check if avoid mob name is contained in detected name (normalized)
+            if avoid_mob_normalized in detected_name_normalized:
+                return True
+            
+            # Check if detected name is contained in avoid mob name (for partial matches)
+            if detected_name_normalized in avoid_mob_normalized:
+                return True
+        
+        return False
     
     @staticmethod
     def match_targets(detected_name, targets):
@@ -694,18 +707,14 @@ def detect_enemy_for_auto_attack(hwnd, targets=None):
         # Extract enemy name using OCR
         detected_name, ocr_text = extract_enemy_name_easyocr(name_area)
         
-        # Check for Avara (mob to avoid)
-        detected_name_normalized = normalize_text(detected_name)
-        if (EnemyNameValidator.check_avara_detection(detected_name) or
-            contains_complete_word('Avara Kara', detected_name) or
-            'avara kara' in detected_name_normalized or
-            'avara' in detected_name_normalized):
-            print(f'[TARGET] Enemy detected \'{detected_name}\' contains Avara. Avoiding attack.')
+        # Check for mobs to avoid (skip list)
+        if EnemyNameValidator.check_avoid_mob_detection(detected_name):
+            print(f'[TARGET] Enemy detected \'{detected_name}\' is in avoid list. Skipping attack.')
             return EnemyDetectionResult(
                 found=False,
                 name=detected_name,
                 ocr_text=ocr_text,
-                avara_detected=True
+                avara_detected=True  # Keep for backward compatibility, but now means "avoid mob detected"
             ).to_dict()
         
         # Check target list if provided
@@ -1108,8 +1117,10 @@ def check_auto_attack():
                     current_time, enemy_hp_percentage
                 )
                 
-                # Execute skill sequence when enemy is found
-                if config.skill_sequence_manager and config.area_skills:
+                # Execute skill sequence when enemy is found (only if any skills are enabled)
+                if (config.skill_sequence_manager and config.area_skills and
+                    any(config.skill_sequence_config[i]['image_path'] and config.skill_sequence_config[i]['enabled'] 
+                        for i in range(8))):
                     try:
                         screen = config.calibrator.capture_window(hwnd)
                         if screen is not None:

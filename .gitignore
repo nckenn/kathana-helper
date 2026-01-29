@@ -6,6 +6,10 @@ __pycache__/
 # Bot settings (user-specific, don't commit)
 bot_settings.json
 
+# License files (keep private key secret!)
+private_key.pem
+license.json
+
 # Logs
 *.log
 

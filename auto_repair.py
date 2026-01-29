@@ -60,9 +60,9 @@ class RepairExecutor:
     @staticmethod
     def execute_repair(current_time):
         """Execute repair action"""
-        input_handler.send_input('f10')
+        input_handler.send_input(config.repair_key)
         config.last_repair_time = current_time
-        print(f"[Auto Repair] REPAIR TRIGGERED (F10)")
+        print(f"[Auto Repair] REPAIR TRIGGERED ({config.repair_key.upper()})")
     
     @staticmethod
     def is_on_cooldown(current_time):

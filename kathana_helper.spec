@@ -55,6 +55,7 @@ datas = [
     ("buffs_manager.py", "."),
     ("skill_sequence_manager.py", "."),
     ("gui.py", "."),
+    ("license_manager.py", "."),
     ("jobs", "jobs"),  # Skill images folder for buffs and skill sequence (all job folders and images)
     ("skill_bar_1.bmp", "."),  # Skill bar template for calibration
     ("skill_bar_2.bmp", "."),  # Skill bar template for calibration

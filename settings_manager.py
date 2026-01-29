@@ -70,15 +70,18 @@ def save_settings():
             'skill_slots': clean_skill_slots,
             'action_slots': clean_action_slots,
             'mob_target_list': config.mob_target_list.copy(),
+            'mob_avoid_list': config.mob_avoid_list.copy(),
             'mob_detection_enabled': config.mob_detection_enabled,
             # target_name_area is NOT saved - detection/calibration region should not be persisted
             # target_hp_bar_area is NOT saved - detection/calibration region should not be persisted
             'auto_attack_enabled': config.auto_attack_enabled,
             'auto_hp_enabled': config.auto_hp_enabled,
             'hp_threshold': config.hp_threshold,
+            'hp_key': config.hp_key,
             # hp_bar_area is NOT saved - calibration data should not be persisted
             'auto_mp_enabled': config.auto_mp_enabled,
             'mp_threshold': config.mp_threshold,
+            'mp_key': config.mp_key,
             # mp_bar_area is NOT saved - calibration data should not be persisted
             'mouse_clicker_enabled': config.mouse_clicker_enabled,
             'mouse_clicker_interval': config.mouse_clicker_interval,
@@ -88,6 +91,7 @@ def save_settings():
             'auto_repair_enabled': config.auto_repair_enabled,
             'break_warning_trigger_count': config.BREAK_WARNING_TRIGGER_COUNT,
             'auto_repair_check_interval': config.AUTO_REPAIR_CHECK_INTERVAL,
+            'repair_key': config.repair_key,
             # system_message_area is NOT saved - calibration data should not be persisted
             'auto_change_target_enabled': config.auto_change_target_enabled,
             'unstuck_timeout': config.unstuck_timeout,
@@ -140,6 +144,12 @@ def save_settings():
                         settings['auto_repair_check_interval'] = float(gui.auto_repair_check_interval_var.get())
                     except ValueError:
                         settings['auto_repair_check_interval'] = config.AUTO_REPAIR_CHECK_INTERVAL
+                if hasattr(gui, 'hp_key_var'):
+                    settings['hp_key'] = gui.hp_key_var.get()
+                if hasattr(gui, 'mp_key_var'):
+                    settings['mp_key'] = gui.mp_key_var.get()
+                if hasattr(gui, 'repair_key_var'):
+                    settings['repair_key'] = gui.repair_key_var.get()
                 if hasattr(gui, 'auto_change_target_var'):
                     settings['auto_change_target_enabled'] = gui.auto_change_target_var.get()
                 if hasattr(gui, 'unstuck_timeout_var'):
@@ -205,6 +215,8 @@ def load_settings():
         elif 'mob_skip_list' in settings:
             config.mob_target_list = settings['mob_skip_list']
             print("[Settings] Migrated mob_skip_list to mob_target_list (inverted logic)")
+        if 'mob_avoid_list' in settings:
+            config.mob_avoid_list = settings['mob_avoid_list']
         if 'mob_detection_enabled' in settings:
             config.mob_detection_enabled = settings['mob_detection_enabled']
         # target_name_area / target_hp_bar_area are NOT loaded - detection/calibration regions should not be persisted
@@ -221,6 +233,8 @@ def load_settings():
             config.BREAK_WARNING_TRIGGER_COUNT = settings['break_warning_trigger_count']
         if 'auto_repair_check_interval' in settings:
             config.AUTO_REPAIR_CHECK_INTERVAL = settings['auto_repair_check_interval']
+        if 'repair_key' in settings:
+            config.repair_key = settings['repair_key']
         # system_message_area is NOT loaded - calibration data should not be persisted
         if 'auto_change_target_enabled' in settings:
             config.auto_change_target_enabled = settings['auto_change_target_enabled']
@@ -232,6 +246,8 @@ def load_settings():
             config.auto_hp_enabled = settings['auto_hp_enabled']
         if 'hp_threshold' in settings:
             config.hp_threshold = settings['hp_threshold']
+        if 'hp_key' in settings:
+            config.hp_key = settings['hp_key']
         # hp_bar_area is NOT loaded - calibration data should not be persisted
         # (calibration must be performed each session)
         
@@ -239,6 +255,8 @@ def load_settings():
             config.auto_mp_enabled = settings['auto_mp_enabled']
         if 'mp_threshold' in settings:
             config.mp_threshold = settings['mp_threshold']
+        if 'mp_key' in settings:
+            config.mp_key = settings['mp_key']
         # mp_bar_area is NOT loaded - calibration data should not be persisted
         # (calibration must be performed each session)
         

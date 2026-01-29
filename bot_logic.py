@@ -264,7 +264,11 @@ def bot_loop():
                 # Only check if features are enabled to avoid unnecessary work
                 if config.auto_hp_enabled or config.auto_mp_enabled:
                     autopots.check_auto_pots()
-                check_buffs()  # High priority - check buffs early (has internal throttling)
+                # Only check buffs if any are enabled and configured
+                if (config.buffs_manager and 
+                    any(config.buffs_config[i]['image_path'] and config.buffs_config[i]['enabled'] 
+                        for i in range(8))):
+                    check_buffs()  # High priority - check buffs early (has internal throttling)
                 # Skill sequence is now executed inside check_auto_attack when enemy is found
                 if config.auto_attack_enabled:
                     auto_attack.check_auto_attack()

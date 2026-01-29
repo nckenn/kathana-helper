@@ -19,6 +19,7 @@ kathana_helper/
 ├── settings_manager.py          # Settings save/load
 ├── buffs_manager.py             # Buffs management and activation
 ├── skill_sequence_manager.py    # Skill sequence execution
+├── license_manager.py           # License key validation and management
 └── gui.py                       # GUI class (CustomTkinter)
 ```
 
@@ -97,3 +98,75 @@ The executable will be created in the `dist` folder.
 - **Mob Filtering**: Target only specific mobs from a configurable list using OCR
 - **OCR Integration**: Enemy name detection using EasyOCR for mob filtering
 
+## License System
+
+Kathana Helper uses a signed license key system to control access to the application. License keys are cryptographically signed using RSA-2048 to prevent forgery.
+
+### Generating License Keys
+
+**Note:** The private key (`private_key.pem`) has **no password** - it is stored unencrypted. Keep it secure and never distribute it.
+
+#### First Time Setup (Generate Key Pair)
+
+Before generating license keys, you need to create a key pair:
+
+```bash
+python tools/generate_license.py --generate-keys
+```
+
+This will create:
+- `private_key.pem` - **KEEP THIS SECRET!** Never distribute this file.
+- `public_key.pem` - This key is embedded in the application for verification.
+
+#### Generate a License Key
+
+Once you have the key pair, you can generate license keys for users:
+
+```bash
+# Basic license (365 days, no machine binding)
+python tools/generate_license.py --user "John Doe" --days 365
+
+# License with custom validity period
+python tools/generate_license.py --user "Jane Smith" --days 30
+
+# License bound to a specific machine (optional)
+# First, get the user's Machine ID from the license dialog in the app
+# Then generate the license with that Machine ID:
+python tools/generate_license.py --user "Bob Wilson" --days 365 --machine-id "abc123def456" --machine-bound
+
+# Save license key to a file
+python tools/generate_license.py --user "Alice Brown" --days 365 --output license_key.txt
+```
+
+#### Command Line Options
+
+- `--generate-keys`: Generate a new RSA key pair (first time setup)
+- `--private-key PATH`: Specify path to private key file (default: `private_key.pem`)
+- `--user NAME`: License holder name
+- `--days N`: Number of days license is valid (default: 365)
+- `--machine-id ID`: Optional machine ID to bind license to
+- `--machine-bound`: Enable machine binding (license only works on specified machine)
+- `--output FILE`: Save license key to a file
+
+### License Activation
+
+When users run the application:
+1. If no valid license is found, a license entry dialog will appear
+2. The dialog displays the user's **Machine ID** (for machine-bound licenses)
+   - Users can copy their Machine ID to provide it to the license issuer
+   - The Machine ID is unique to each computer
+3. Users can enter their license key to activate the application
+4. License status can be viewed and managed in the Settings tab under "License Management"
+5. Users can change/update their license key at any time through the Settings tab
+
+**For Machine-Bound Licenses:**
+- The license dialog shows the user's Machine ID
+- Users should copy this ID and provide it when requesting a machine-bound license
+- The license issuer will use this Machine ID when generating the license key
+
+### Security Notes
+
+- The private key is stored **without encryption** (no password required)
+- Keep `private_key.pem` secure and never commit it to version control
+- The public key is embedded in the application and cannot be changed without recompiling
+- License keys are cryptographically signed and cannot be forged without the private key

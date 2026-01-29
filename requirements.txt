@@ -16,3 +16,6 @@ numpy>=1.24.0
 # OCR
 easyocr>=1.7.0
 certifi>=2024.2.2
+
+# Cryptography for license system
+cryptography>=41.0.0

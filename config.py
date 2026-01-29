@@ -19,6 +19,11 @@ auto_repair_enabled = False
 mouse_clicker_enabled = False
 is_mage = False  # If enabled, attack action won't be triggered after target
 
+# Auto HP/MP/Repair hotkeys (configurable)
+hp_key = '0'  # Default HP potion key
+mp_key = '9'  # Default MP potion key
+repair_key = 'f10'  # Default repair key
+
 # HP/MP thresholds and areas
 hp_threshold = 70  # Default HP threshold percentage (0-100)
 hp_bar_area = {'x': 152, 'y': 69, 'width': 0, 'height': 0}
@@ -59,6 +64,7 @@ action_slots = {
 
 # Mob detection system
 mob_target_list = []  # List of mob names to target (only attack mobs in this list)
+mob_avoid_list = ["Avara Kara", "Dadati", "Patura", "Kamisya", "Kudd"]  # List of mob names to avoid/skip (will not attack these mobs)
 mob_detection_enabled = False
 target_name_area = {'x': 381, 'y': 161, 'width': 0, 'height': 0}
 target_hp_bar_area = {'x': 381, 'y': 183, 'width': 0, 'height': 0}
@@ -86,16 +92,8 @@ ocr_use_gpu = True  # Try to use GPU if available, fallback to CPU if not
 ocr_available = False  # Set to True if OCR check passes on startup
 ocr_mode = None  # 'gpu', 'cpu', or None - indicates which mode OCR is using
 
-# OCR low-RAM safety
-# - If None: auto-detect based on system RAM (recommended default for mixed machines).
-# - If True: force conservative runtime settings (recommended for 8 GB systems).
-# - If False: allow higher-performance settings (may use more RAM).
-ocr_low_ram_mode = None
-ocr_low_ram_threshold_gb = 10.0   # AUTO mode: <= this RAM enables low-RAM safety
-ocr_batch_size = 1               # EasyOCR readtext batch size (1 is safest)
-ocr_max_image_side = 2000        # Downscale images so max(h, w) <= this before OCR
-ocr_max_pixels = 3_000_000       # If image exceeds this, downscale even more aggressively
-ocr_cpu_threads = 1              # Limit CPU threads (prevents RAM spikes on PyTorch)
+# OCR settings
+ocr_batch_size = 1  # EasyOCR readtext batch size (1 is safest for memory)
 
 # Settings file
 SETTINGS_FILE = "bot_settings.json"

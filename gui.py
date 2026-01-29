@@ -19,6 +19,7 @@ import input_handler
 import auto_attack
 import ocr_utils
 import calibration
+from license_manager import get_license_manager
 
 
 class ToolTip:
@@ -86,41 +87,617 @@ class BotGUI:
         return cls._instance
     
     def check_ocr_on_startup(self):
-        """Check OCR availability on startup and show warning if not available"""
-        print("Checking OCR availability...")
-        is_available, error_msg, mode, troubleshooting = ocr_utils.check_ocr_availability()
+        """Check OCR availability on startup in background thread (non-blocking)"""
+        def check_thread():
+            """Background thread to check OCR availability"""
+            print("Checking OCR availability...")
+            is_available, error_msg, mode, troubleshooting = ocr_utils.check_ocr_availability()
+            
+            # Store OCR availability in config
+            config.ocr_available = is_available
+            config.ocr_mode = mode
+            
+            # Update GUI in main thread
+            def update_gui():
+                # Update OCR status display if it exists
+                if hasattr(self, 'ocr_status_text'):
+                    self.update_ocr_status_display()
+                
+                if not is_available:
+                    error_details = f"\n\nError: {error_msg}" if error_msg else ""
+                    troubleshooting_text = f"\n\n{troubleshooting}" if troubleshooting else ""
+                    warning_message = (
+                        "OCR (Optical Character Recognition) is not available on this system.\n\n"
+                        "Features that require OCR (such as auto-repair, damage detection, etc.) "
+                        "will not work."
+                        f"{error_details}"
+                        f"{troubleshooting_text}\n\n"
+                        "You can re-check OCR availability from the Settings tab after fixing the issue."
+                    )
+                    messagebox.showwarning("OCR Not Available", warning_message)
+                    print("WARNING: OCR is not available - OCR features will be disabled")
+                else:
+                    print(f"OCR check passed - Available in {mode.upper()} mode")
+            
+            # Schedule GUI update in main thread
+            self.root.after(0, update_gui)
         
-        # Store OCR availability in config
-        config.ocr_available = is_available
-        config.ocr_mode = mode
+        # Start background thread
+        threading.Thread(target=check_thread, daemon=True).start()
+    
+    def _on_license_activated(self, license_dialog):
+        """Called when license is successfully activated"""
+        license_dialog.destroy()
+        # Show main window if it was hidden
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+    
+    def show_license_dialog_blocking(self):
+        """Show license entry dialog that blocks until valid license is entered"""
+        license_dialog = ctk.CTkToplevel(self.root)
+        license_dialog.title("License Activation Required")
+        license_dialog.geometry("600x530")
+        license_dialog.resizable(False, False)
+        license_dialog.transient(self.root)
+        license_dialog.grab_set()  # Make dialog modal
         
-        if not is_available:
-            error_details = f"\n\nError: {error_msg}" if error_msg else ""
-            troubleshooting_text = f"\n\n{troubleshooting}" if troubleshooting else ""
-            warning_message = (
-                "OCR (Optical Character Recognition) is not available on this system.\n\n"
-                "Features that require OCR (such as auto-repair, damage detection, etc.) "
-                "will not work."
-                f"{error_details}"
-                f"{troubleshooting_text}\n\n"
-                "You can re-check OCR availability from the Settings tab after fixing the issue."
+        # Make it a top-level window (not dependent on hidden root)
+        license_dialog.attributes('-topmost', True)
+        
+        # Center the dialog
+        license_dialog.update_idletasks()
+        x = (license_dialog.winfo_screenwidth() // 2) - (600 // 2)
+        y = (license_dialog.winfo_screenheight() // 2) - (530 // 2)
+        license_dialog.geometry(f"600x530+{x}+{y}")
+        
+        # Prevent closing without valid license
+        def on_closing():
+            """Exit app if user tries to close without license"""
+            self.root.quit()
+            self.root.destroy()
+        
+        license_dialog.protocol("WM_DELETE_WINDOW", on_closing)
+        
+        # Main frame
+        main_frame = ctk.CTkFrame(license_dialog, corner_radius=10)
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # Title
+        title_label = ctk.CTkLabel(
+            main_frame,
+            text="License Activation Required",
+            font=ctk.CTkFont(size=20, weight="bold")
+        )
+        title_label.pack(pady=(20, 10))
+        
+        # Instructions
+        instructions = ctk.CTkLabel(
+            main_frame,
+            text="Please enter your license key to continue using Kathana Helper.",
+            font=ctk.CTkFont(size=12),
+            wraplength=550
+        )
+        instructions.pack(pady=(0, 10))
+        
+        # Machine ID section (for machine-bound licenses)
+        machine_id_frame = ctk.CTkFrame(main_frame, corner_radius=8)
+        machine_id_frame.pack(fill="x", padx=20, pady=(0, 10))
+        machine_id_frame.columnconfigure(0, weight=1)
+        
+        machine_id_label = ctk.CTkLabel(
+            machine_id_frame,
+            text="Your Machine ID:",
+            font=ctk.CTkFont(size=11, weight="bold")
+        )
+        machine_id_label.grid(row=0, column=0, sticky="w", padx=10, pady=(10, 5))
+        
+        license_manager = get_license_manager()
+        machine_id = license_manager.get_machine_id()
+        
+        machine_id_value_frame = ctk.CTkFrame(machine_id_frame, fg_color="transparent")
+        machine_id_value_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 5))
+        machine_id_value_frame.columnconfigure(0, weight=1)
+        
+        machine_id_entry = ctk.CTkEntry(
+            machine_id_value_frame,
+            width=400,
+            height=30,
+            font=ctk.CTkFont(size=10, family="Courier"),
+            state="readonly"
+        )
+        machine_id_entry.grid(row=0, column=0, sticky="ew", padx=(0, 5))
+        # Need to temporarily change state to insert text in readonly entry
+        machine_id_entry.configure(state="normal")
+        machine_id_entry.insert(0, machine_id)
+        machine_id_entry.configure(state="readonly")
+        
+        def copy_machine_id():
+            """Copy machine ID to clipboard"""
+            license_dialog.clipboard_clear()
+            license_dialog.clipboard_append(machine_id)
+            license_dialog.update()
+            status_label.configure(text="Machine ID copied to clipboard!", text_color="green")
+            license_dialog.after(2000, lambda: status_label.configure(text=""))
+        
+        copy_machine_id_btn = ctk.CTkButton(
+            machine_id_value_frame,
+            text="Copy",
+            command=copy_machine_id,
+            width=80,
+            height=30,
+            font=ctk.CTkFont(size=10)
+        )
+        copy_machine_id_btn.grid(row=0, column=1)
+        
+        machine_id_help = ctk.CTkLabel(
+            machine_id_frame,
+            text="If you need a machine-bound license, provide this Machine ID to the license issuer.",
+            font=ctk.CTkFont(size=9),
+            text_color="gray",
+            wraplength=540
+        )
+        machine_id_help.grid(row=2, column=0, sticky="w", padx=10, pady=(0, 10))
+        
+        # License key entry
+        license_label = ctk.CTkLabel(
+            main_frame,
+            text="License Key:",
+            font=ctk.CTkFont(size=12, weight="bold")
+        )
+        license_label.pack(anchor="w", padx=20, pady=(10, 5))
+        
+        license_entry = ctk.CTkTextbox(
+            main_frame,
+            width=540,
+            height=100,
+            font=ctk.CTkFont(size=11),
+            wrap="word"
+        )
+        license_entry.pack(padx=20, pady=(0, 10))
+        license_entry.focus()
+        
+        # Status label
+        status_label = ctk.CTkLabel(
+            main_frame,
+            text="",
+            font=ctk.CTkFont(size=11),
+            wraplength=540
+        )
+        status_label.pack(pady=(0, 10))
+        
+        # License info display (if license exists but is invalid)
+        license_info = license_manager.get_license_info()
+        
+        if license_info:
+            info_text = f"Current License: {license_info['data'].get('user_name', 'Unknown')}\n"
+            if 'expires' in license_info['data']:
+                from datetime import datetime
+                expires = datetime.fromisoformat(license_info['data']['expires'])
+                info_text += f"Expires: {expires.strftime('%Y-%m-%d')}"
+            info_label = ctk.CTkLabel(
+                main_frame,
+                text=info_text,
+                font=ctk.CTkFont(size=10),
+                text_color="gray"
             )
-            messagebox.showwarning("OCR Not Available", warning_message)
-            print("WARNING: OCR is not available - OCR features will be disabled")
-        else:
-            print(f"OCR check passed - Available in {mode.upper()} mode")
+            info_label.pack(pady=(0, 10))
+        
+        def validate_and_save():
+            """Validate and save the license key"""
+            license_key = license_entry.get("1.0", "end-1c").strip()
+            
+            if not license_key:
+                status_label.configure(text="Please enter a license key.", text_color="red")
+                return
+            
+            # Validate license
+            is_valid, message, license_data = license_manager.validate_license(license_key)
+            
+            if is_valid:
+                # Save license
+                success, save_message = license_manager.save_license(license_key)
+                if success:
+                    status_label.configure(text="License activated successfully! Closing...", text_color="green")
+                    
+                    # Update license status info immediately
+                    self.update_license_status_info()
+                    
+                    # Give user a moment to see the success message, then close dialog
+                    license_dialog.after(1000, lambda: self._on_license_activated_blocking(license_dialog))
+                else:
+                    status_label.configure(text=f"Error saving license: {save_message}", text_color="red")
+            else:
+                status_label.configure(text=message, text_color="red")
+        
+        # Buttons frame
+        button_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        button_frame.pack(pady=20)
+        
+        # Activate button
+        activate_button = ctk.CTkButton(
+            button_frame,
+            text="Activate License",
+            command=validate_and_save,
+            width=150,
+            height=35,
+            font=ctk.CTkFont(size=12, weight="bold")
+        )
+        activate_button.pack(side="left", padx=10)
+        
+        # Cancel/Exit button
+        def exit_app():
+            """Exit the application"""
+            self.root.quit()
+            self.root.destroy()
+        
+        cancel_button = ctk.CTkButton(
+            button_frame,
+            text="Exit",
+            command=exit_app,
+            width=150,
+            height=35,
+            font=ctk.CTkFont(size=12),
+            fg_color="gray",
+            hover_color="darkgray"
+        )
+        cancel_button.pack(side="left", padx=10)
+        
+        # Bind Ctrl+Enter to activate (since it's a text area now)
+        license_entry.bind("<Control-Return>", lambda e: validate_and_save())
+        
+        # Make dialog close on Escape
+        license_dialog.bind("<Escape>", lambda e: exit_app())
+        
+        # Wait for dialog to close
+        license_dialog.wait_window()
+    
+    def _on_license_activated_blocking(self, license_dialog):
+        """Called when license is successfully activated from blocking dialog"""
+        # Close the dialog - this will cause wait_window() to return
+        license_dialog.destroy()
+        # Ensure the dialog is fully closed
+        license_dialog.update()
+    
+    def show_license_dialog(self):
+        """Show license entry dialog (non-blocking, for Settings tab)"""
+        license_dialog = ctk.CTkToplevel(self.root)
+        license_dialog.title("License Activation")
+        license_dialog.geometry("600x500")
+        license_dialog.resizable(False, False)
+        license_dialog.transient(self.root)
+        license_dialog.grab_set()  # Make dialog modal
+        
+        # Center the dialog
+        license_dialog.update_idletasks()
+        x = (license_dialog.winfo_screenwidth() // 2) - (600 // 2)
+        y = (license_dialog.winfo_screenheight() // 2) - (500 // 2)
+        license_dialog.geometry(f"600x500+{x}+{y}")
+        
+        # Main frame
+        main_frame = ctk.CTkFrame(license_dialog, corner_radius=10)
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # Title
+        title_label = ctk.CTkLabel(
+            main_frame,
+            text="License Activation",
+            font=ctk.CTkFont(size=20, weight="bold")
+        )
+        title_label.pack(pady=(20, 10))
+        
+        # Instructions
+        instructions = ctk.CTkLabel(
+            main_frame,
+            text="Please enter your license key to activate Kathana Helper.",
+            font=ctk.CTkFont(size=12),
+            wraplength=550
+        )
+        instructions.pack(pady=(0, 10))
+        
+        # Machine ID section (for machine-bound licenses)
+        machine_id_frame = ctk.CTkFrame(main_frame, corner_radius=8)
+        machine_id_frame.pack(fill="x", padx=20, pady=(0, 10))
+        machine_id_frame.columnconfigure(0, weight=1)
+        
+        machine_id_label = ctk.CTkLabel(
+            machine_id_frame,
+            text="Your Machine ID:",
+            font=ctk.CTkFont(size=11, weight="bold")
+        )
+        machine_id_label.grid(row=0, column=0, sticky="w", padx=10, pady=(10, 5))
+        
+        license_manager = get_license_manager()
+        machine_id = license_manager.get_machine_id()
+        
+        machine_id_value_frame = ctk.CTkFrame(machine_id_frame, fg_color="transparent")
+        machine_id_value_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 5))
+        machine_id_value_frame.columnconfigure(0, weight=1)
+        
+        machine_id_entry = ctk.CTkEntry(
+            machine_id_value_frame,
+            width=400,
+            height=30,
+            font=ctk.CTkFont(size=10, family="Courier"),
+            state="readonly"
+        )
+        machine_id_entry.grid(row=0, column=0, sticky="ew", padx=(0, 5))
+        # Need to temporarily change state to insert text in readonly entry
+        machine_id_entry.configure(state="normal")
+        machine_id_entry.insert(0, machine_id)
+        machine_id_entry.configure(state="readonly")
+        
+        def copy_machine_id():
+            """Copy machine ID to clipboard"""
+            license_dialog.clipboard_clear()
+            license_dialog.clipboard_append(machine_id)
+            license_dialog.update()
+            status_label.configure(text="Machine ID copied to clipboard!", text_color="green")
+            license_dialog.after(2000, lambda: status_label.configure(text=""))
+        
+        copy_machine_id_btn = ctk.CTkButton(
+            machine_id_value_frame,
+            text="Copy",
+            command=copy_machine_id,
+            width=80,
+            height=30,
+            font=ctk.CTkFont(size=10)
+        )
+        copy_machine_id_btn.grid(row=0, column=1)
+        
+        machine_id_help = ctk.CTkLabel(
+            machine_id_frame,
+            text="If you need a machine-bound license, provide this Machine ID to the license issuer.",
+            font=ctk.CTkFont(size=9),
+            text_color="gray",
+            wraplength=540
+        )
+        machine_id_help.grid(row=2, column=0, sticky="w", padx=10, pady=(0, 10))
+        
+        # License key entry (text area)
+        license_label = ctk.CTkLabel(
+            main_frame,
+            text="License Key:",
+            font=ctk.CTkFont(size=12, weight="bold")
+        )
+        license_label.pack(anchor="w", padx=20, pady=(10, 5))
+        
+        license_entry = ctk.CTkTextbox(
+            main_frame,
+            width=540,
+            height=100,
+            font=ctk.CTkFont(size=11),
+            wrap="word"
+        )
+        license_entry.pack(padx=20, pady=(0, 10))
+        license_entry.focus()
+        
+        # Status label
+        status_label = ctk.CTkLabel(
+            main_frame,
+            text="",
+            font=ctk.CTkFont(size=11),
+            wraplength=540
+        )
+        status_label.pack(pady=(0, 10))
+        
+        # License info display (if license exists but is invalid)
+        license_info = license_manager.get_license_info()
+        
+        if license_info:
+            info_text = f"Current License: {license_info['data'].get('user_name', 'Unknown')}\n"
+            if 'expires' in license_info['data']:
+                from datetime import datetime
+                expires = datetime.fromisoformat(license_info['data']['expires'])
+                info_text += f"Expires: {expires.strftime('%Y-%m-%d')}"
+            info_label = ctk.CTkLabel(
+                main_frame,
+                text=info_text,
+                font=ctk.CTkFont(size=10),
+                text_color="gray"
+            )
+            info_label.pack(pady=(0, 10))
+        
+        def validate_and_save():
+            """Validate and save the license key"""
+            license_key = license_entry.get("1.0", "end-1c").strip()
+            
+            if not license_key:
+                status_label.configure(text="Please enter a license key.", text_color="red")
+                return
+            
+            # Validate license
+            is_valid, message, license_data = license_manager.validate_license(license_key)
+            
+            if is_valid:
+                # Save license
+                success, save_message = license_manager.save_license(license_key)
+                if success:
+                    status_label.configure(text="License activated successfully!", text_color="green")
+                    
+                    # Close dialog and refresh license status
+                    self.update_license_status_info()  # Update status tab immediately
+                    license_dialog.after(1000, lambda: [license_dialog.destroy(), self.refresh_license_status()])
+                else:
+                    status_label.configure(text=f"Error saving license: {save_message}", text_color="red")
+            else:
+                status_label.configure(text=message, text_color="red")
+        
+        # Buttons frame
+        button_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        button_frame.pack(pady=20)
+        
+        # Activate button
+        activate_button = ctk.CTkButton(
+            button_frame,
+            text="Activate License",
+            command=validate_and_save,
+            width=150,
+            height=35,
+            font=ctk.CTkFont(size=12, weight="bold")
+        )
+        activate_button.pack(side="left", padx=10)
+        
+        # Cancel button (just close dialog, don't exit app)
+        cancel_button = ctk.CTkButton(
+            button_frame,
+            text="Cancel",
+            command=license_dialog.destroy,
+            width=150,
+            height=35,
+            font=ctk.CTkFont(size=12),
+            fg_color="gray",
+            hover_color="darkgray"
+        )
+        cancel_button.pack(side="left", padx=10)
+        
+        # Bind Ctrl+Enter to activate (since it's a text area now)
+        license_entry.bind("<Control-Return>", lambda e: validate_and_save())
+        
+        # Make dialog close on Escape
+        license_dialog.bind("<Escape>", lambda e: license_dialog.destroy())
     
     def update_ocr_status_display(self):
         """Update the OCR status display in the Settings tab"""
         if not hasattr(self, 'ocr_status_text'):
             return  # GUI elements not created yet
         
-        if config.ocr_available:
+        # Check if OCR hasn't been checked yet (ocr_mode is None means not checked)
+        if config.ocr_mode is None:
+            status_text = "Checking..."
+            self.ocr_status_text.configure(text=status_text, text_color="gray")
+        elif config.ocr_available:
             status_text = f"✓ Available ({config.ocr_mode.upper()} mode)"
             self.ocr_status_text.configure(text=status_text, text_color="green")
         else:
             status_text = "✗ Not Available"
             self.ocr_status_text.configure(text=status_text, text_color="red")
+    
+    def update_license_status_info(self):
+        """Update license status info in Status tab (now uses refresh_license_status_display)"""
+        self.refresh_license_status_display()
+    
+    def refresh_license_status(self):
+        """Refresh license status display (shows a messagebox; updates Status tab UI)"""
+        if not hasattr(self, 'license_expiry_label'):
+            return  # GUI elements not created yet
+        
+        license_manager = get_license_manager()
+        license_info = license_manager.get_license_info()
+        
+        # Build info text for messagebox
+        if license_info and license_info.get('valid'):
+            user_name = license_info['data'].get('user_name', 'Unknown')
+            expires = license_info['data'].get('expires', 'Never')
+            issued = license_info['data'].get('issued', 'Unknown')
+            machine_bound = license_info['data'].get('machine_bound', False)
+            
+            if expires != 'Never':
+                from datetime import datetime
+                try:
+                    expires_date = datetime.fromisoformat(expires)
+                    expires_str = expires_date.strftime('%B %d, %Y')
+                    days_left = (expires_date - datetime.now()).days
+                    if days_left < 0:
+                        expiry_info = f"Expired: {expires_str}"
+                    elif days_left <= 7:
+                        expiry_info = f"Expires: {expires_str} ({days_left} day{'s' if days_left != 1 else ''} left)"
+                    else:
+                        expiry_info = f"Expires: {expires_str}"
+                except:
+                    expiry_info = f"Expires: {expires}"
+            else:
+                expiry_info = "No expiration"
+            
+            if issued != 'Unknown':
+                try:
+                    from datetime import datetime
+                    issued_date = datetime.fromisoformat(issued)
+                    issued_str = issued_date.strftime('%B %d, %Y')
+                except:
+                    issued_str = issued
+            else:
+                issued_str = "Unknown"
+            
+            info_text = f"User: {user_name}\n"
+            info_text += f"Issued: {issued_str}\n"
+            info_text += f"{expiry_info}"
+            if machine_bound:
+                info_text += "\nMachine Bound: Yes"
+        else:
+            info_text = "No valid license found. Please activate a license."
+        
+        # Update all license displays
+        self.update_license_status_info()  # Update status tab
+        self.refresh_license_status_display()  # Update settings tab
+        
+        messagebox.showinfo("License Status", info_text)
+    
+    def refresh_license_status_display(self):
+        """Refresh license status display in Settings tab"""
+        # Status-tab "License Info" widgets may not exist yet during startup
+        if not hasattr(self, 'license_expiry_label'):
+            return  # GUI elements not created yet
+        
+        license_manager = get_license_manager()
+        license_info = license_manager.get_license_info()
+        
+        if license_info and license_info.get('valid'):
+            status_color = "green"
+            user_name = license_info['data'].get('user_name', 'Unknown')
+            expires = license_info['data'].get('expires', 'Never')
+            issued = license_info['data'].get('issued', 'Unknown')
+            machine_bound = license_info['data'].get('machine_bound', False)
+            
+            if expires != 'Never':
+                from datetime import datetime
+                try:
+                    expires_date = datetime.fromisoformat(expires)
+                    expires_str = expires_date.strftime('%B %d, %Y')
+                    days_left = (expires_date - datetime.now()).days
+                    if days_left < 0:
+                        status_color = "red"
+                        expiry_info = f"Expired: {expires_str}"
+                    elif days_left <= 7:
+                        status_color = "orange"
+                        expiry_info = f"Expires: {expires_str} ({days_left} day{'s' if days_left != 1 else ''} left)"
+                    elif days_left <= 30:
+                        status_color = "yellow"
+                        expiry_info = f"Expires: {expires_str} ({days_left} days left)"
+                    else:
+                        expiry_info = f"Expires: {expires_str}"
+                except:
+                    expiry_info = f"Expires: {expires}"
+            else:
+                expiry_info = "No expiration"
+            
+            if issued != 'Unknown':
+                try:
+                    from datetime import datetime
+                    issued_date = datetime.fromisoformat(issued)
+                    issued_str = issued_date.strftime('%B %d, %Y')
+                except:
+                    issued_str = issued
+            else:
+                issued_str = "Unknown"
+        else:
+            status_color = "red"
+            user_name = "N/A"
+            expiry_info = "No valid license found"
+            issued_str = "N/A"
+            machine_bound = False
+
+        # Update status-tab "License Info" values
+        if hasattr(self, 'license_user_value'):
+            self.license_user_value.configure(text=user_name, text_color="white" if license_info and license_info.get('valid') else "gray")
+        if hasattr(self, 'license_expiry_label'):
+            self.license_expiry_label.configure(text=expiry_info, text_color=status_color if license_info and license_info.get('valid') else "gray")
+        if hasattr(self, 'license_issued_value'):
+            self.license_issued_value.configure(text=issued_str, text_color="gray")
+        if hasattr(self, 'license_binding_value'):
+            binding_text = "Machine Bound" if machine_bound else "—"
+            binding_color = "orange" if machine_bound else "gray"
+            self.license_binding_value.configure(text=binding_text, text_color=binding_color)
     
     def recheck_ocr_availability(self):
         """Re-check OCR availability (called from GUI button)"""
@@ -233,6 +810,9 @@ class BotGUI:
             if hasattr(self, 'auto_repair_check_interval_var'):
                 self.auto_repair_check_interval_var.set(str(config.AUTO_REPAIR_CHECK_INTERVAL))
                 print(f"  Applied auto repair check interval: {config.AUTO_REPAIR_CHECK_INTERVAL}s")
+            if hasattr(self, 'repair_key_var'):
+                self.repair_key_var.set(config.repair_key)
+                print(f"  Applied repair key: {config.repair_key}")
             
             # Apply Auto Change Target settings
             if hasattr(self, 'auto_change_target_var'):
@@ -253,12 +833,14 @@ class BotGUI:
             # Load HP settings from global variables
             try:
                 self.hp_threshold_var.set(str(config.hp_threshold))
+                if hasattr(self, 'hp_key_var'):
+                    self.hp_key_var.set(config.hp_key)
                 self.hp_x_var.set(str(config.hp_bar_area['x']))
                 self.hp_y_var.set(str(config.hp_bar_area['y']))
                 self.hp_width_var.set(str(config.hp_bar_area['width']))
                 self.hp_height_var.set(str(config.hp_bar_area['height']))
                 self.hp_coords_var.set(f"{config.hp_bar_area['x']},{config.hp_bar_area['y']}")
-                print(f"  Applied HP threshold: {config.hp_threshold}%, area: {config.hp_bar_area}")
+                print(f"  Applied HP threshold: {config.hp_threshold}%, key: {config.hp_key}, area: {config.hp_bar_area}")
             except Exception as e:
                 print(f"  Error applying HP settings: {e}")
             
@@ -268,6 +850,8 @@ class BotGUI:
             # Load MP settings from global variables
             try:
                 self.mp_threshold_var.set(str(config.mp_threshold))
+                if hasattr(self, 'mp_key_var'):
+                    self.mp_key_var.set(config.mp_key)
                 self.mp_x_var.set(str(config.mp_bar_area['x']))
                 self.mp_y_var.set(str(config.mp_bar_area['y']))
                 self.mp_width_var.set(str(config.mp_bar_area['width']))
@@ -298,6 +882,13 @@ class BotGUI:
                         self.buffs_vars[i].set(config.buffs_config[i]['enabled'])
                         # Update key
                         self.buffs_keys[i].set(config.buffs_config[i]['key'])
+                        # Update button text
+                        if hasattr(self, 'buffs_key_buttons') and i < len(self.buffs_key_buttons):
+                            key_value = config.buffs_config[i]['key']
+                            if key_value:
+                                self.buffs_key_buttons[i].configure(text=key_value.upper())
+                            else:
+                                self.buffs_key_buttons[i].configure(text="Set Key")
                         # Load image if exists - resolve relative path
                         if config.buffs_config[i]['image_path']:
                             image_path = self.convert_to_absolute_path(config.buffs_config[i]['image_path'])
@@ -334,6 +925,13 @@ class BotGUI:
                         self.skill_sequence_vars[i].set(config.skill_sequence_config[i]['enabled'])
                         # Update key
                         self.skill_sequence_keys[i].set(config.skill_sequence_config[i].get('key', ''))
+                        # Update button text
+                        if hasattr(self, 'skill_sequence_key_buttons') and i < len(self.skill_sequence_key_buttons):
+                            key_value = config.skill_sequence_config[i].get('key', '')
+                            if key_value:
+                                self.skill_sequence_key_buttons[i].configure(text=key_value.upper())
+                            else:
+                                self.skill_sequence_key_buttons[i].configure(text="Set Key")
                         # Load image if exists - resolve relative path
                         if config.skill_sequence_config[i].get('image_path'):
                             image_path = self.convert_to_absolute_path(config.skill_sequence_config[i]['image_path'])
@@ -403,8 +1001,14 @@ class BotGUI:
         # Track last active tab in skill selector
         self.last_skill_selector_tab = None
         
+        # Preload skill images cache
+        self.skill_images_cache = {}  # {job_key: [(image_path, image_obj, img_file), ...]}
+        
         # Check OCR availability on startup
         self.check_ocr_on_startup()
+        
+        # Preload all skill images in background (non-blocking)
+        self.root.after(100, self._preload_skill_images)
         
         # Configure root window grid to allow resizing
         self.root.columnconfigure(0, weight=1)
@@ -509,8 +1113,10 @@ class BotGUI:
         buffs_tab = tabview.add("Buffs")
         mouse_clicker_tab = tabview.add("Mouse Clicker")
         
-        # Action slots frame - moved to Status tab
-        status_frame = status_tab
+        # Action slots frame - moved to Status tab (wrap in scrollable frame)
+        status_scroll = ctk.CTkScrollableFrame(status_tab)
+        status_scroll.pack(fill="both", expand=True)
+        status_frame = status_scroll
         
         # Create action slot controls in a horizontal layout
         self.action_vars = {}
@@ -563,11 +1169,129 @@ class BotGUI:
         self.unstuck_countdown_label = ctk.CTkLabel(enemy_name_frame, text="Unstuck: ---", font=ctk.CTkFont(size=10), text_color="gray")
         self.unstuck_countdown_label.grid(row=0, column=2)
         
+        # License Info card (styled like OCR status frame)
+        license_info_frame = ctk.CTkFrame(
+            status_frame,
+            corner_radius=8,
+            fg_color=("gray15", "gray15"),
+            border_width=0,
+            border_color="gray35",
+        )
+        license_info_frame.grid(row=4, column=0, sticky="ew", padx=15, pady=(10, 8))
+        license_info_frame.columnconfigure(0, weight=1)
+
+        # Header row
+        license_header = ctk.CTkLabel(
+            license_info_frame,
+            text="License Info",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        )
+        license_header.grid(row=0, column=0, sticky="w", padx=(12, 8), pady=(10, 6))
+
+        activate_license_btn = ctk.CTkButton(
+            license_info_frame,
+            text="Activate/Change License",
+            command=self.show_license_dialog,
+            width=160,
+            height=28,
+            corner_radius=6,
+        )
+        activate_license_btn.grid(row=0, column=1, sticky="e", padx=(8, 12), pady=(10, 6))
+        create_tooltip(activate_license_btn, "Activate or change your license key")
+        
+        # License status (enhanced display)
+        license_manager = get_license_manager()
+        license_info = license_manager.get_license_info()
+
+        if license_info and license_info.get('valid'):
+            status_color = "green"
+            user_name = license_info['data'].get('user_name', 'Unknown')
+            expires = license_info['data'].get('expires', 'Never')
+            issued = license_info['data'].get('issued', 'Unknown')
+            machine_bound = license_info['data'].get('machine_bound', False)
+            
+            # Calculate days left if expiration exists
+            if expires != 'Never':
+                from datetime import datetime
+                try:
+                    expires_date = datetime.fromisoformat(expires)
+                    expires_str = expires_date.strftime('%B %d, %Y')
+                    days_left = (expires_date - datetime.now()).days
+                    if days_left < 0:
+                        status_color = "red"
+                        status_indicator = "●"
+                        expiry_info = f"Expired: {expires_str}"
+                    elif days_left <= 7:
+                        status_color = "orange"
+                        status_indicator = "●"
+                        expiry_info = f"{expires_str} ({days_left} day{'s' if days_left != 1 else ''} left)"
+                    elif days_left <= 30:
+                        status_color = "yellow"
+                        status_indicator = "●"
+                        expiry_info = f"Expires: {expires_str} ({days_left} days left)"
+                    else:
+                        expiry_info = f"Expires: {expires_str}"
+                except:
+                    expiry_info = f"Expires: {expires}"
+            else:
+                expiry_info = "No expiration"
+            
+            # Format issued date
+            if issued != 'Unknown':
+                try:
+                    from datetime import datetime
+                    issued_date = datetime.fromisoformat(issued)
+                    issued_str = issued_date.strftime('%B %d, %Y')
+                except:
+                    issued_str = issued
+            else:
+                issued_str = "Unknown"
+        else:
+            status_color = "red"
+            user_name = "N/A"
+            expiry_info = "No valid license found"
+            issued_str = "N/A"
+            machine_bound = False
+        
+        # License details
+        details_frame = ctk.CTkFrame(license_info_frame, fg_color="transparent")
+        details_frame.grid(row=1, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 10))
+        details_frame.columnconfigure(1, weight=1)
+        
+        # User name
+        ctk.CTkLabel(details_frame, text="User:", font=ctk.CTkFont(size=10, weight="bold")).grid(row=0, column=0, sticky="w", padx=(0, 10), pady=(0, 2))
+        self.license_user_value = ctk.CTkLabel(details_frame, text=user_name, font=ctk.CTkFont(size=10), text_color="white")
+        self.license_user_value.grid(row=0, column=1, sticky="w", pady=(0, 2))
+        
+        # Expiration
+        ctk.CTkLabel(details_frame, text="Expiration:", font=ctk.CTkFont(size=10, weight="bold")).grid(row=1, column=0, sticky="w", padx=(0, 10), pady=2)
+        self.license_expiry_label = ctk.CTkLabel(
+            details_frame,
+            text=expiry_info,
+            font=ctk.CTkFont(size=10),
+            text_color=status_color if license_info and license_info.get('valid') else "gray"
+        )
+        self.license_expiry_label.grid(row=1, column=1, sticky="w", pady=2)
+        
+        # Issued date
+        ctk.CTkLabel(details_frame, text="Issued:", font=ctk.CTkFont(size=10, weight="bold")).grid(row=2, column=0, sticky="w", padx=(0, 10), pady=2)
+        self.license_issued_value = ctk.CTkLabel(details_frame, text=issued_str, font=ctk.CTkFont(size=10), text_color="gray")
+        self.license_issued_value.grid(row=2, column=1, sticky="w", pady=2)
+
+        # Binding indicator (compact)
+        ctk.CTkLabel(details_frame, text="Binding:", font=ctk.CTkFont(size=10, weight="bold")).grid(row=3, column=0, sticky="w", padx=(0, 10), pady=(2, 0))
+        binding_text = "Machine Bound" if machine_bound else "—"
+        binding_color = "orange" if machine_bound else "gray"
+        self.license_binding_value = ctk.CTkLabel(details_frame, text=binding_text, font=ctk.CTkFont(size=10), text_color=binding_color)
+        self.license_binding_value.grid(row=3, column=1, sticky="w", pady=(2, 0))
+        
         # Configure status frame grid
         status_frame.columnconfigure(0, weight=1)
         
-        # Options frame - moved to Settings tab
-        settings_frame = settings_tab
+        # Options frame - moved to Settings tab (wrap in scrollable frame)
+        settings_scroll = ctk.CTkScrollableFrame(settings_tab)
+        settings_scroll.pack(fill="both", expand=True)
+        settings_frame = settings_scroll
         
         # Configure settings frame for 2 columns with padding
         settings_frame.columnconfigure(0, weight=1)
@@ -610,7 +1334,7 @@ class BotGUI:
         looting_duration_entry = ctk.CTkEntry(auto_loot_frame, textvariable=self.looting_duration_var, width=50, font=ctk.CTkFont(size=11))
         looting_duration_entry.grid(row=0, column=1, padx=(10, 5))
         looting_duration_entry.bind('<KeyRelease>', lambda event: self.update_looting_duration())
-        looting_seconds_label = ctk.CTkLabel(auto_loot_frame, text="seconds", font=ctk.CTkFont(size=11))
+        looting_seconds_label = ctk.CTkLabel(auto_loot_frame, text="s", font=ctk.CTkFont(size=11))
         looting_seconds_label.grid(row=0, column=2, sticky="w")
         create_tooltip(looting_duration_entry, "Input: Looting duration in seconds. This is how long the bot prevents auto-targeting after looting starts. Lower values allow faster retargeting to the next enemy.")
         
@@ -632,9 +1356,25 @@ class BotGUI:
         auto_repair_check_interval_entry = ctk.CTkEntry(auto_repair_frame, textvariable=self.auto_repair_check_interval_var, width=50, font=ctk.CTkFont(size=11))
         auto_repair_check_interval_entry.grid(row=0, column=1, padx=(10, 5))
         auto_repair_check_interval_entry.bind('<KeyRelease>', lambda event: self.update_auto_repair_check_interval())
-        auto_repair_seconds_label = ctk.CTkLabel(auto_repair_frame, text="seconds", font=ctk.CTkFont(size=11))
+        auto_repair_seconds_label = ctk.CTkLabel(auto_repair_frame, text="s", font=ctk.CTkFont(size=11))
         auto_repair_seconds_label.grid(row=0, column=2, sticky="w")
         create_tooltip(auto_repair_check_interval_entry, "Input: Auto repair check interval in seconds. How often the bot checks for 'is about to break' warnings. Higher values reduce CPU usage and prevent skill sequence delays. Recommended: 30+ seconds.")
+        
+        # Repair key registration
+        self.repair_key_var = tk.StringVar(value=config.repair_key)
+        def update_repair_key_button_text(var=self.repair_key_var, btn=None):
+            if var.get():
+                btn.configure(text=var.get().upper())
+            else:
+                btn.configure(text="Set Key")
+        repair_key_button = ctk.CTkButton(auto_repair_frame, width=60, height=28,
+                                         command=self.register_repair_key,
+                                         font=ctk.CTkFont(size=10), corner_radius=4)
+        repair_key_button.grid(row=0, column=3, padx=(10, 0), pady=5)
+        update_repair_key_button_text(btn=repair_key_button)
+        self.repair_key_var.trace_add('write', lambda *args: update_repair_key_button_text(btn=repair_key_button))
+        repair_key_button.bind('<Button-3>', lambda e: self.clear_repair_key())
+        create_tooltip(repair_key_button, "Click to register the hotkey for repair. Right-click to clear.")
         
         # Mage frame
         mage_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
@@ -671,6 +1411,22 @@ class BotGUI:
         hp_percent_label.grid(row=0, column=2, sticky="w")
         create_tooltip(hp_threshold_entry, "Input: HP percentage threshold (0-100). Enter the HP percentage below which the bot will automatically use HP potions. Example: 70 means potion is used when HP drops below 70%.")
         
+        # HP key registration
+        self.hp_key_var = tk.StringVar(value=config.hp_key)
+        def update_hp_key_button_text(var=self.hp_key_var, btn=None):
+            if var.get():
+                btn.configure(text=var.get().upper())
+            else:
+                btn.configure(text="Set Key")
+        hp_key_button = ctk.CTkButton(auto_hp_frame, width=60, height=28,
+                                     command=self.register_hp_key,
+                                     font=ctk.CTkFont(size=10), corner_radius=4)
+        hp_key_button.grid(row=0, column=3, padx=(10, 0), pady=5)
+        update_hp_key_button_text(btn=hp_key_button)
+        self.hp_key_var.trace_add('write', lambda *args: update_hp_key_button_text(btn=hp_key_button))
+        hp_key_button.bind('<Button-3>', lambda e: self.clear_hp_key())
+        create_tooltip(hp_key_button, "Click to register the hotkey for HP potion. Right-click to clear.")
+        
         # HP bar area input (x, y, width, height) - hidden, only used internally
         self.hp_x_var = tk.StringVar(value=str(config.hp_bar_area['x']))
         self.hp_y_var = tk.StringVar(value=str(config.hp_bar_area['y']))
@@ -699,40 +1455,28 @@ class BotGUI:
         mp_percent_label.grid(row=0, column=2, sticky="w")
         create_tooltip(mp_threshold_entry, "Input: MP percentage threshold (0-100). Enter the MP percentage below which the bot will automatically use MP potions. Example: 50 means potion is used when MP drops below 50%.")
         
+        # MP key registration
+        self.mp_key_var = tk.StringVar(value=config.mp_key)
+        def update_mp_key_button_text(var=self.mp_key_var, btn=None):
+            if var.get():
+                btn.configure(text=var.get().upper())
+            else:
+                btn.configure(text="Set Key")
+        mp_key_button = ctk.CTkButton(auto_mp_frame, width=60, height=28,
+                                      command=self.register_mp_key,
+                                      font=ctk.CTkFont(size=10), corner_radius=4)
+        mp_key_button.grid(row=0, column=3, padx=(10, 0), pady=5)
+        update_mp_key_button_text(btn=mp_key_button)
+        self.mp_key_var.trace_add('write', lambda *args: update_mp_key_button_text(btn=mp_key_button))
+        mp_key_button.bind('<Button-3>', lambda e: self.clear_mp_key())
+        create_tooltip(mp_key_button, "Click to register the hotkey for MP potion. Right-click to clear.")
+        
         # MP bar area input (x, y, width, height) - hidden, only used internally
         self.mp_x_var = tk.StringVar(value=str(config.mp_bar_area['x']))
         self.mp_y_var = tk.StringVar(value=str(config.mp_bar_area['y']))
         self.mp_width_var = tk.StringVar(value=str(config.mp_bar_area['width']))
         self.mp_height_var = tk.StringVar(value=str(config.mp_bar_area['height']))
         self.mp_coords_var = tk.StringVar(value=f"{config.mp_bar_area['x']},{config.mp_bar_area['y']}")
-        
-        # OCR Status frame (row 0, spans both columns)
-        ocr_status_frame = ctk.CTkFrame(settings_frame, corner_radius=8)
-        ocr_status_frame.grid(row=0, column=0, columnspan=2, sticky="ew", padx=15, pady=(10, 5))
-        ocr_status_frame.columnconfigure(1, weight=1)
-        
-        # OCR Status label
-        ocr_status_label = ctk.CTkLabel(ocr_status_frame, text="OCR Status:", font=ctk.CTkFont(size=12, weight="bold"))
-        ocr_status_label.grid(row=0, column=0, sticky="w", padx=(10, 5), pady=10)
-        
-        # OCR Status indicator
-        self.ocr_status_text = ctk.CTkLabel(ocr_status_frame, 
-                                           text="Checking...", 
-                                           font=ctk.CTkFont(size=11))
-        self.ocr_status_text.grid(row=0, column=1, sticky="w", padx=5, pady=10)
-        
-        # Re-check OCR button
-        self.recheck_ocr_button = ctk.CTkButton(ocr_status_frame, 
-                                                text="Re-check OCR", 
-                                                command=self.recheck_ocr_availability,
-                                                width=120, 
-                                                height=28, 
-                                                corner_radius=6)
-        self.recheck_ocr_button.grid(row=0, column=2, padx=(5, 10), pady=10)
-        create_tooltip(self.recheck_ocr_button, "Re-check OCR availability. Use this after installing EasyOCR or fixing GPU/CPU issues.")
-        
-        # Update OCR status display
-        self.update_ocr_status_display()
         
         # Auto Unstuck frame
         auto_change_target_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
@@ -752,7 +1496,7 @@ class BotGUI:
         unstuck_timeout_entry = ctk.CTkEntry(auto_change_target_frame, textvariable=self.unstuck_timeout_var, width=50, font=ctk.CTkFont(size=11))
         unstuck_timeout_entry.grid(row=0, column=1, padx=(10, 5))
         unstuck_timeout_entry.bind('<KeyRelease>', lambda event: self.update_unstuck_timeout())
-        unstuck_seconds_label = ctk.CTkLabel(auto_change_target_frame, text="seconds", font=ctk.CTkFont(size=11))
+        unstuck_seconds_label = ctk.CTkLabel(auto_change_target_frame, text="s", font=ctk.CTkFont(size=11))
         unstuck_seconds_label.grid(row=0, column=2, sticky="w")
         create_tooltip(unstuck_timeout_entry, "Input: Unstuck timeout in seconds. Time to wait before considering enemy HP stagnant (stuck). If enemy HP doesn't decrease for this duration, bot will switch targets. Lower values = faster target switching. Default: 8 seconds.")
         
@@ -798,6 +1542,7 @@ class BotGUI:
         self.record_target_btn.grid(row=0, column=2)
         create_tooltip(self.record_target_btn, "Records the currently targeted enemy name and adds it to the mob target list. Requires calibration and an active target.")
         
+        
         settings_frame.columnconfigure(0, weight=1)
         settings_frame.columnconfigure(1, weight=1)
         settings_frame.rowconfigure(8, weight=0)
@@ -813,70 +1558,100 @@ class BotGUI:
         self.mob_height_var = tk.StringVar(value=str(config.target_name_area['height']))
         
         # Skill Sequence frame - moved to Skill Sequence tab
-        skill_sequence_frame = skill_sequence_tab
+        # Wrap skill sequence tab in scrollable frame
+        skill_sequence_scroll = ctk.CTkScrollableFrame(skill_sequence_tab)
+        skill_sequence_scroll.pack(fill="both", expand=True)
+        skill_sequence_frame = skill_sequence_scroll
+        
+        # Info section for Skill Sequence
+        info_frame = ctk.CTkFrame(skill_sequence_frame, corner_radius=6, fg_color=("gray18", "gray14"), 
+                                 border_width=1, border_color="gray25")
+        info_frame.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(10, 15))
+        info_frame.columnconfigure(0, weight=1)
+        
+        info_title = ctk.CTkLabel(info_frame, text="How to use:", 
+                                  font=ctk.CTkFont(size=12, weight="bold"))
+        info_title.grid(row=0, column=0, sticky="w", padx=10, pady=(10, 5))
+        
+        info_text = ctk.CTkLabel(info_frame, 
+                                text="1. Click the skill image to select a skill\n"
+                                     "2. Click the key button to register a hotkey\n"
+                                     "3. Enable the checkbox to activate the skill\n"
+                                     "4. Skills execute automatically in sequence when enemy is found",
+                                font=ctk.CTkFont(size=12),
+                                justify="left", anchor="w")
+        info_text.grid(row=1, column=0, sticky="w", padx=10, pady=(0, 10))
         
         # Initialize skill sequence variables
         self.skill_sequence_vars = {}
         self.skill_sequence_keys = []
+        self.skill_sequence_key_buttons = []
         self.skill_sequence_canvases = []
         self.skill_sequence_state = []
         
-        # Title label
-        skill_sequence_title = ctk.CTkLabel(skill_sequence_frame, text="Skill Sequence Configuration", 
-                                           font=ctk.CTkFont(size=14, weight="bold"))
-        skill_sequence_title.grid(row=0, column=0, columnspan=4, sticky="w", padx=15, pady=(15, 10))
-        
-        # Create skill sequence slots in a grid (first column: 1-4, second column: 5-8)
+        # Create skill sequence slots in a compact grid (2 columns, 4 rows)
         for i in range(8):
             if i < 4:
                 # First column: slots 1-4
-                row = i + 1
+                row = i + 1  # +1 because info_frame is at row 0
                 col = 0
             else:
                 # Second column: slots 5-8
-                row = i - 3  # i=4->row=1, i=5->row=2, i=6->row=3, i=7->row=4
-                col = 2
+                row = i - 3  # -3 because info_frame is at row 0, and we want slots 5-8 to start at row 2
+                col = 1
             
-            # Create frame for each skill sequence slot
-            skill_slot_frame = ctk.CTkFrame(skill_sequence_frame, corner_radius=8)
-            padx_left = 15 if col == 0 else 5
-            padx_right = 5 if col == 0 else 15
-            skill_slot_frame.grid(row=row, column=col, columnspan=2, sticky="ew", 
-                                 padx=(padx_left, padx_right), pady=5)
+            # Create compact frame for each skill sequence slot (horizontal layout)
+            skill_slot_frame = ctk.CTkFrame(skill_sequence_frame, corner_radius=6, fg_color=("gray18", "gray14"))
+            padx_left = 10 if col == 0 else 5
+            padx_right = 5 if col == 0 else 10
+            skill_slot_frame.grid(row=row, column=col, sticky="ew", padx=(padx_left, padx_right), pady=3)
+            skill_slot_frame.columnconfigure(3, weight=1)
             
-            # Enable checkbox
+            # Enable checkbox (no text, just the box)
             self.skill_sequence_vars[i] = tk.BooleanVar(value=config.skill_sequence_config[i]['enabled'])
-            checkbox = ctk.CTkCheckBox(skill_slot_frame, text=f"Skill {i+1}", 
+            checkbox = ctk.CTkCheckBox(skill_slot_frame, text="", 
                                       variable=self.skill_sequence_vars[i],
                                       command=lambda idx=i: self.update_skill_sequence_enabled(idx),
-                                      font=ctk.CTkFont(size=11))
-            checkbox.grid(row=0, column=0, padx=10, pady=5, sticky="w")
+                                      font=ctk.CTkFont(size=10), width=20)
+            checkbox.grid(row=0, column=0, padx=(8, 5), pady=6, sticky="w")
             
-            # Skill image canvas (clickable to select skill)
-            canvas_frame = ctk.CTkFrame(skill_slot_frame, fg_color="transparent")
-            canvas_frame.grid(row=1, column=0, padx=10, pady=5)
+            # Label for slot info
+            slot_label = ctk.CTkLabel(skill_slot_frame, text=f"Skill {i+1}", 
+                                     font=ctk.CTkFont(size=11, weight="bold"), width=60)
+            slot_label.grid(row=0, column=1, padx=(0, 5), pady=6, sticky="w")
             
-            canvas = tk.Canvas(canvas_frame, width=48, height=48, bg='gray20', 
-                             highlightthickness=1, highlightbackground='gray50')
-            canvas.grid(row=0, column=0, padx=5)
+            # Skill image canvas (clickable to select skill) - smaller size
+            canvas = tk.Canvas(skill_slot_frame, width=40, height=40, bg='gray20', 
+                             highlightthickness=1, highlightbackground='gray50', cursor='hand2')
+            canvas.grid(row=0, column=2, padx=5, pady=6)
             canvas.bind('<Button-1>', lambda e, idx=i: self.show_skill_sequence_selector(idx))
             canvas.bind('<Button-3>', lambda e, idx=i: self.clear_skill_sequence_skill(idx))
             self.skill_sequence_canvases.append(canvas)
             
-            # Key registration button
-            key_frame = ctk.CTkFrame(skill_slot_frame, fg_color="transparent")
-            key_frame.grid(row=1, column=1, padx=10, pady=5, sticky="w")
-            
-            key_label = ctk.CTkLabel(key_frame, text="Key:", font=ctk.CTkFont(size=11))
-            key_label.grid(row=0, column=0, padx=(0, 5))
-            
+            # Key registration button (compact)
             key_var = tk.StringVar(value=config.skill_sequence_config[i].get('key', ''))
             self.skill_sequence_keys.append(key_var)
             
-            key_button = ctk.CTkButton(key_frame, textvariable=key_var, width=50, height=30,
+            # Function to update button text based on key value
+            def update_key_button_text(var=key_var, btn=None):
+                if var.get():
+                    btn.configure(text=var.get().upper())
+                else:
+                    btn.configure(text="Set Key")
+            
+            key_button = ctk.CTkButton(skill_slot_frame, width=60, height=28,
                                      command=lambda idx=i: self.register_skill_sequence_key(idx),
-                                     font=ctk.CTkFont(size=11))
-            key_button.grid(row=0, column=1, padx=(0, 5))
+                                     font=ctk.CTkFont(size=10), corner_radius=4)
+            key_button.grid(row=0, column=3, padx=(5, 8), pady=6, sticky="e")
+            
+            # Store button reference
+            self.skill_sequence_key_buttons.append(key_button)
+            
+            # Set initial text
+            update_key_button_text(btn=key_button)
+            
+            # Trace key_var changes to update button text
+            key_var.trace_add('write', lambda *args: update_key_button_text(btn=key_button))
             
             # Clear key button (right-click)
             key_button.bind('<Button-3>', lambda e, idx=i: self.clear_skill_sequence_key(idx))
@@ -900,15 +1675,17 @@ class BotGUI:
         
         # Configure skill sequence frame grid
         skill_sequence_frame.columnconfigure(0, weight=1)
-        skill_sequence_frame.columnconfigure(2, weight=1)
+        skill_sequence_frame.columnconfigure(1, weight=1)
         
         # Initialize skill sequence manager
         import skill_sequence_manager
         config.skill_sequence_manager = skill_sequence_manager.SkillSequenceManager(num_skills=8)
         config.skill_sequence_manager.set_ui_reference(self)
         
-        # Skill slots frame - moved to Skill Interval tab
-        skill_frame = skills_tab
+        # Skill slots frame - moved to Skill Interval tab (wrap in scrollable frame)
+        skill_scroll = ctk.CTkScrollableFrame(skills_tab)
+        skill_scroll.pack(fill="both", expand=True)
+        skill_frame = skill_scroll
         
         # Create skill slot controls in a grid
         self.skill_vars = {}
@@ -945,31 +1722,35 @@ class BotGUI:
             interval_entry.grid(row=0, column=2, padx=(0, 5))
             interval_entry.bind('<KeyRelease>', lambda event, s=slot: self.update_skill_interval(s))
             # Seconds label
-            seconds_label = ctk.CTkLabel(slot_frame, text="seconds", font=ctk.CTkFont(size=11))
+            seconds_label = ctk.CTkLabel(slot_frame, text="s", font=ctk.CTkFont(size=11))
             seconds_label.grid(row=0, column=3, sticky="w")
             # Tooltip for skill interval
             slot_name = f"S{slot}" if isinstance(slot, int) else slot.upper()
             create_tooltip(interval_entry, f"Input: {slot_name} cooldown interval in seconds. Enter the minimum time (in seconds) that must pass before this skill can be used again. Skill will only trigger if this cooldown has elapsed since last use. Example: 10 means skill can be used every 10 seconds.")
         
-        # Section 1: Numeric slots (1-8) - 4 rows x 2 columns
-        numeric_label = ctk.CTkLabel(skill_frame, text="Number Keys (1-8):", font=ctk.CTkFont(size=12, weight="bold"))
+        # Section 1: Numeric slots (1-9, 0) - 5 rows x 2 columns
+        numeric_label = ctk.CTkLabel(skill_frame, text="Number Keys (1-9, 0):", font=ctk.CTkFont(size=12, weight="bold"))
         numeric_label.grid(row=0, column=0, columnspan=2, sticky="w", padx=15, pady=(15, 10))
         
-        # Numeric slots layout: 4 rows x 2 columns
+        # Numeric slots layout: 5 rows x 2 columns
         numeric_row = 1
-        for i in range(1, 9):
-            if i <= 4:
-                # First column: slots 1-4
+        # First create slots 1-9
+        for i in range(1, 10):
+            if i <= 5:
+                # First column: slots 1-5
                 row = numeric_row + (i - 1)
                 col = 0
             else:
-                # Second column: slots 5-8
-                row = numeric_row + (i - 5)
+                # Second column: slots 6-9
+                row = numeric_row + (i - 6)
                 col = 1
             create_slot_control(skill_frame, i, row, col)
         
+        # Then add slot 0 after 9 (in the second column, last row)
+        create_slot_control(skill_frame, 0, numeric_row + 4, 1)
+        
         # Separator between numeric and function key sections
-        separator_row = numeric_row + 4
+        separator_row = numeric_row + 5
         separator = ctk.CTkFrame(skill_frame, height=2, fg_color="gray50")
         separator.grid(row=separator_row, column=0, columnspan=2, sticky="ew", padx=15, pady=15)
         
@@ -996,70 +1777,100 @@ class BotGUI:
         skill_frame.columnconfigure(1, weight=1)
         
         # Buffs frame - moved to Buffs tab
-        buffs_frame = buffs_tab
+        # Wrap buffs tab in scrollable frame
+        buffs_scroll = ctk.CTkScrollableFrame(buffs_tab)
+        buffs_scroll.pack(fill="both", expand=True)
+        buffs_frame = buffs_scroll
+        
+        # Info section for Buffs
+        buffs_info_frame = ctk.CTkFrame(buffs_frame, corner_radius=6, fg_color=("gray18", "gray14"), 
+                                        border_width=1, border_color="gray25")
+        buffs_info_frame.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(10, 15))
+        buffs_info_frame.columnconfigure(0, weight=1)
+        
+        buffs_info_title = ctk.CTkLabel(buffs_info_frame, text="How to use:", 
+                                        font=ctk.CTkFont(size=12, weight="bold"))
+        buffs_info_title.grid(row=0, column=0, sticky="w", padx=10, pady=(10, 5))
+        
+        buffs_info_text = ctk.CTkLabel(buffs_info_frame, 
+                                      text="1. Click the skill image to select a buff skill\n"
+                                           "2. Click the key button to register a hotkey\n"
+                                           "3. Enable the checkbox to activate the buff\n"
+                                           "4. Important: Place buff icons on top of skillbar for detection",
+                                      font=ctk.CTkFont(size=12),
+                                      justify="left", anchor="w")
+        buffs_info_text.grid(row=1, column=0, sticky="w", padx=10, pady=(0, 10))
         
         # Initialize buffs variables
         self.buffs_vars = {}
         self.buffs_keys = []
+        self.buffs_key_buttons = []
         self.buffs_canvases = []
         self.buffs_state = []
         
-        # Title label
-        buffs_title = ctk.CTkLabel(buffs_frame, text="Buffs Configuration", 
-                                   font=ctk.CTkFont(size=14, weight="bold"))
-        buffs_title.grid(row=0, column=0, columnspan=4, sticky="w", padx=15, pady=(15, 10))
-        
-        # Create buff slots in a grid (first column: 1-4, second column: 5-8)
+        # Create buff slots in a compact grid (2 columns, 4 rows)
         for i in range(8):
             if i < 4:
                 # First column: slots 1-4
-                row = i + 1
+                row = i + 1  # +1 because buffs_info_frame is at row 0
                 col = 0
             else:
                 # Second column: slots 5-8
-                row = i - 3  # i=4->row=1, i=5->row=2, i=6->row=3, i=7->row=4
-                col = 2
+                row = i - 3  # -3 because buffs_info_frame is at row 0, and we want slots 5-8 to start at row 2
+                col = 1
             
-            # Create frame for each buff slot
-            buff_slot_frame = ctk.CTkFrame(buffs_frame, corner_radius=8)
-            padx_left = 15 if col == 0 else 5
-            padx_right = 5 if col == 0 else 15
-            buff_slot_frame.grid(row=row, column=col, columnspan=2, sticky="ew", 
-                               padx=(padx_left, padx_right), pady=5)
+            # Create compact frame for each buff slot (horizontal layout)
+            buff_slot_frame = ctk.CTkFrame(buffs_frame, corner_radius=6, fg_color=("gray18", "gray14"))
+            padx_left = 10 if col == 0 else 5
+            padx_right = 5 if col == 0 else 10
+            buff_slot_frame.grid(row=row, column=col, sticky="ew", padx=(padx_left, padx_right), pady=3)
+            buff_slot_frame.columnconfigure(3, weight=1)
             
-            # Enable checkbox
+            # Enable checkbox (no text, just the box)
             self.buffs_vars[i] = tk.BooleanVar(value=config.buffs_config[i]['enabled'])
-            checkbox = ctk.CTkCheckBox(buff_slot_frame, text=f"Buff {i+1}", 
+            checkbox = ctk.CTkCheckBox(buff_slot_frame, text="", 
                                       variable=self.buffs_vars[i],
                                       command=lambda idx=i: self.update_buff_enabled(idx),
-                                      font=ctk.CTkFont(size=11))
-            checkbox.grid(row=0, column=0, padx=10, pady=5, sticky="w")
+                                      font=ctk.CTkFont(size=10), width=20)
+            checkbox.grid(row=0, column=0, padx=(8, 5), pady=6, sticky="w")
             
-            # Skill image canvas (clickable to select skill)
-            canvas_frame = ctk.CTkFrame(buff_slot_frame, fg_color="transparent")
-            canvas_frame.grid(row=1, column=0, padx=10, pady=5)
+            # Label for slot info
+            slot_label = ctk.CTkLabel(buff_slot_frame, text=f"Buff {i+1}", 
+                                     font=ctk.CTkFont(size=11, weight="bold"), width=60)
+            slot_label.grid(row=0, column=1, padx=(0, 5), pady=6, sticky="w")
             
-            canvas = tk.Canvas(canvas_frame, width=48, height=48, bg='gray20', 
-                             highlightthickness=1, highlightbackground='gray50')
-            canvas.grid(row=0, column=0, padx=5)
+            # Skill image canvas (clickable to select skill) - smaller size
+            canvas = tk.Canvas(buff_slot_frame, width=40, height=40, bg='gray20', 
+                             highlightthickness=1, highlightbackground='gray50', cursor='hand2')
+            canvas.grid(row=0, column=2, padx=5, pady=6)
             canvas.bind('<Button-1>', lambda e, idx=i: self.show_buff_skill_selector(idx))
             canvas.bind('<Button-3>', lambda e, idx=i: self.clear_buff_skill(idx))
             self.buffs_canvases.append(canvas)
             
-            # Key registration button
-            key_frame = ctk.CTkFrame(buff_slot_frame, fg_color="transparent")
-            key_frame.grid(row=1, column=1, padx=10, pady=5, sticky="w")
-            
-            key_label = ctk.CTkLabel(key_frame, text="Key:", font=ctk.CTkFont(size=11))
-            key_label.grid(row=0, column=0, padx=(0, 5))
-            
+            # Key registration button (compact)
             key_var = tk.StringVar(value=config.buffs_config[i]['key'])
             self.buffs_keys.append(key_var)
             
-            key_button = ctk.CTkButton(key_frame, textvariable=key_var, width=50, height=30,
+            # Function to update button text based on key value
+            def update_buff_key_button_text(var=key_var, btn=None):
+                if var.get():
+                    btn.configure(text=var.get().upper())
+                else:
+                    btn.configure(text="Set Key")
+            
+            key_button = ctk.CTkButton(buff_slot_frame, width=60, height=28,
                                      command=lambda idx=i: self.register_buff_key(idx),
-                                     font=ctk.CTkFont(size=11))
-            key_button.grid(row=0, column=1, padx=(0, 5))
+                                     font=ctk.CTkFont(size=10), corner_radius=4)
+            key_button.grid(row=0, column=3, padx=(5, 8), pady=6, sticky="e")
+            
+            # Store button reference
+            self.buffs_key_buttons.append(key_button)
+            
+            # Set initial text
+            update_buff_key_button_text(btn=key_button)
+            
+            # Trace key_var changes to update button text
+            key_var.trace_add('write', lambda *args: update_buff_key_button_text(btn=key_button))
             
             # Clear key button (right-click)
             key_button.bind('<Button-3>', lambda e, idx=i: self.clear_buff_key(idx))
@@ -1083,7 +1894,7 @@ class BotGUI:
         
         # Configure buffs frame grid
         buffs_frame.columnconfigure(0, weight=1)
-        buffs_frame.columnconfigure(2, weight=1)
+        buffs_frame.columnconfigure(1, weight=1)
         
         # Initialize buffs manager
         import buffs_manager
@@ -1091,7 +1902,10 @@ class BotGUI:
         config.buffs_manager.set_ui_reference(self)
         
         # Mouse Clicker frame - moved to Mouse Clicker tab
-        mouse_clicker_frame = mouse_clicker_tab
+        # Wrap mouse clicker tab in scrollable frame
+        mouse_clicker_scroll = ctk.CTkScrollableFrame(mouse_clicker_tab)
+        mouse_clicker_scroll.pack(fill="both", expand=True)
+        mouse_clicker_frame = mouse_clicker_scroll
         
         # First row: Checkbox and Interval
         row1_frame = ctk.CTkFrame(mouse_clicker_frame, fg_color="transparent")
@@ -1500,11 +2314,11 @@ class BotGUI:
         try:
             from PIL import Image, ImageTk
             pil_image = Image.open(image_path)
-            pil_image = pil_image.resize((48, 48), Image.Resampling.LANCZOS)
+            pil_image = pil_image.resize((40, 40), Image.Resampling.LANCZOS)
             image = ImageTk.PhotoImage(pil_image)
             canvas = self.buffs_canvases[idx]
             canvas.delete('all')
-            canvas.create_image(24, 24, image=image)
+            canvas.create_image(20, 20, image=image)
             canvas.image = image
             canvas.image_path = image_path  # Store absolute for display
             
@@ -1534,11 +2348,93 @@ class BotGUI:
             config.buffs_manager.clear_buff(idx)
         print(f"Buff {idx + 1} skill cleared")
     
+    def _preload_skill_images(self):
+        """Preload all skill images during app initialization (non-blocking)"""
+        try:
+            from PIL import Image
+            import os
+            import re
+            
+            def natural_sort_key(text):
+                return [int(c) if c.isdigit() else c.lower() for c in re.split(r'(\d+)', text)]
+            
+            # Static job list (same as in show_skill_selector)
+            STATIC_JOB_LIST = [
+                {'label': 'Abikara', 'key': 'Abikara', 'sequenceNo': 1},
+                {'label': 'Samabat', 'key': 'Samabat', 'sequenceNo': 2},
+                {'label': 'Banar', 'key': 'Banar', 'sequenceNo': 3},
+                {'label': 'Satya', 'key': 'Satya', 'sequenceNo': 4},
+                {'label': 'Nakayuda', 'key': 'Nakayuda', 'sequenceNo': 5},
+                {'label': 'Vidya', 'key': 'Vidya', 'sequenceNo': 6},
+                {'label': 'Druka', 'key': 'Druka', 'sequenceNo': 7},
+                {'label': 'Karya', 'key': 'Karya', 'sequenceNo': 8},
+                # {'label': 'Others', 'key': 'Etc', 'sequenceNo': 9},
+            ]
+            
+            jobs_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'jobs')
+            
+            if not os.path.exists(jobs_folder):
+                return
+            
+            # Preload images for each job
+            for job_def in STATIC_JOB_LIST:
+                job_key = job_def['key']
+                job_path = os.path.join(jobs_folder, job_key)
+                
+                if not os.path.exists(job_path) or not os.path.isdir(job_path):
+                    continue
+                
+                try:
+                    images = [f for f in os.listdir(job_path) 
+                             if f.lower().endswith(('.bmp', '.BMP'))]
+                    images_sorted = sorted(images, key=natural_sort_key)
+                    
+                    # Preload and cache images
+                    cached_images = []
+                    for img_file in images_sorted:
+                        try:
+                            img_path = os.path.join(job_path, img_file)
+                            pil_image = Image.open(img_path)
+                            pil_image = pil_image.resize((48, 48), Image.Resampling.LANCZOS)
+                            # Store PIL image (will convert to PhotoImage when needed)
+                            cached_images.append((img_path, pil_image, img_file))
+                        except Exception as e:
+                            print(f"Error preloading image {img_file}: {e}")
+                            continue
+                    
+                    self.skill_images_cache[job_key] = cached_images
+                except Exception as e:
+                    print(f"Error preloading images for job {job_key}: {e}")
+                    continue
+            
+            print(f"✅ Preloaded skill images for {len(self.skill_images_cache)} jobs")
+        except Exception as e:
+            print(f"Error in _preload_skill_images: {e}")
+            import traceback
+            traceback.print_exc()
+    
     def show_skill_selector(self, callback_func, callback_arg, title="Choose Skill"):
         """Show popup window to select skill image, grouped by job (reusable for buffs and skill sequence)"""
         try:
             from PIL import Image, ImageTk
             import os
+            
+            # Static job list: [{label, key, sequenceNo}, ...]
+            # label: Display name in the tab
+            # key: Folder name in the jobs directory
+            # sequenceNo: Order for sorting tabs
+            STATIC_JOB_LIST = [
+                {'label': 'Abikara', 'key': 'Abikara', 'sequenceNo': 1},
+                {'label': 'Samabat', 'key': 'Samabat', 'sequenceNo': 2},
+                {'label': 'Banar', 'key': 'Banar', 'sequenceNo': 3},
+                {'label': 'Satya', 'key': 'Satya', 'sequenceNo': 4},
+                {'label': 'Nakayuda', 'key': 'Nakayuda', 'sequenceNo': 5},
+                {'label': 'Vidya', 'key': 'Vidya', 'sequenceNo': 6},
+                {'label': 'Druka', 'key': 'Druka', 'sequenceNo': 7},
+                {'label': 'Karya', 'key': 'Karya', 'sequenceNo': 8},
+                # {'label': 'Others', 'key': 'Etc', 'sequenceNo': 9},
+                # Add more jobs as needed
+            ]
             
             # Create popup window
             popup = ctk.CTkToplevel(self.root)
@@ -1565,67 +2461,77 @@ class BotGUI:
             
             popup.geometry(f"{popup_width}x{popup_height}+{popup_x}+{popup_y}")
             
-            # Jobs folder path
-            jobs_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'jobs')
-            
-            if not os.path.exists(jobs_folder):
-                messagebox.showerror("Error", f"Jobs folder not found: {jobs_folder}")
-                popup.destroy()
-                return
-            
-            # Get all job folders
-            job_folders = [f for f in os.listdir(jobs_folder) 
-                          if os.path.isdir(os.path.join(jobs_folder, f)) and not f.startswith('.')]
-            # Natural sort (handles numbers correctly: Item 1, Item 2, Item 10 instead of Item 1, Item 10, Item 2)
-            import re
-            def natural_sort_key(text):
-                return [int(c) if c.isdigit() else c.lower() for c in re.split(r'(\d+)', text)]
-            job_folders.sort(key=natural_sort_key)
-            
-            if not job_folders:
-                messagebox.showinfo("No Jobs", "No job folders found in Jobs directory")
-                popup.destroy()
-                return
-            
-            # Create main container
+            # Create main container immediately (folder already checked during preload)
             main_container = ctk.CTkFrame(popup)
             main_container.pack(fill="both", expand=True, padx=10, pady=10)
             
-            # Create tabview for jobs
-            tabview = ctk.CTkTabview(main_container, corner_radius=8)
+            # Cache to track which tabs have been loaded
+            loaded_tabs = set()
+            # Map tab labels to job definitions for loading images
+            label_to_job = {}
+            
+            # Function to handle tab changes (will be set as command)
+            def on_tab_changed(tab_label=None):
+                """Handle tab change event - load images lazily"""
+                # If tab_label not provided, get it from tabview
+                if tab_label is None:
+                    try:
+                        tab_label = tabview.get()
+                    except:
+                        return
+            
+                if tab_label and tab_label in label_to_job:
+                    load_job_tab_images(tab_label)
+                self.last_skill_selector_tab = tab_label
+            
+            # Create tabview for jobs immediately with command callback
+            tabview = ctk.CTkTabview(main_container, corner_radius=8, command=on_tab_changed)
             tabview.pack(fill="both", expand=True, pady=(0, 10))
             
-            # Track tab names for later selection
-            tab_names = []
-            
-            # Create a tab for each job
-            for job_name in job_folders:
-                job_path = os.path.join(jobs_folder, job_name)
-                images = [f for f in os.listdir(job_path) 
-                         if f.lower().endswith(('.bmp', '.BMP'))]
+            # Create all tabs immediately from static list (no folder checking yet)
+            for job_def in sorted(STATIC_JOB_LIST, key=lambda x: x['sequenceNo']):
+                label = job_def['label']
+                label_to_job[label] = job_def
                 
-                if not images:
-                    continue
-                
-                # Create tab for this job
-                job_tab = tabview.add(job_name)
-                tab_names.append(job_name)
+                # Create tab with label (display name) - instant, no I/O
+                job_tab = tabview.add(label)
                 
                 # Create scrollable frame for skills in this job tab
                 scroll_frame = ctk.CTkScrollableFrame(job_tab)
                 scroll_frame.pack(fill="both", expand=True, padx=5, pady=5)
                 
+                # Store scroll_frame reference in job definition
+                job_def['scroll_frame'] = scroll_frame
+            
+            # Function to load images for a specific job tab (uses preloaded cache)
+            def load_job_tab_images(tab_label):
+                """Load images for a job tab from preloaded cache"""
+                if tab_label in loaded_tabs:
+                    return  # Already loaded
+                
+                # Get the job definition from the label
+                job_def = label_to_job.get(tab_label)
+                if not job_def:
+                    return
+                
+                job_key = job_def['key']
+                scroll_frame = job_def['scroll_frame']
+                
+                # Get preloaded images from cache
+                cached_images = self.skill_images_cache.get(job_key, [])
+                
+                if not cached_images:
+                    return  # No images in cache
+                
+                loaded_tabs.add(tab_label)
+                
                 # Create grid for skills (6 columns for compact layout)
                 row = 0
                 col = 0
                 
-                # Natural sort images (handles numbers correctly)
-                images_sorted = sorted(images, key=natural_sort_key)
-                for img_file in images_sorted:
+                for img_path, pil_image, img_file in cached_images:
                     try:
-                        img_path = os.path.join(job_path, img_file)
-                        pil_image = Image.open(img_path)
-                        pil_image = pil_image.resize((48, 48), Image.Resampling.LANCZOS)
+                        # Convert preloaded PIL image to PhotoImage
                         image = ImageTk.PhotoImage(pil_image)
                         
                         # Create skill frame (compact, just fits the image)
@@ -1640,7 +2546,7 @@ class BotGUI:
                                               cursor='hand2')
                         img_button.place(relx=0.5, rely=0.5, anchor='center')
                         img_button.create_image(24, 24, image=image)
-                        img_button.image = image
+                        img_button.image = image  # Keep reference to prevent garbage collection
                         img_button.image_path = img_path
                         
                         # Bind click event - track tab before calling callback
@@ -1678,37 +2584,23 @@ class BotGUI:
                 for i in range(6):
                     scroll_frame.grid_columnconfigure(i, weight=0)
             
-            # Track tab changes to remember last active tab
-            def track_tab_change():
-                try:
-                    current_tab = tabview.get()
-                    if current_tab:
-                        self.last_skill_selector_tab = current_tab
-                except:
-                    pass
+            # Load the first tab immediately (or last active tab)
+            def load_initial_tab():
+                tab_labels = list(label_to_job.keys())
+                if self.last_skill_selector_tab and self.last_skill_selector_tab in label_to_job:
+                    tab_to_load = self.last_skill_selector_tab
+                elif tab_labels:
+                    tab_to_load = tab_labels[0]
+                else:
+                    return
+                
+                # Set the tab (this may trigger the command callback)
+                tabview.set(tab_to_load)
+                # Explicitly load images for the initial tab (in case callback didn't fire)
+                on_tab_changed(tab_to_load)
             
-            # Override tab selection to track changes
-            original_set = tabview.set
-            def tracked_set(tab_name):
-                original_set(tab_name)
-                self.last_skill_selector_tab = tab_name
-            
-            tabview.set = tracked_set
-            
-            # Set the last active tab if it exists (after window is ready)
-            def restore_last_tab():
-                if self.last_skill_selector_tab and self.last_skill_selector_tab in tab_names:
-                    try:
-                        # Use the tracked_set function to properly set the tab
-                        tracked_set(self.last_skill_selector_tab)
-                    except Exception as e:
-                        print(f"Error restoring tab {self.last_skill_selector_tab}: {e}")
-                        pass  # Tab might not exist, use default
-            
-            # Update window to ensure tabview is ready, then restore tab
-            popup.update_idletasks()
-            # Use after() to ensure tabview is fully initialized before setting tab
-            popup.after(50, restore_last_tab)
+            # Load initial tab after window is ready
+            popup.after(10, load_initial_tab)
             
             # Also track when popup is destroyed to save current tab
             def on_popup_destroy():
@@ -1781,12 +2673,16 @@ class BotGUI:
             if len(key) == 1:
                 self.buffs_keys[idx].set(key)
                 config.buffs_config[idx]['key'] = key
+                if idx < len(self.buffs_key_buttons):
+                    self.buffs_key_buttons[idx].configure(text=key.upper())
                 print(f"Buff {idx + 1} key registered: {key}")
                 popup.destroy()
             # Handle function keys (F1-F12)
             elif key in ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12']:
                 self.buffs_keys[idx].set(key)
                 config.buffs_config[idx]['key'] = key
+                if idx < len(self.buffs_key_buttons):
+                    self.buffs_key_buttons[idx].configure(text=key.upper())
                 print(f"Buff {idx + 1} key registered: {key}")
                 popup.destroy()
             # Handle special keys
@@ -1800,6 +2696,8 @@ class BotGUI:
                 mapped_key = key_map.get(key, key)
                 self.buffs_keys[idx].set(mapped_key)
                 config.buffs_config[idx]['key'] = mapped_key
+                if idx < len(self.buffs_key_buttons):
+                    self.buffs_key_buttons[idx].configure(text=mapped_key.upper())
                 print(f"Buff {idx + 1} key registered: {mapped_key}")
                 popup.destroy()
         
@@ -1815,6 +2713,8 @@ class BotGUI:
         """Clear buff key"""
         self.buffs_keys[idx].set('')
         config.buffs_config[idx]['key'] = ''
+        if idx < len(self.buffs_key_buttons):
+            self.buffs_key_buttons[idx].configure(text="Set Key")
         print(f"Buff {idx + 1} key cleared")
     
     def show_skill_sequence_selector(self, skill_index):
@@ -1832,11 +2732,11 @@ class BotGUI:
         try:
             from PIL import Image, ImageTk
             pil_image = Image.open(image_path)
-            pil_image = pil_image.resize((48, 48), Image.Resampling.LANCZOS)
+            pil_image = pil_image.resize((40, 40), Image.Resampling.LANCZOS)
             image = ImageTk.PhotoImage(pil_image)
             canvas = self.skill_sequence_canvases[idx]
             canvas.delete('all')
-            canvas.create_image(24, 24, image=image)
+            canvas.create_image(20, 20, image=image)
             canvas.image = image
             canvas.image_path = image_path  # Store absolute for display
             
@@ -1905,12 +2805,16 @@ class BotGUI:
             if len(key) == 1:
                 self.skill_sequence_keys[idx].set(key)
                 config.skill_sequence_config[idx]['key'] = key
+                if idx < len(self.skill_sequence_key_buttons):
+                    self.skill_sequence_key_buttons[idx].configure(text=key.upper())
                 print(f"Skill Sequence {idx + 1} key registered: {key}")
                 popup.destroy()
             # Handle function keys (F1-F12)
             elif key in ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12']:
                 self.skill_sequence_keys[idx].set(key)
                 config.skill_sequence_config[idx]['key'] = key
+                if idx < len(self.skill_sequence_key_buttons):
+                    self.skill_sequence_key_buttons[idx].configure(text=key.upper())
                 print(f"Skill Sequence {idx + 1} key registered: {key}")
                 popup.destroy()
             # Handle special keys
@@ -1924,6 +2828,8 @@ class BotGUI:
                 mapped_key = key_map.get(key, key)
                 self.skill_sequence_keys[idx].set(mapped_key)
                 config.skill_sequence_config[idx]['key'] = mapped_key
+                if idx < len(self.skill_sequence_key_buttons):
+                    self.skill_sequence_key_buttons[idx].configure(text=mapped_key.upper())
                 print(f"Skill Sequence {idx + 1} key registered: {mapped_key}")
                 popup.destroy()
         
@@ -1939,7 +2845,171 @@ class BotGUI:
         """Clear skill sequence key"""
         self.skill_sequence_keys[idx].set('')
         config.skill_sequence_config[idx]['key'] = ''
+        if idx < len(self.skill_sequence_key_buttons):
+            self.skill_sequence_key_buttons[idx].configure(text="Set Key")
         print(f"Skill Sequence {idx + 1} key cleared")
+    
+    def register_hp_key(self):
+        """Register a key for HP potion by capturing keyboard input"""
+        popup = ctk.CTkToplevel(self.root)
+        popup.title("Press a key")
+        popup.geometry("300x150")
+        popup.transient(self.root)
+        popup.grab_set()
+        
+        root_x = self.root.winfo_x()
+        root_y = self.root.winfo_y()
+        popup.geometry(f'+{root_x + 50}+{root_y + 50}')
+        
+        label = ctk.CTkLabel(popup, text="Press any key to register...", 
+                            font=ctk.CTkFont(size=12))
+        label.pack(pady=30)
+        
+        def on_key_press(event):
+            key = event.keysym.upper()
+            
+            if len(key) == 1:
+                self.hp_key_var.set(key)
+                config.hp_key = key.lower()
+                print(f"HP key registered: {key}")
+                popup.destroy()
+            elif key in ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12']:
+                self.hp_key_var.set(key)
+                config.hp_key = key.lower()
+                print(f"HP key registered: {key}")
+                popup.destroy()
+            elif key in ['SPACE', 'TAB', 'RETURN', 'ESCAPE']:
+                key_map = {
+                    'SPACE': 'SPACE',
+                    'TAB': 'TAB',
+                    'RETURN': 'ENTER',
+                    'ESCAPE': 'ESC'
+                }
+                mapped_key = key_map.get(key, key)
+                self.hp_key_var.set(mapped_key)
+                config.hp_key = mapped_key.lower()
+                print(f"HP key registered: {mapped_key}")
+                popup.destroy()
+        
+        popup.bind('<Key>', on_key_press)
+        popup.focus_set()
+        
+        cancel_btn = ctk.CTkButton(popup, text="Cancel", command=popup.destroy, width=100)
+        cancel_btn.pack(pady=10)
+    
+    def clear_hp_key(self):
+        """Clear HP key"""
+        self.hp_key_var.set('')
+        config.hp_key = '0'  # Reset to default
+        print("HP key cleared, reset to default: 0")
+    
+    def register_mp_key(self):
+        """Register a key for MP potion by capturing keyboard input"""
+        popup = ctk.CTkToplevel(self.root)
+        popup.title("Press a key")
+        popup.geometry("300x150")
+        popup.transient(self.root)
+        popup.grab_set()
+        
+        root_x = self.root.winfo_x()
+        root_y = self.root.winfo_y()
+        popup.geometry(f'+{root_x + 50}+{root_y + 50}')
+        
+        label = ctk.CTkLabel(popup, text="Press any key to register...", 
+                            font=ctk.CTkFont(size=12))
+        label.pack(pady=30)
+        
+        def on_key_press(event):
+            key = event.keysym.upper()
+            
+            if len(key) == 1:
+                self.mp_key_var.set(key)
+                config.mp_key = key.lower()
+                print(f"MP key registered: {key}")
+                popup.destroy()
+            elif key in ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12']:
+                self.mp_key_var.set(key)
+                config.mp_key = key.lower()
+                print(f"MP key registered: {key}")
+                popup.destroy()
+            elif key in ['SPACE', 'TAB', 'RETURN', 'ESCAPE']:
+                key_map = {
+                    'SPACE': 'SPACE',
+                    'TAB': 'TAB',
+                    'RETURN': 'ENTER',
+                    'ESCAPE': 'ESC'
+                }
+                mapped_key = key_map.get(key, key)
+                self.mp_key_var.set(mapped_key)
+                config.mp_key = mapped_key.lower()
+                print(f"MP key registered: {mapped_key}")
+                popup.destroy()
+        
+        popup.bind('<Key>', on_key_press)
+        popup.focus_set()
+        
+        cancel_btn = ctk.CTkButton(popup, text="Cancel", command=popup.destroy, width=100)
+        cancel_btn.pack(pady=10)
+    
+    def clear_mp_key(self):
+        """Clear MP key"""
+        self.mp_key_var.set('')
+        config.mp_key = '9'  # Reset to default
+        print("MP key cleared, reset to default: 9")
+    
+    def register_repair_key(self):
+        """Register a key for repair by capturing keyboard input"""
+        popup = ctk.CTkToplevel(self.root)
+        popup.title("Press a key")
+        popup.geometry("300x150")
+        popup.transient(self.root)
+        popup.grab_set()
+        
+        root_x = self.root.winfo_x()
+        root_y = self.root.winfo_y()
+        popup.geometry(f'+{root_x + 50}+{root_y + 50}')
+        
+        label = ctk.CTkLabel(popup, text="Press any key to register...", 
+                            font=ctk.CTkFont(size=12))
+        label.pack(pady=30)
+        
+        def on_key_press(event):
+            key = event.keysym.upper()
+            
+            if len(key) == 1:
+                self.repair_key_var.set(key)
+                config.repair_key = key.lower()
+                print(f"Repair key registered: {key}")
+                popup.destroy()
+            elif key in ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12']:
+                self.repair_key_var.set(key)
+                config.repair_key = key.lower()
+                print(f"Repair key registered: {key}")
+                popup.destroy()
+            elif key in ['SPACE', 'TAB', 'RETURN', 'ESCAPE']:
+                key_map = {
+                    'SPACE': 'SPACE',
+                    'TAB': 'TAB',
+                    'RETURN': 'ENTER',
+                    'ESCAPE': 'ESC'
+                }
+                mapped_key = key_map.get(key, key)
+                self.repair_key_var.set(mapped_key)
+                config.repair_key = mapped_key.lower()
+                print(f"Repair key registered: {mapped_key}")
+                popup.destroy()
+        
+        popup.bind('<Key>', on_key_press)
+        popup.focus_set()
+        
+        cancel_btn = ctk.CTkButton(popup, text="Cancel", command=popup.destroy, width=100)
+        cancel_btn.pack(pady=10)
+    
+    def clear_repair_key(self):
+        """Clear repair key"""
+        self.repair_key_var.set('')
+        config.repair_key = 'f10'  # Reset to default
+        print("Repair key cleared, reset to default: f10")
     
     def send_key(self, key_input):
         """Send a key input (used by BuffsManager)"""
@@ -3315,15 +4385,21 @@ class BotGUI:
             self.mp_percent_label.configure(text=f"{int(mp_percent)}%")
             
             # Read enemy HP percentage from config (updated by auto_attack in separate thread)
-            enemy_hp_percent = config.current_enemy_hp_percentage
+            # Reset enemy HP bar when auto attack is disabled
+            if not config.auto_attack_enabled:
+                enemy_hp_percent = 0.0
+                enemy_name = None
+            else:
+                enemy_hp_percent = config.current_enemy_hp_percentage
+                enemy_name = config.current_enemy_name
+            
             if hasattr(self, 'enemy_hp_progress_bar'):
                 self.enemy_hp_progress_bar.set(enemy_hp_percent / 100.0)
             if hasattr(self, 'enemy_hp_percent_label'):
-                self.enemy_hp_percent_label.configure(text=f"{int(enemy_hp_percent)}%")
+                self.enemy_hp_percent_label.configure(text=f"{int(enemy_hp_percent)}%" if enemy_hp_percent > 0 else "---%")
             
             # Read enemy name from config (updated by auto_attack/bot_logic in separate thread)
             if hasattr(self, 'current_mob_label'):
-                enemy_name = config.current_enemy_name
                 if enemy_name:
                     # Check if mob should be targeted (for color coding)
                     if config.mob_detection_enabled and not auto_attack.should_target_current_mob():
@@ -3350,7 +4426,7 @@ class BotGUI:
                         self.minimized_mp_percent_label.configure(text=f"{int(mp_percent)}%")
                     if hasattr(self, 'minimized_enemy_hp_progress_bar'):
                         self.minimized_enemy_hp_progress_bar.set(enemy_hp_percent / 100.0)
-                        self.minimized_enemy_hp_percent_label.configure(text=f"{int(enemy_hp_percent)}%")
+                        self.minimized_enemy_hp_percent_label.configure(text=f"{int(enemy_hp_percent)}%" if enemy_hp_percent > 0 else "---%")
                     
                     # Update minimized enemy name
                     if hasattr(self, 'minimized_current_mob_label'):
@@ -3526,8 +4602,31 @@ class BotGUI:
         self.root.withdraw()
     
     def run(self):
-        # Update OCR status display after GUI is fully initialized
-        self.update_ocr_status_display()
+        # Update license status info
+        self.update_license_status_info()
+        
+        # Periodically update license status info (every 60 seconds) in background thread
+        def update_license_periodically():
+            """Update license status in background thread to avoid blocking UI"""
+            def check_license_thread():
+                """Background thread to check license"""
+                license_manager = get_license_manager()
+                license_info = license_manager.get_license_info()
+                
+                # Update GUI in main thread
+                def update_gui():
+                    self.refresh_license_status_display()
+                
+                # Schedule GUI update in main thread
+                self.root.after(0, update_gui)
+            
+            # Start background thread for license check
+            threading.Thread(target=check_license_thread, daemon=True).start()
+            
+            # Schedule next check
+            self.root.after(60000, update_license_periodically)  # Update every 60 seconds
+        
+        self.root.after(60000, update_license_periodically)
         
         # Start processing GUI updates from background threads
         self.process_gui_updates()
