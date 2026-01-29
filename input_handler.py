@@ -148,6 +148,89 @@ def perform_mouse_click():
             print(f"Error performing mouse click: {e2}")
 
 
+def perform_mouse_click_at(screen_x, screen_y):
+    """Perform a left mouse click at specific screen coordinates"""
+    try:
+        if not config.connected_window:
+            # Fallback to pyautogui if no window connected
+            pyautogui.click(screen_x, screen_y)
+            return
+        
+        hwnd = config.connected_window.handle
+        rect = win32gui.GetWindowRect(hwnd)
+        
+        # Convert screen coordinates to window-relative coordinates
+        click_x = screen_x - rect[0]
+        click_y = screen_y - rect[1]
+        
+        try:
+            # Use SendMessage for synchronous click (more reliable)
+            lParam = win32api.MAKELONG(click_x, click_y)
+            win32api.SendMessage(hwnd, win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, lParam)
+            sleep(0.05)
+            win32api.SendMessage(hwnd, win32con.WM_LBUTTONUP, 0, lParam)
+        except:
+            # Fallback to pyautogui
+            pyautogui.click(screen_x, screen_y)
+        
+    except Exception as e:
+        try:
+            # Final fallback to pyautogui
+            pyautogui.click(screen_x, screen_y)
+        except Exception as e2:
+            print(f"Error performing mouse click at ({screen_x}, {screen_y}): {e2}")
+
+
 def initialize_pyautogui():
     """Initialize PyAutoGUI with failsafe mode"""
     pyautogui.FAILSAFE = True
+
+
+def window_image_to_client(hwnd, window_x, window_y):
+    """
+    Convert coordinates from the "captured window image" space (0,0 at top-left of the window rect,
+    including title bar + borders because capture_window() uses GetWindowRect/GetWindowDC)
+    into client-area coordinates (0,0 at top-left of client area).
+    """
+    try:
+        # Screen position of the client-area origin
+        client_origin_screen = win32gui.ClientToScreen(hwnd, (0, 0))
+        # Screen position of the window (includes non-client)
+        window_left, window_top, _, _ = win32gui.GetWindowRect(hwnd)
+        offset_x = client_origin_screen[0] - window_left
+        offset_y = client_origin_screen[1] - window_top
+        return int(window_x - offset_x), int(window_y - offset_y)
+    except Exception:
+        # Fallback: assume no offset (may be wrong if borders/title exist)
+        return int(window_x), int(window_y)
+
+
+def perform_mouse_click_client(hwnd, client_x, client_y):
+    """Perform a left mouse click using client-area coordinates via SendMessage."""
+    try:
+        lParam = win32api.MAKELONG(int(client_x), int(client_y))
+        win32api.SendMessage(hwnd, win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, lParam)
+        sleep(0.05)
+        win32api.SendMessage(hwnd, win32con.WM_LBUTTONUP, 0, lParam)
+        return True
+    except Exception:
+        return False
+
+
+def perform_mouse_click_window_image(hwnd, window_x, window_y):
+    """
+    Click a point specified in 'window image' coordinates (same coordinate space as Calibrator.capture_window()).
+    Converts to client coords for SendMessage; falls back to pyautogui click with screen coords.
+    """
+    try:
+        # 1) Try client-coord click (background click)
+        client_x, client_y = window_image_to_client(hwnd, window_x, window_y)
+        if perform_mouse_click_client(hwnd, client_x, client_y):
+            return True
+
+        # 2) Fallback to real cursor click on screen coords
+        window_left, window_top, _, _ = win32gui.GetWindowRect(hwnd)
+        pyautogui.click(window_left + int(window_x), window_top + int(window_y))
+        return True
+    except Exception:
+        return False

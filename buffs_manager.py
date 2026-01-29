@@ -34,23 +34,14 @@ class BuffsManager:
             print(f'[BuffsManager] Buff {idx + 1} cleared')
     
     def set_ui_reference(self, ui):
-        """Set reference to UI for accessing configured keys"""
+        """Set reference to UI (kept for compatibility; keys are no longer used)"""
         self.ui_reference = ui
-    
-    def get_buff_key(self, buff_index):
-        """Get the configured key for a specific buff"""
-        if hasattr(self, 'ui_reference') and self.ui_reference:
-            if hasattr(self.ui_reference, 'buffs_keys'):
-                key = self.ui_reference.buffs_keys[buff_index].get()
-                return key if key else None
-        return None
     
     def update_and_activate_buffs(self, hwnd, screen, area_skills, area_buffs_activos, x1, y1, run_active=True):
         """
         For each selected buff:
-        - Search in area_skills (template matching > 0.7).
-        - Search in area_buffs_activos (template matching > 0.7).
-        - If NOT in area_buffs_activos and YES in area_skills, click on the skill in area_skills every 0.3s.
+        - Search in area_buffs_activos (template matching > 0.7) to check if buff is already active.
+        - If NOT found in area_buffs_activos, activate buff by clicking its location in area_skills.
         - Save debug image of area_buffs_activos (overwrite).
         """
         if not run_active:
@@ -91,21 +82,7 @@ class BuffsManager:
             
             print(f'[DEBUG] Template loaded for buff {idx + 1}, dimensions: {template.shape}')
             
-            # Search in area_skills
-            found_in_skills = False
-            skill_loc = None
-            if area_skills.shape[0] >= template.shape[0] and area_skills.shape[1] >= template.shape[1]:
-                res = cv2.matchTemplate(area_skills, template, cv2.TM_CCOEFF_NORMED)
-                min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
-                print(f'[DEBUG] Buff {idx + 1} in skills - confidence: {max_val:.3f}')
-                if max_val > 0.7:
-                    found_in_skills = True
-                    skill_loc = max_loc
-                    print(f'[DEBUG] Buff {idx + 1} found in skills at position: {skill_loc}')
-            else:
-                print(f'[DEBUG] Buff {idx + 1} - skills area too small: {area_skills.shape} vs {template.shape}')
-            
-            # Search in area_buffs_activos
+            # Search in area_buffs_activos to check if buff is already active
             found_in_buffs = False
             if area_buffs_activos.shape[0] >= template.shape[0] and area_buffs_activos.shape[1] >= template.shape[1]:
                 res_buff = cv2.matchTemplate(area_buffs_activos, template, cv2.TM_CCOEFF_NORMED)
@@ -113,30 +90,49 @@ class BuffsManager:
                 print(f'[DEBUG] Buff {idx + 1} in active buffs - confidence: {max_val_b:.3f}')
                 if max_val_b > 0.7:
                     found_in_buffs = True
-                    print(f'[DEBUG] Buff {idx + 1} found in active buffs')
+                    print(f'[DEBUG] Buff {idx + 1} found in active buffs (already active)')
             else:
                 print(f'[DEBUG] Buff {idx + 1} - active buffs area too small: {area_buffs_activos.shape} vs {template.shape}')
             
-            # Activate buff if found in skills but not in active buffs
-            if found_in_skills and not found_in_buffs:
-                print(f'[DEBUG] Buff {idx + 1} found in skills but not in active buffs')
+            # Activate buff if NOT found in active buffs area
+            if not found_in_buffs:
+                print(f'[DEBUG] Buff {idx + 1} not found in active buffs, activating...')
                 if now - self.last_click_times[idx] >= 0.3:
-                    key_input = self.get_buff_key(idx)
-                    if key_input:
-                        print(f'[BUFF] Buff {idx + 1} found, sending key: {key_input}')
-                        input_handler.send_input(key_input)
+                    # Image-only mode: find skill in area_skills and click it
+                    if area_skills is not None and area_skills.shape[0] > 0 and area_skills.shape[1] > 0:
+                        # Search for skill in area_skills
+                        found_in_skills = False
+                        skill_loc = None
+                        if area_skills.shape[0] >= template.shape[0] and area_skills.shape[1] >= template.shape[1]:
+                            res = cv2.matchTemplate(area_skills, template, cv2.TM_CCOEFF_NORMED)
+                            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
+                            print(f'[DEBUG] Buff {idx + 1} in skills - confidence: {max_val:.3f}')
+                            if max_val > 0.7:
+                                found_in_skills = True
+                                skill_loc = max_loc
+                                print(f'[DEBUG] Buff {idx + 1} found in skills at position: {skill_loc}')
+                                
+                                # Calculate click position in "window image" coordinates
+                                # (same coordinate system as Calibrator.capture_window())
+                                th, tw = template.shape[:2]
+                                click_x = x1 + skill_loc[0] + tw // 2
+                                click_y = y1 + skill_loc[1] + th // 2
+
+                                print(f'[BUFF] Buff {idx + 1} not active, clicking skill at window-image ({click_x}, {click_y})')
+                                if not input_handler.perform_mouse_click_window_image(hwnd, click_x, click_y):
+                                    print(f'[BUFF] Failed to click skill for buff {idx + 1}')
+
+                                # Save debug image
+                                debug_img = area_skills.copy()
+                                cv2.circle(debug_img, (skill_loc[0] + tw // 2, skill_loc[1] + th // 2), 20, (0, 0, 255), 3)
+                                cv2.imwrite(os.path.join(debug_dir, f'buff_click_{idx}.png'), debug_img)
+                            else:
+                                print(f'[BUFF] Buff {idx + 1} not found in skills area (confidence too low: {max_val:.3f})')
+                        else:
+                            print(f'[BUFF] Skills area too small for buff {idx + 1}: {area_skills.shape} vs {template.shape}')
                     else:
-                        print(f'[BUFF] No key configured for buff {idx + 1}')
+                        print(f'[BUFF] area_skills not available for buff {idx + 1}')
+                    
                     self.last_click_times[idx] = now
             else:
-                if found_in_skills and found_in_buffs:
-                    print(f'[DEBUG] Buff {idx + 1} found in both skills and active buffs')
-                elif not found_in_skills:
-                    print(f'[DEBUG] Buff {idx + 1} not found in skills')
-            
-            # Save debug image if found in skills
-            if found_in_skills and skill_loc:
-                debug_img = area_skills.copy()
-                th, tw = template.shape[:2]
-                cv2.circle(debug_img, (skill_loc[0] + tw // 2, skill_loc[1] + th // 2), 20, (0, 0, 255), 3)
-                cv2.imwrite(os.path.join(debug_dir, f'buff_click_{idx}.png'), debug_img)
+                print(f'[DEBUG] Buff {idx + 1} is already active, no action needed')

@@ -36,16 +36,8 @@ class SkillSequenceManager:
             print(f'[SkillSequenceManager] Skill {idx + 1} cleared')
     
     def set_ui_reference(self, ui):
-        """Set reference to UI for accessing configured keys"""
+        """Set reference to UI (kept for compatibility; keys are no longer used)"""
         self.ui_reference = ui
-    
-    def get_skill_key(self, skill_index):
-        """Get the configured key for a specific skill"""
-        if hasattr(self, 'ui_reference') and self.ui_reference:
-            if hasattr(self.ui_reference, 'skill_sequence_keys'):
-                key = self.ui_reference.skill_sequence_keys[skill_index].get()
-                return key if key else None
-        return None
     
     def reset_sequence(self):
         """Reset the skill sequence to start from the beginning"""
@@ -59,7 +51,7 @@ class SkillSequenceManager:
         Execute skill sequence:
         - Cycles through enabled skills in sequence
         - Checks if skill is present in area_skills (template matching > 0.7)
-        - If skill found and waiting_activation is False, send key and set waiting_activation
+        - If skill found, activate it by clicking its location in the captured window image
         - If skill disappears (was waiting_activation), advance to next skill
         - Resets sequence when new enemy is detected or enemy is lost
         """
@@ -129,7 +121,7 @@ class SkillSequenceManager:
         if not hasattr(self, 'skill_waiting_activation'):
             self.skill_waiting_activation = False
         
-        # Extract area from screen
+        # Extract area from screen (area_skills is in "window image" coordinates)
         x1, y1, x2, y2 = area_skills
         area = screen[y1:y2, x1:x2]
         
@@ -159,12 +151,16 @@ class SkillSequenceManager:
                 # Skill found
                 current_time = time.time()
                 if current_time - self.ultimo_tiempo_skill >= 0.1:
-                    key_input = self.get_skill_key(original_idx)
-                    if key_input:
-                        print(f'[SKILL-SEQUENCE] Skill {original_idx + 1} present, sending key: {key_input}')
-                        input_handler.send_input(key_input)
-                    else:
-                        print(f'[SKILL-SEQUENCE] No key configured for skill {original_idx + 1}')
+                    th, tw = template.shape[:2]
+                    click_x = x1 + max_loc[0] + tw // 2
+                    click_y = y1 + max_loc[1] + th // 2
+                    print(
+                        f'[SKILL-SEQUENCE] Skill {original_idx + 1} present; '
+                        f'clicking at window-image ({click_x}, {click_y})'
+                    )
+
+                    if not input_handler.perform_mouse_click_window_image(hwnd, click_x, click_y):
+                        print(f'[SKILL-SEQUENCE] Click failed for skill {original_idx + 1}')
                     self.ultimo_tiempo_skill = current_time
                 self.skill_waiting_activation = True
             else:

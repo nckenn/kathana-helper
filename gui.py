@@ -875,20 +875,11 @@ class BotGUI:
                 print(f"  Error applying mouse clicker settings: {e}")
             
             # Apply buffs settings
-            if hasattr(self, 'buffs_vars') and hasattr(self, 'buffs_keys') and hasattr(self, 'buffs_canvases'):
+            if hasattr(self, 'buffs_vars') and hasattr(self, 'buffs_canvases'):
                 for i in range(8):
                     try:
                         # Update enabled state
                         self.buffs_vars[i].set(config.buffs_config[i]['enabled'])
-                        # Update key
-                        self.buffs_keys[i].set(config.buffs_config[i]['key'])
-                        # Update button text
-                        if hasattr(self, 'buffs_key_buttons') and i < len(self.buffs_key_buttons):
-                            key_value = config.buffs_config[i]['key']
-                            if key_value:
-                                self.buffs_key_buttons[i].configure(text=key_value.upper())
-                            else:
-                                self.buffs_key_buttons[i].configure(text="Set Key")
                         # Load image if exists - resolve relative path
                         if config.buffs_config[i]['image_path']:
                             image_path = self.convert_to_absolute_path(config.buffs_config[i]['image_path'])
@@ -918,20 +909,11 @@ class BotGUI:
                         traceback.print_exc()
             
             # Apply skill sequence settings
-            if hasattr(self, 'skill_sequence_vars') and hasattr(self, 'skill_sequence_keys') and hasattr(self, 'skill_sequence_canvases'):
+            if hasattr(self, 'skill_sequence_vars') and hasattr(self, 'skill_sequence_canvases'):
                 for i in range(8):
                     try:
                         # Update enabled state
                         self.skill_sequence_vars[i].set(config.skill_sequence_config[i]['enabled'])
-                        # Update key
-                        self.skill_sequence_keys[i].set(config.skill_sequence_config[i].get('key', ''))
-                        # Update button text
-                        if hasattr(self, 'skill_sequence_key_buttons') and i < len(self.skill_sequence_key_buttons):
-                            key_value = config.skill_sequence_config[i].get('key', '')
-                            if key_value:
-                                self.skill_sequence_key_buttons[i].configure(text=key_value.upper())
-                            else:
-                                self.skill_sequence_key_buttons[i].configure(text="Set Key")
                         # Load image if exists - resolve relative path
                         if config.skill_sequence_config[i].get('image_path'):
                             image_path = self.convert_to_absolute_path(config.skill_sequence_config[i]['image_path'])
@@ -1575,17 +1557,14 @@ class BotGUI:
         
         info_text = ctk.CTkLabel(info_frame, 
                                 text="1. Click the skill image to select a skill\n"
-                                     "2. Click the key button to register a hotkey\n"
-                                     "3. Enable the checkbox to activate the skill\n"
-                                     "4. Skills execute automatically in sequence when enemy is found",
+                                     "2. Enable the checkbox to activate the skill\n"
+                                     "3. Skills execute automatically in sequence when enemy is found",
                                 font=ctk.CTkFont(size=12),
                                 justify="left", anchor="w")
         info_text.grid(row=1, column=0, sticky="w", padx=10, pady=(0, 10))
         
         # Initialize skill sequence variables
         self.skill_sequence_vars = {}
-        self.skill_sequence_keys = []
-        self.skill_sequence_key_buttons = []
         self.skill_sequence_canvases = []
         self.skill_sequence_state = []
         
@@ -1627,34 +1606,6 @@ class BotGUI:
             canvas.bind('<Button-1>', lambda e, idx=i: self.show_skill_sequence_selector(idx))
             canvas.bind('<Button-3>', lambda e, idx=i: self.clear_skill_sequence_skill(idx))
             self.skill_sequence_canvases.append(canvas)
-            
-            # Key registration button (compact)
-            key_var = tk.StringVar(value=config.skill_sequence_config[i].get('key', ''))
-            self.skill_sequence_keys.append(key_var)
-            
-            # Function to update button text based on key value
-            def update_key_button_text(var=key_var, btn=None):
-                if var.get():
-                    btn.configure(text=var.get().upper())
-                else:
-                    btn.configure(text="Set Key")
-            
-            key_button = ctk.CTkButton(skill_slot_frame, width=60, height=28,
-                                     command=lambda idx=i: self.register_skill_sequence_key(idx),
-                                     font=ctk.CTkFont(size=10), corner_radius=4)
-            key_button.grid(row=0, column=3, padx=(5, 8), pady=6, sticky="e")
-            
-            # Store button reference
-            self.skill_sequence_key_buttons.append(key_button)
-            
-            # Set initial text
-            update_key_button_text(btn=key_button)
-            
-            # Trace key_var changes to update button text
-            key_var.trace_add('write', lambda *args: update_key_button_text(btn=key_button))
-            
-            # Clear key button (right-click)
-            key_button.bind('<Button-3>', lambda e, idx=i: self.clear_skill_sequence_key(idx))
             
             # Initialize skill sequence state
             self.skill_sequence_state.append({
@@ -1794,17 +1745,14 @@ class BotGUI:
         
         buffs_info_text = ctk.CTkLabel(buffs_info_frame, 
                                       text="1. Click the skill image to select a buff skill\n"
-                                           "2. Click the key button to register a hotkey\n"
-                                           "3. Enable the checkbox to activate the buff\n"
-                                           "4. Important: Place buff icons on top of skillbar for detection",
+                                           "2. Enable the checkbox to activate the buff\n"
+                                           "3. Important: Place buff icons on top of skillbar for detection",
                                       font=ctk.CTkFont(size=12),
                                       justify="left", anchor="w")
         buffs_info_text.grid(row=1, column=0, sticky="w", padx=10, pady=(0, 10))
         
         # Initialize buffs variables
         self.buffs_vars = {}
-        self.buffs_keys = []
-        self.buffs_key_buttons = []
         self.buffs_canvases = []
         self.buffs_state = []
         
@@ -1846,34 +1794,6 @@ class BotGUI:
             canvas.bind('<Button-1>', lambda e, idx=i: self.show_buff_skill_selector(idx))
             canvas.bind('<Button-3>', lambda e, idx=i: self.clear_buff_skill(idx))
             self.buffs_canvases.append(canvas)
-            
-            # Key registration button (compact)
-            key_var = tk.StringVar(value=config.buffs_config[i]['key'])
-            self.buffs_keys.append(key_var)
-            
-            # Function to update button text based on key value
-            def update_buff_key_button_text(var=key_var, btn=None):
-                if var.get():
-                    btn.configure(text=var.get().upper())
-                else:
-                    btn.configure(text="Set Key")
-            
-            key_button = ctk.CTkButton(buff_slot_frame, width=60, height=28,
-                                     command=lambda idx=i: self.register_buff_key(idx),
-                                     font=ctk.CTkFont(size=10), corner_radius=4)
-            key_button.grid(row=0, column=3, padx=(5, 8), pady=6, sticky="e")
-            
-            # Store button reference
-            self.buffs_key_buttons.append(key_button)
-            
-            # Set initial text
-            update_buff_key_button_text(btn=key_button)
-            
-            # Trace key_var changes to update button text
-            key_var.trace_add('write', lambda *args: update_buff_key_button_text(btn=key_button))
-            
-            # Clear key button (right-click)
-            key_button.bind('<Button-3>', lambda e, idx=i: self.clear_buff_key(idx))
             
             # Initialize buff state
             self.buffs_state.append({
@@ -2646,77 +2566,6 @@ class BotGUI:
         popup.destroy()
         print(f"Buff {buff_index + 1} skill selected: {image_path}")
     
-    def register_buff_key(self, idx):
-        """Register a key for a buff by capturing keyboard input"""
-        # Create popup window
-        popup = ctk.CTkToplevel(self.root)
-        popup.title("Press a key")
-        popup.geometry("300x150")
-        popup.transient(self.root)
-        popup.grab_set()
-        
-        # Position popup near main window
-        root_x = self.root.winfo_x()
-        root_y = self.root.winfo_y()
-        popup.geometry(f'+{root_x + 50}+{root_y + 50}')
-        
-        # Label
-        label = ctk.CTkLabel(popup, text="Press any key to register...", 
-                            font=ctk.CTkFont(size=12))
-        label.pack(pady=30)
-        
-        def on_key_press(event):
-            """Handle key press event"""
-            key = event.keysym.upper()
-            
-            # Handle single character keys (letters, numbers)
-            if len(key) == 1:
-                self.buffs_keys[idx].set(key)
-                config.buffs_config[idx]['key'] = key
-                if idx < len(self.buffs_key_buttons):
-                    self.buffs_key_buttons[idx].configure(text=key.upper())
-                print(f"Buff {idx + 1} key registered: {key}")
-                popup.destroy()
-            # Handle function keys (F1-F12)
-            elif key in ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12']:
-                self.buffs_keys[idx].set(key)
-                config.buffs_config[idx]['key'] = key
-                if idx < len(self.buffs_key_buttons):
-                    self.buffs_key_buttons[idx].configure(text=key.upper())
-                print(f"Buff {idx + 1} key registered: {key}")
-                popup.destroy()
-            # Handle special keys
-            elif key in ['SPACE', 'TAB', 'RETURN', 'ESCAPE']:
-                key_map = {
-                    'SPACE': 'SPACE',
-                    'TAB': 'TAB',
-                    'RETURN': 'ENTER',
-                    'ESCAPE': 'ESC'
-                }
-                mapped_key = key_map.get(key, key)
-                self.buffs_keys[idx].set(mapped_key)
-                config.buffs_config[idx]['key'] = mapped_key
-                if idx < len(self.buffs_key_buttons):
-                    self.buffs_key_buttons[idx].configure(text=mapped_key.upper())
-                print(f"Buff {idx + 1} key registered: {mapped_key}")
-                popup.destroy()
-        
-        # Bind key press event to popup
-        popup.bind('<Key>', on_key_press)
-        popup.focus_set()
-        
-        # Cancel button
-        cancel_btn = ctk.CTkButton(popup, text="Cancel", command=popup.destroy, width=100)
-        cancel_btn.pack(pady=10)
-    
-    def clear_buff_key(self, idx):
-        """Clear buff key"""
-        self.buffs_keys[idx].set('')
-        config.buffs_config[idx]['key'] = ''
-        if idx < len(self.buffs_key_buttons):
-            self.buffs_key_buttons[idx].configure(text="Set Key")
-        print(f"Buff {idx + 1} key cleared")
-    
     def show_skill_sequence_selector(self, skill_index):
         """Show popup window to select skill image for skill sequence"""
         self.show_skill_selector(self.select_skill_sequence_skill, skill_index, "Choose Skill for Sequence")
@@ -2777,77 +2626,6 @@ class BotGUI:
                 config.skill_sequence_manager.clear_skill(idx)
         status = "enabled" if config.skill_sequence_config[idx]['enabled'] else "disabled"
         print(f"Skill Sequence {idx + 1} {status}")
-    
-    def register_skill_sequence_key(self, idx):
-        """Register a key for skill sequence by capturing keyboard input"""
-        # Create popup window
-        popup = ctk.CTkToplevel(self.root)
-        popup.title("Press a key")
-        popup.geometry("300x150")
-        popup.transient(self.root)
-        popup.grab_set()
-        
-        # Position popup near main window
-        root_x = self.root.winfo_x()
-        root_y = self.root.winfo_y()
-        popup.geometry(f'+{root_x + 50}+{root_y + 50}')
-        
-        # Label
-        label = ctk.CTkLabel(popup, text="Press any key to register...", 
-                            font=ctk.CTkFont(size=12))
-        label.pack(pady=30)
-        
-        def on_key_press(event):
-            """Handle key press event"""
-            key = event.keysym.upper()
-            
-            # Handle single character keys (letters, numbers)
-            if len(key) == 1:
-                self.skill_sequence_keys[idx].set(key)
-                config.skill_sequence_config[idx]['key'] = key
-                if idx < len(self.skill_sequence_key_buttons):
-                    self.skill_sequence_key_buttons[idx].configure(text=key.upper())
-                print(f"Skill Sequence {idx + 1} key registered: {key}")
-                popup.destroy()
-            # Handle function keys (F1-F12)
-            elif key in ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12']:
-                self.skill_sequence_keys[idx].set(key)
-                config.skill_sequence_config[idx]['key'] = key
-                if idx < len(self.skill_sequence_key_buttons):
-                    self.skill_sequence_key_buttons[idx].configure(text=key.upper())
-                print(f"Skill Sequence {idx + 1} key registered: {key}")
-                popup.destroy()
-            # Handle special keys
-            elif key in ['SPACE', 'TAB', 'RETURN', 'ESCAPE']:
-                key_map = {
-                    'SPACE': 'SPACE',
-                    'TAB': 'TAB',
-                    'RETURN': 'ENTER',
-                    'ESCAPE': 'ESC'
-                }
-                mapped_key = key_map.get(key, key)
-                self.skill_sequence_keys[idx].set(mapped_key)
-                config.skill_sequence_config[idx]['key'] = mapped_key
-                if idx < len(self.skill_sequence_key_buttons):
-                    self.skill_sequence_key_buttons[idx].configure(text=mapped_key.upper())
-                print(f"Skill Sequence {idx + 1} key registered: {mapped_key}")
-                popup.destroy()
-        
-        # Bind key press event to popup
-        popup.bind('<Key>', on_key_press)
-        popup.focus_set()
-        
-        # Cancel button
-        cancel_btn = ctk.CTkButton(popup, text="Cancel", command=popup.destroy, width=100)
-        cancel_btn.pack(pady=10)
-    
-    def clear_skill_sequence_key(self, idx):
-        """Clear skill sequence key"""
-        self.skill_sequence_keys[idx].set('')
-        config.skill_sequence_config[idx]['key'] = ''
-        if idx < len(self.skill_sequence_key_buttons):
-            self.skill_sequence_key_buttons[idx].configure(text="Set Key")
-        print(f"Skill Sequence {idx + 1} key cleared")
     
     def register_hp_key(self):
         """Register a key for HP potion by capturing keyboard input"""
@@ -4316,63 +4094,6 @@ class BotGUI:
     
     def update_status(self):
         """Update HP/MP/Enemy HP status display (reads from config, updated by bot_logic/auto_attack)"""
-        if config.bot_running and config.connected_window:
-            # Check and update buffs
-            try:
-                # Check if enabled buffs are configured (have image paths and are enabled)
-                buffs_configured = any(
-                    self.buffs_state[i]['image_path'] and self.buffs_state[i]['enabled']
-                    for i in range(8) 
-                    if hasattr(self, 'buffs_state') and i < len(self.buffs_state)
-                )
-                
-                if buffs_configured and config.calibrator and config.area_skills:
-                    try:
-                        import cv2
-                        # Get window handle
-                        if hasattr(config.connected_window, 'handle'):
-                            hwnd = config.connected_window.handle
-                        else:
-                            hwnd = config.connected_window
-                        
-                        # Capture screen
-                        screen = config.calibrator.capture_window(hwnd)
-                        if screen is not None:
-                            # Extract area_skills from stored coordinates
-                            x_min, y_min, x_max, y_max = config.area_skills
-                            
-                            # Ensure coordinates are within screen bounds
-                            h, w = screen.shape[:2]
-                            if (x_min >= 0 and y_min >= 0 and x_max <= w and y_max <= h):
-                                area_skills = screen[y_min:y_max, x_min:x_max]
-                                
-                                # Calculate area_buffs_activos (40 pixels above skills area)
-                                buff_height_start = max(0, y_min - 40)
-                                buff_height_end = y_min
-                                buff_width_start = x_min
-                                buff_width_end = x_max
-                                
-                                if (buff_height_start >= 0 and buff_height_end <= h and
-                                    buff_width_start >= 0 and buff_width_end <= w and
-                                    buff_height_start < buff_height_end):
-                                    area_buffs_activos = screen[buff_height_start:buff_height_end, buff_width_start:buff_width_end]
-                                    
-                                    # Call buffs manager update
-                                    if config.buffs_manager:
-                                        config.buffs_manager.update_and_activate_buffs(
-                                            hwnd,
-                                            screen,
-                                            area_skills,
-                                            area_buffs_activos,
-                                            x_min,
-                                            y_min,
-                                            run_active=True
-                                        )
-                    except Exception as e:
-                        print(f"[GUI] Error updating buffs in update_status: {e}")
-            except Exception as e:
-                print(f"[GUI] Error checking buffs configuration: {e}")
-        
         if config.bot_running:
             # Read HP/MP percentages from config (calculated by bot_logic in separate thread)
             hp_percent = config.current_hp_percentage
