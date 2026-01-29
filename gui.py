@@ -1746,7 +1746,7 @@ class BotGUI:
         buffs_info_text = ctk.CTkLabel(buffs_info_frame, 
                                       text="1. Click the skill image to select a buff skill\n"
                                            "2. Enable the checkbox to activate the buff\n"
-                                           "3. Important: Place buff icons on top of skillbar for detection",
+                                           "3. Important: Place buff icons above the system message for detection",
                                       font=ctk.CTkFont(size=12),
                                       justify="left", anchor="w")
         buffs_info_text.grid(row=1, column=0, sticky="w", padx=10, pady=(0, 10))
@@ -2052,36 +2052,10 @@ class BotGUI:
                     # Store calibrator instance in config for later use
                     config.calibrator = calibrator
                     
-                    # Calculate and store area_skills
-                    if (calibrator.skills_bar1_position and calibrator.skills_bar2_position):
-                        try:
-                            import cv2
-                            x1, y1 = calibrator.skills_bar1_position
-                            x2, y2 = calibrator.skills_bar2_position
-                            
-                            # Load skill bar templates to get dimensions
-                            current_dir = os.path.dirname(os.path.abspath(__file__))
-                            bar1_path = os.path.join(current_dir, 'skill_bar_1.bmp')
-                            bar2_path = os.path.join(current_dir, 'skill_bar_2.bmp')
-                            
-                            if os.path.exists(bar1_path) and os.path.exists(bar2_path):
-                                bar1 = cv2.imread(bar1_path)
-                                bar2 = cv2.imread(bar2_path)
-                                
-                                if bar1 is not None and bar2 is not None:
-                                    bar1_h, bar1_w = bar1.shape[:2]
-                                    bar2_h, bar2_w = bar2.shape[:2]
-                                    x_min = min(x1, x2)
-                                    y_min = min(y1, y2)
-                                    x_max = max(x1 + bar1_w, x2 + bar2_w)
-                                    y_max_original = max(y1 + bar1_h, y2 + bar2_h)
-                                    original_height = y_max_original - y_min
-                                    new_height = original_height * 5
-                                    y_max_new = y_min + new_height
-                                    config.area_skills = (x_min, y_min, x_max, y_max_new)
-                                    print(f"[Calibration] Skills area set: {config.area_skills}")
-                        except Exception as e:
-                            print(f"[Calibration] Error calculating skills area: {e}")
+                    # Store area_skills from calibrator (calculated in calibration.py)
+                    if calibrator.area_skills:
+                        config.area_skills = calibrator.area_skills
+                        print(f"[Calibration] Skills area loaded from calibrator: {config.area_skills}")
                     
                     # Store system message area if found
                     if calibrator.system_message_area:

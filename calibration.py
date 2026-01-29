@@ -24,6 +24,8 @@ class Calibrator:
         self.skills_bar1_position = None  # (x, y) position of first skill bar
         self.skills_bar2_position = None  # (x, y) position of second skill bar
         self.skills_spacing = None  # Spacing between skill bars in pixels
+        self.skills_orientation = None  # "horizontal" or "vertical" - orientation of skill bars
+        self.area_skills = None  # (x_min, y_min, x_max, y_max) for skills area
         self.system_message_area = None  # (x, y, width, height) for system message region
         self.enemy_hp_area = None  # (x, y, width, height) for enemy HP bar area
         self.enemy_name_area = None  # (x, y, width, height) for enemy name area
@@ -236,6 +238,29 @@ class Calibrator:
                 self.save_debug_image(screen_img, 'skill_bars_missing_file2')
                 return (None, None)
             
+            # Check for vertical-specific templates first
+            bar1_vertical_path = None
+            bar2_vertical_path = None
+            
+            # Try to find vertical templates (skill_bar_1_vertical.bmp, skill_bar_2_vertical.bmp)
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            bar1_vertical_path = os.path.join(current_dir, 'skill_bar_1_vertical.bmp')
+            bar2_vertical_path = os.path.join(current_dir, 'skill_bar_2_vertical.bmp')
+            
+            # Also try with resolve_resource_path
+            bar1_vertical_path_resolved = config.resolve_resource_path('skill_bar_1_vertical.bmp')
+            bar2_vertical_path_resolved = config.resolve_resource_path('skill_bar_2_vertical.bmp')
+            
+            if bar1_vertical_path_resolved and os.path.exists(bar1_vertical_path_resolved):
+                bar1_vertical_path = bar1_vertical_path_resolved
+            elif not os.path.exists(bar1_vertical_path):
+                bar1_vertical_path = None
+                
+            if bar2_vertical_path_resolved and os.path.exists(bar2_vertical_path_resolved):
+                bar2_vertical_path = bar2_vertical_path_resolved
+            elif not os.path.exists(bar2_vertical_path):
+                bar2_vertical_path = None
+            
             # Load template images
             bar1 = cv2.imread(bar1_path)
             bar2 = cv2.imread(bar2_path)
@@ -249,6 +274,25 @@ class Calibrator:
                 print(f'[Calibration] ERROR: Could not load image {bar2_path}')
                 self.save_debug_image(screen_img, 'skill_bars_load_error2')
                 return (None, None)
+            
+            # Load vertical templates if they exist
+            bar1_vertical = None
+            bar2_vertical = None
+            has_vertical_templates = False
+            
+            if bar1_vertical_path and bar2_vertical_path:
+                bar1_vertical = cv2.imread(bar1_vertical_path)
+                bar2_vertical = cv2.imread(bar2_vertical_path)
+                
+                if bar1_vertical is not None and bar2_vertical is not None:
+                    has_vertical_templates = True
+                    print(f'[Calibration] Found vertical-specific templates: {bar1_vertical_path}, {bar2_vertical_path}')
+                    self.save_debug_image(bar1_vertical, 'skill_bar_1_vertical_loaded')
+                    self.save_debug_image(bar2_vertical, 'skill_bar_2_vertical_loaded')
+                else:
+                    print(f'[Calibration] Vertical templates found but could not load, will use rotated horizontal templates')
+            else:
+                print(f'[Calibration] No vertical-specific templates found, will use rotated horizontal templates')
             
             # Get template dimensions
             bar1_h, bar1_w = bar1.shape[:2]
@@ -266,63 +310,253 @@ class Calibrator:
             gray_bar1 = cv2.cvtColor(bar1, cv2.COLOR_BGR2GRAY)
             gray_bar2 = cv2.cvtColor(bar2, cv2.COLOR_BGR2GRAY)
             
-            # Perform template matching
-            result1 = cv2.matchTemplate(gray_screen, gray_bar1, cv2.TM_CCOEFF_NORMED)
-            result2 = cv2.matchTemplate(gray_screen, gray_bar2, cv2.TM_CCOEFF_NORMED)
-            
-            # Get best match locations
-            min_val1, max_val1, min_loc1, max_loc1 = cv2.minMaxLoc(result1)
-            min_val2, max_val2, min_loc2, max_loc2 = cv2.minMaxLoc(result2)
-            
-            print(f'[Calibration] Skill bar 1 match: {max_val1:.4f} at {max_loc1}')
-            print(f'[Calibration] Skill bar 2 match: {max_val2:.4f} at {max_loc2}')
-            
             # Threshold for acceptable match
             threshold = 0.65
             
-            if max_val1 >= threshold and max_val2 >= threshold:
-                # Store positions and calculate spacing
-                self.skills_bar1_position = max_loc1
-                self.skills_bar2_position = max_loc2
-                self.skills_spacing = max_loc2[0] - max_loc1[0]
+            # Try horizontal orientation first (original templates)
+            result1_h = cv2.matchTemplate(gray_screen, gray_bar1, cv2.TM_CCOEFF_NORMED)
+            result2_h = cv2.matchTemplate(gray_screen, gray_bar2, cv2.TM_CCOEFF_NORMED)
+            
+            min_val1_h, max_val1_h, min_loc1_h, max_loc1_h = cv2.minMaxLoc(result1_h)
+            min_val2_h, max_val2_h, min_loc2_h, max_loc2_h = cv2.minMaxLoc(result2_h)
+            
+            print(f'[Calibration] Horizontal - Skill bar 1 match: {max_val1_h:.4f} at {max_loc1_h}')
+            print(f'[Calibration] Horizontal - Skill bar 2 match: {max_val2_h:.4f} at {max_loc2_h}')
+            
+            horizontal_score = (max_val1_h + max_val2_h) / 2.0
+            horizontal_valid = max_val1_h >= threshold and max_val2_h >= threshold
+            
+            # Try vertical orientation
+            if has_vertical_templates:
+                # Use actual vertical templates (best option)
+                print(f'[Calibration] Using vertical-specific templates for matching')
+                gray_bar1_vertical = cv2.cvtColor(bar1_vertical, cv2.COLOR_BGR2GRAY)
+                gray_bar2_vertical = cv2.cvtColor(bar2_vertical, cv2.COLOR_BGR2GRAY)
                 
-                # Create debug image showing found bars
-                debug_img = screen_img.copy()
-                cv2.rectangle(debug_img, max_loc1, 
-                             (max_loc1[0] + bar1_w, max_loc1[1] + bar1_h), (0, 255, 0), 2)
-                cv2.rectangle(debug_img, max_loc2, 
-                             (max_loc2[0] + bar2_w, max_loc2[1] + bar2_h), (0, 255, 0), 2)
-                self.save_debug_image(debug_img, 'skill_bars_found')
+                result1_v = cv2.matchTemplate(gray_screen, gray_bar1_vertical, cv2.TM_CCOEFF_NORMED)
+                result2_v = cv2.matchTemplate(gray_screen, gray_bar2_vertical, cv2.TM_CCOEFF_NORMED)
                 
-                # Calculate and save area image
-                x1 = min(max_loc1[0], max_loc2[0])
-                y1 = min(max_loc1[1], max_loc2[1])
-                x2 = max(max_loc1[0] + bar1_w, max_loc2[0] + bar2_w)
-                y2 = max(max_loc1[1] + bar1_h, max_loc2[1] + bar2_h)
+                min_val1_v, max_val1_v, min_loc1_v, max_loc1_v = cv2.minMaxLoc(result1_v)
+                min_val2_v, max_val2_v, min_loc2_v, max_loc2_v = cv2.minMaxLoc(result2_v)
                 
-                area_img = screen_img.copy()
-                cv2.rectangle(area_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                self.save_debug_image(area_img, 'skills_sequence_area')
+                bar1_rotated = bar1_vertical
+                bar2_rotated = bar2_vertical
+                vertical_rotation = "vertical templates"
                 
-                print(f'[Calibration] Skill bar 1 found at: {max_loc1}')
-                print(f'[Calibration] Skill bar 2 found at: {max_loc2}')
-                print(f'[Calibration] Spacing between bars: {self.skills_spacing} pixels')
-                
-                return (max_loc1, max_loc2)
+                print(f'[Calibration] Vertical (templates) - Skill bar 1 match: {max_val1_v:.4f} at {max_loc1_v}')
+                print(f'[Calibration] Vertical (templates) - Skill bar 2 match: {max_val2_v:.4f} at {max_loc2_v}')
             else:
-                print('[Calibration] Skill bars not found with sufficient confidence')
-                print(f'[Calibration] Skill bar 1: {max_val1:.4f} (minimum threshold: {threshold})')
-                print(f'[Calibration] Skill bar 2: {max_val2:.4f} (minimum threshold: {threshold})')
+                # Fall back to rotating horizontal templates - try both rotation directions
+                # Try clockwise rotation first
+                bar1_rotated_cw = cv2.rotate(bar1, cv2.ROTATE_90_CLOCKWISE)
+                bar2_rotated_cw = cv2.rotate(bar2, cv2.ROTATE_90_CLOCKWISE)
+                gray_bar1_rotated_cw = cv2.cvtColor(bar1_rotated_cw, cv2.COLOR_BGR2GRAY)
+                gray_bar2_rotated_cw = cv2.cvtColor(bar2_rotated_cw, cv2.COLOR_BGR2GRAY)
                 
-                # Create debug image showing failed matches
+                result1_v_cw = cv2.matchTemplate(gray_screen, gray_bar1_rotated_cw, cv2.TM_CCOEFF_NORMED)
+                result2_v_cw = cv2.matchTemplate(gray_screen, gray_bar2_rotated_cw, cv2.TM_CCOEFF_NORMED)
+                
+                min_val1_v_cw, max_val1_v_cw, min_loc1_v_cw, max_loc1_v_cw = cv2.minMaxLoc(result1_v_cw)
+                min_val2_v_cw, max_val2_v_cw, min_loc2_v_cw, max_loc2_v_cw = cv2.minMaxLoc(result2_v_cw)
+                
+                # Try counter-clockwise rotation
+                bar1_rotated_ccw = cv2.rotate(bar1, cv2.ROTATE_90_COUNTERCLOCKWISE)
+                bar2_rotated_ccw = cv2.rotate(bar2, cv2.ROTATE_90_COUNTERCLOCKWISE)
+                gray_bar1_rotated_ccw = cv2.cvtColor(bar1_rotated_ccw, cv2.COLOR_BGR2GRAY)
+                gray_bar2_rotated_ccw = cv2.cvtColor(bar2_rotated_ccw, cv2.COLOR_BGR2GRAY)
+                
+                result1_v_ccw = cv2.matchTemplate(gray_screen, gray_bar1_rotated_ccw, cv2.TM_CCOEFF_NORMED)
+                result2_v_ccw = cv2.matchTemplate(gray_screen, gray_bar2_rotated_ccw, cv2.TM_CCOEFF_NORMED)
+                
+                min_val1_v_ccw, max_val1_v_ccw, min_loc1_v_ccw, max_loc1_v_ccw = cv2.minMaxLoc(result1_v_ccw)
+                min_val2_v_ccw, max_val2_v_ccw, min_loc2_v_ccw, max_loc2_v_ccw = cv2.minMaxLoc(result2_v_ccw)
+                
+                # Choose best vertical match (clockwise or counter-clockwise)
+                vertical_cw_score = (max_val1_v_cw + max_val2_v_cw) / 2.0
+                vertical_ccw_score = (max_val1_v_ccw + max_val2_v_ccw) / 2.0
+                
+                if vertical_cw_score >= vertical_ccw_score:
+                    max_val1_v = max_val1_v_cw
+                    max_val2_v = max_val2_v_cw
+                    max_loc1_v = max_loc1_v_cw
+                    max_loc2_v = max_loc2_v_cw
+                    bar1_rotated = bar1_rotated_cw
+                    bar2_rotated = bar2_rotated_cw
+                    vertical_rotation = "clockwise"
+                else:
+                    max_val1_v = max_val1_v_ccw
+                    max_val2_v = max_val2_v_ccw
+                    max_loc1_v = max_loc1_v_ccw
+                    max_loc2_v = max_loc2_v_ccw
+                    bar1_rotated = bar1_rotated_ccw
+                    bar2_rotated = bar2_rotated_ccw
+                    vertical_rotation = "counter-clockwise"
+                
+                print(f'[Calibration] Vertical (CW) - Skill bar 1 match: {max_val1_v_cw:.4f} at {max_loc1_v_cw}')
+                print(f'[Calibration] Vertical (CW) - Skill bar 2 match: {max_val2_v_cw:.4f} at {max_loc2_v_cw}')
+                print(f'[Calibration] Vertical (CCW) - Skill bar 1 match: {max_val1_v_ccw:.4f} at {max_loc1_v_ccw}')
+                print(f'[Calibration] Vertical (CCW) - Skill bar 2 match: {max_val2_v_ccw:.4f} at {max_loc2_v_ccw}')
+                print(f'[Calibration] Vertical - Best: {vertical_rotation} (score: {max(vertical_cw_score, vertical_ccw_score):.4f})')
+                
+                # Save rotated templates for debugging
+                self.save_debug_image(bar1_rotated, 'skill_bar_1_rotated_vertical')
+                self.save_debug_image(bar2_rotated, 'skill_bar_2_rotated_vertical')
+            
+            # Calculate vertical score
+            if has_vertical_templates:
+                vertical_score = (max_val1_v + max_val2_v) / 2.0
+            else:
+                vertical_score = max(vertical_cw_score, vertical_ccw_score)
+            
+            # Use slightly lower threshold for vertical (might be harder to match)
+            vertical_threshold = threshold - 0.05  # 0.60 instead of 0.65
+            vertical_valid = max_val1_v >= vertical_threshold and max_val2_v >= vertical_threshold
+            
+            # Determine which orientation to use (prefer the one with better match)
+            use_horizontal = False
+            use_vertical = False
+            
+            if horizontal_valid and vertical_valid:
+                # Both valid, use the one with better score
+                if horizontal_score >= vertical_score:
+                    use_horizontal = True
+                    print(f'[Calibration] Both orientations valid, using horizontal (score: {horizontal_score:.4f} vs {vertical_score:.4f})')
+                else:
+                    use_vertical = True
+                    print(f'[Calibration] Both orientations valid, using vertical (score: {vertical_score:.4f} vs {horizontal_score:.4f})')
+            elif horizontal_valid:
+                use_horizontal = True
+                print(f'[Calibration] Using horizontal orientation')
+            elif vertical_valid:
+                use_vertical = True
+                print(f'[Calibration] Using vertical orientation')
+            else:
+                print('[Calibration] Skill bars not found with sufficient confidence in either orientation')
+                print(f'[Calibration] Horizontal - Skill bar 1: {max_val1_h:.4f}, Skill bar 2: {max_val2_h:.4f} (minimum threshold: {threshold})')
+                print(f'[Calibration] Vertical - Skill bar 1: {max_val1_v:.4f}, Skill bar 2: {max_val2_v:.4f} (minimum threshold: {vertical_threshold:.2f})')
+                
+                # Create debug image showing failed matches (use horizontal for visualization)
                 debug_img = screen_img.copy()
-                cv2.rectangle(debug_img, max_loc1, 
-                             (max_loc1[0] + bar1_w, max_loc1[1] + bar1_h), (0, 0, 255), 2)
-                cv2.rectangle(debug_img, max_loc2, 
-                             (max_loc2[0] + bar2_w, max_loc2[1] + bar2_h), (0, 0, 255), 2)
+                cv2.rectangle(debug_img, max_loc1_h, 
+                             (max_loc1_h[0] + bar1_w, max_loc1_h[1] + bar1_h), (0, 0, 255), 2)
+                cv2.rectangle(debug_img, max_loc2_h, 
+                             (max_loc2_h[0] + bar2_w, max_loc2_h[1] + bar2_h), (0, 0, 255), 2)
                 self.save_debug_image(debug_img, 'skill_bars_not_found')
                 
                 return (None, None)
+            
+            # Use the selected orientation
+            if use_horizontal:
+                max_loc1 = max_loc1_h
+                max_loc2 = max_loc2_h
+                max_val1 = max_val1_h
+                max_val2 = max_val2_h
+                bar1_w_used = bar1_w
+                bar1_h_used = bar1_h
+                bar2_w_used = bar2_w
+                bar2_h_used = bar2_h
+                orientation = "horizontal"
+            else:  # use_vertical
+                max_loc1 = max_loc1_v
+                max_loc2 = max_loc2_v
+                max_val1 = max_val1_v
+                max_val2 = max_val2_v
+                
+                if has_vertical_templates:
+                    # Use actual dimensions from vertical templates
+                    bar1_h_used, bar1_w_used = bar1_vertical.shape[:2]
+                    bar2_h_used, bar2_w_used = bar2_vertical.shape[:2]
+                else:
+                    # Dimensions are swapped for rotated templates
+                    bar1_w_used = bar1_h
+                    bar1_h_used = bar1_w
+                    bar2_w_used = bar2_h
+                    bar2_h_used = bar2_w
+                
+                orientation = "vertical"
+            
+            # Store positions, orientation, and calculate spacing
+            self.skills_bar1_position = max_loc1
+            self.skills_bar2_position = max_loc2
+            self.skills_orientation = orientation
+            
+            # Calculate spacing based on orientation
+            if orientation == "horizontal":
+                self.skills_spacing = max_loc2[0] - max_loc1[0]
+            else:  # vertical
+                self.skills_spacing = max_loc2[1] - max_loc1[1]
+            
+            # Calculate area_skills based on orientation
+            x1, y1 = max_loc1
+            x2, y2 = max_loc2
+            
+            if orientation == "vertical":
+                # Vertical bars: stacked vertically
+                # Similar to horizontal: keep height as actual span, expand width (to the right)
+                x_min = min(x1, x2)
+                # For vertical bars, determine which bar is on top
+                # Top bar is the one with smaller y coordinate
+                if y1 <= y2:
+                    # bar1 is on top (or same level)
+                    top_y = y1
+                    bottom_y = y2 + bar2_h_used  # Bottom of bar2 (which is below)
+                else:
+                    # bar2 is on top
+                    top_y = y2
+                    bottom_y = y1 + bar1_h_used  # Bottom of bar1 (which is below)
+                
+                y_min = top_y
+                y_max = bottom_y
+                x_max_original = max(x1 + bar1_w_used, x2 + bar2_w_used)
+                original_width = x_max_original - x_min
+                original_height = y_max - y_min  # Actual height from top of first bar to bottom of last bar
+                # Keep height as actual span (like horizontal keeps width)
+                # Expand width by 5x to capture more skill columns to the right (like horizontal expands height downward)
+                new_width = original_width * 5
+                x_max_new = x_min + new_width
+                # Use actual height span, no expansion (mirror of horizontal which keeps width)
+                y_max_new = y_max
+                self.area_skills = (x_min, y_min, x_max_new, y_max_new)
+                print(f'[Calibration] Skills area set (vertical): {self.area_skills}')
+                print(f'[Calibration]   Bar positions: bar1=({x1},{y1}), bar2=({x2},{y2})')
+                print(f'[Calibration]   Bar dimensions: bar1={bar1_w_used}x{bar1_h_used}, bar2={bar2_w_used}x{bar2_h_used}')
+                print(f'[Calibration]   Vertical span: top={y_min}, bottom={y_max}, height={original_height}')
+                print(f'[Calibration]   Expanded: width={new_width} (5x original), height={original_height} (actual span, no expansion)')
+            else:
+                # Horizontal bars: side by side, expand height to capture more skills
+                x_min = min(x1, x2)
+                y_min = min(y1, y2)
+                x_max = max(x1 + bar1_w_used, x2 + bar2_w_used)
+                y_max_original = max(y1 + bar1_h_used, y2 + bar2_h_used)
+                original_height = y_max_original - y_min
+                new_height = original_height * 5
+                y_max_new = y_min + new_height
+                self.area_skills = (x_min, y_min, x_max, y_max_new)
+                print(f'[Calibration] Skills area set (horizontal): {self.area_skills}')
+                print(f'[Calibration]   Bar positions: bar1=({x1},{y1}), bar2=({x2},{y2})')
+                print(f'[Calibration]   Bar dimensions: bar1={bar1_w_used}x{bar1_h_used}, bar2={bar2_w_used}x{bar2_h_used}')
+                print(f'[Calibration]   Original height: {original_height}, Expanded height: {new_height}')
+            
+            # Create debug image showing found bars
+            debug_img = screen_img.copy()
+            cv2.rectangle(debug_img, max_loc1, 
+                         (max_loc1[0] + bar1_w_used, max_loc1[1] + bar1_h_used), (0, 255, 0), 2)
+            cv2.rectangle(debug_img, max_loc2, 
+                         (max_loc2[0] + bar2_w_used, max_loc2[1] + bar2_h_used), (0, 255, 0), 2)
+            self.save_debug_image(debug_img, 'skill_bars_found')
+            
+            # Calculate and save area image
+            if self.area_skills:
+                x_min, y_min, x_max, y_max = self.area_skills
+                area_img = screen_img.copy()
+                cv2.rectangle(area_img, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
+                self.save_debug_image(area_img, 'skills_sequence_area')
+            
+            print(f'[Calibration] Skill bar 1 found at: {max_loc1} ({orientation})')
+            print(f'[Calibration] Skill bar 2 found at: {max_loc2} ({orientation})')
+            print(f'[Calibration] Spacing between bars: {self.skills_spacing} pixels ({orientation})')
+            
+            return (max_loc1, max_loc2)
                 
         except Exception as e:
             print(f'[Calibration] Error finding skill bars: {e}')
@@ -743,7 +977,8 @@ class Calibrator:
             summary_lines.append("✗ MP Bar: NOT FOUND")
         
         if skills_ok:
-            summary_lines.append("✓ Skill Bars")
+            orientation_text = f" ({self.skills_orientation})" if self.skills_orientation else ""
+            summary_lines.append(f"✓ Skill Bars{orientation_text}")
         else:
             summary_lines.append("✗ Skill Bars: NOT FOUND")
         
@@ -837,6 +1072,8 @@ class Calibrator:
             'skills_bar1_position': self.skills_bar1_position,
             'skills_bar2_position': self.skills_bar2_position,
             'skills_spacing': self.skills_spacing,
+            'skills_orientation': self.skills_orientation,
+            'area_skills': self.area_skills,
             'system_message_calibrated': self.system_message_area is not None,
             'system_message_area': self.system_message_area,
             'enemy_hp_calibrated': self.enemy_hp_area is not None,

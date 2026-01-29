@@ -115,9 +115,12 @@ def check_buffs():
     if not buffs_configured:
         return
     
-    # Check if skill bars are calibrated
-    if (not config.calibrator.skills_bar1_position or 
-        not config.calibrator.skills_bar2_position):
+    # Need both:
+    # - system_message_area: to build correct-width active-buffs strip above it
+    # - area_skills: to find/click skills for activation
+    if not config.system_message_area or not config.system_message_area.get('width', 0) > 0:
+        return
+    if not config.area_skills:
         return
     
     # Throttle buff checking to reduce CPU usage (check every 0.5s instead of every 0.1s)
@@ -144,21 +147,46 @@ def check_buffs():
         # Capture screen
         screen = config.calibrator.capture_window(hwnd)
         if screen is not None:
-            # Check if area_skills is available
-            if not config.area_skills:
-                return
-            
             # Extract area_skills from stored coordinates
             x1, y1, x2, y2 = config.area_skills
             area_skills = screen[y1:y2, x1:x2]
             
-            # Calculate area_buffs_activos (40 pixels above skills area)
+            # Calculate area_buffs_activos (40 pixels above system message area)
+            # system_message_area is center-based in config: {x,y,width,height}
             h, w = screen.shape[:2]
-            buff_height_start = y1 - 40
-            buff_height_end = y1
-            buff_width_start = x1
-            buff_width_end = x2
-            area_buffs_activos = screen[buff_height_start:buff_height_end, buff_width_start:buff_width_end]
+            sys_msg_x = config.system_message_area.get('x', 0)
+            sys_msg_y = config.system_message_area.get('y', 0)
+            sys_msg_width = config.system_message_area.get('width', 0)
+            sys_msg_height = config.system_message_area.get('height', 0)
+
+            if sys_msg_width <= 0 or sys_msg_height <= 0:
+                return
+
+            half_width = sys_msg_width // 2
+            half_height = sys_msg_height // 2
+
+            # Convert from center -> bounds
+            sys_msg_left = sys_msg_x - half_width
+            sys_msg_right = sys_msg_x + half_width
+            sys_msg_top = sys_msg_y - half_height
+
+            # Clamp to screen
+            sys_msg_left = max(0, min(w, sys_msg_left))
+            sys_msg_right = max(0, min(w, sys_msg_right))
+            sys_msg_top = max(0, min(h, sys_msg_top))
+
+            buff_height_start = max(0, sys_msg_top - 44)
+            buff_height_end = sys_msg_top - 4
+            buff_width_start = sys_msg_left - 14
+            buff_width_end = sys_msg_right + 10
+
+            if (buff_height_start >= 0 and buff_height_end <= h and
+                buff_width_start >= 0 and buff_width_end <= w and
+                buff_height_start < buff_height_end and
+                buff_width_start < buff_width_end):
+                area_buffs_activos = screen[buff_height_start:buff_height_end, buff_width_start:buff_width_end]
+            else:
+                return
             
             # Call buffs manager update
             config.buffs_manager.update_and_activate_buffs(
