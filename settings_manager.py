@@ -96,6 +96,7 @@ def save_settings():
             'auto_change_target_enabled': config.auto_change_target_enabled,
             'unstuck_timeout': config.unstuck_timeout,
             'is_mage': config.is_mage,
+            'assist_only_enabled': config.assist_only_enabled,
             'selected_window': config.selected_window if config.selected_window else "",
             'buffs_config': {str(i): {
                 'enabled': config.buffs_config[i]['enabled'],
@@ -156,6 +157,8 @@ def save_settings():
                     settings['unstuck_timeout'] = float(gui.unstuck_timeout_var.get())
                 if hasattr(gui, 'is_mage_var'):
                     settings['is_mage'] = gui.is_mage_var.get()
+                if hasattr(gui, 'assist_only_var'):
+                    settings['assist_only_enabled'] = gui.assist_only_var.get()
         except (ValueError, AttributeError, ImportError) as e:
             print(f"Warning: Could not save some GUI values: {e}")
         
@@ -272,6 +275,9 @@ def load_settings():
         
         if 'is_mage' in settings:
             config.is_mage = settings['is_mage']
+        
+        if 'assist_only_enabled' in settings:
+            config.assist_only_enabled = settings['assist_only_enabled']
         
         if 'selected_window' in settings:
             config.selected_window = settings['selected_window']

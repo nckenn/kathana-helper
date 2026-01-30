@@ -9,6 +9,10 @@ from time import sleep
 import pyautogui
 import config
 
+# Movement sequence state tracking
+_movement_sequence_active = False
+_previous_foreground_hwnd = None
+
 
 def get_virtual_key_code(key):
     """Convert key string to virtual key code"""
@@ -83,17 +87,64 @@ def send_input(key):
         print(f"Error sending input {key}: {e}")
 
 
-def send_movement_key(key, hold_duration=0.15):
-    """Send movement key with hold duration to actually move the character"""
+def start_movement_sequence():
+    """Start a movement sequence - sets foreground window once at the start"""
+    global _movement_sequence_active, _previous_foreground_hwnd
     try:
         if config.connected_window:
             hwnd = config.connected_window.handle
+            # Store the previous foreground window to restore it later
+            _previous_foreground_hwnd = win32gui.GetForegroundWindow()
+            win32gui.SetForegroundWindow(hwnd)
+            sleep(0.05)
+            _movement_sequence_active = True
+    except Exception as e:
+        print(f"Error starting movement sequence: {e}")
+
+
+def end_movement_sequence():
+    """End a movement sequence - restores previous foreground window"""
+    global _movement_sequence_active, _previous_foreground_hwnd
+    try:
+        if _movement_sequence_active and _previous_foreground_hwnd:
+            if config.connected_window:
+                hwnd = config.connected_window.handle
+                # Restore the previous foreground window
+                if _previous_foreground_hwnd != hwnd:
+                    try:
+                        win32gui.SetForegroundWindow(_previous_foreground_hwnd)
+                    except:
+                        pass  # Ignore errors when restoring foreground window
+        _movement_sequence_active = False
+        _previous_foreground_hwnd = None
+    except Exception as e:
+        print(f"Error ending movement sequence: {e}")
+        _movement_sequence_active = False
+        _previous_foreground_hwnd = None
+
+
+def send_movement_key(key, hold_duration=0.15):
+    """Send movement key with hold duration to actually move the character
+    Note: Use start_movement_sequence() and end_movement_sequence() to manage
+    foreground window for multiple movement keys"""
+    try:
+        if config.connected_window and not _movement_sequence_active:
+            # Only manage foreground if not in a sequence
+            hwnd = config.connected_window.handle
+            previous_hwnd = win32gui.GetForegroundWindow()
             win32gui.SetForegroundWindow(hwnd)
             sleep(0.05)
             pydirectinput.keyDown(key)
             sleep(hold_duration)
             pydirectinput.keyUp(key)
+            # Restore the previous foreground window
+            if previous_hwnd and previous_hwnd != hwnd:
+                try:
+                    win32gui.SetForegroundWindow(previous_hwnd)
+                except:
+                    pass  # Ignore errors when restoring foreground window
         else:
+            # In a sequence or no connected window - just send the key
             pydirectinput.keyDown(key)
             sleep(hold_duration)
             pydirectinput.keyUp(key)

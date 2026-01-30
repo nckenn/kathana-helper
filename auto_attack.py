@@ -415,6 +415,8 @@ class EnemyStateManager:
         config.current_enemy_hp_percentage = 0.0
         config.current_target_mob = None
         config.current_enemy_name = None
+        # Reset assist_only enemy tracking when enemy state is reset
+        reset_enemy_tracking()
     
     @staticmethod
     def initialize_new_enemy(current_time, hp_percentage):
@@ -812,6 +814,123 @@ def detect_enemy_for_auto_attack(hwnd, targets=None):
 
 
 # ============================================================================
+# Assist Only Mode Logic
+# ============================================================================
+
+def should_attack_basic(enemy_hp=None):
+    """
+    Determines if basic attack (R key) should be executed based on assist_only mode.
+    In assist_only mode, only attacks when enemy HP decreases (indicating leader has started attacking).
+    
+    Args:
+        enemy_hp: Current enemy HP percentage (0-100), or None if not available
+        
+    Returns:
+        bool: True if should attack, False if not
+    """
+    if not config.assist_only_enabled:
+        return True  # Normal mode: always attack
+    
+    # Assist only mode: don't use basic attack (assist button handles attacking)
+    return False
+
+
+def should_use_skills(enemy_hp=None):
+    """
+    Determines if skills should be used based on assist_only mode.
+    In assist_only mode, skills are always used (no HP decrease check needed since assist button handles targeting).
+    
+    Args:
+        enemy_hp: Current enemy HP percentage (0-100), or None if not available (unused in assist_only mode)
+        
+    Returns:
+        bool: True if should use skills, False if not
+    """
+    if not config.assist_only_enabled:
+        return True  # Normal mode: always use skills
+    
+    # Assist only mode: always use skills (assist button already handles targeting/attacking)
+    return True
+
+
+def reset_enemy_tracking():
+    """Reset enemy tracking when target is lost (for assist_only mode)"""
+    config.enemy_initial_hp = None
+    config.enemy_detected = False
+    print('[Assist Only] Enemy tracking reset')
+
+
+def check_assist_key():
+    """
+    Check for assist.bmp in skill area and click it when found.
+    This should be called continuously when assist_only is enabled to spam the assist button.
+    """
+    if not config.assist_only_enabled:
+        return
+    
+    if not config.connected_window or not config.calibrator:
+        return
+    
+    if not config.area_skills:
+        return
+    
+    try:
+        import cv2
+        import os
+    except ImportError:
+        return
+    
+    # Check if assist.bmp exists
+    assist_image_path = config.resolve_resource_path('assist.bmp')
+    if not assist_image_path or not os.path.exists(assist_image_path):
+        return
+    
+    # Throttle assist clicks (spam every 1 second)
+    current_time = time.time()
+    if not hasattr(check_assist_key, 'last_click_time'):
+        check_assist_key.last_click_time = 0
+    
+    if current_time - check_assist_key.last_click_time < 1.0:
+        return
+    
+    try:
+        hwnd = config.connected_window.handle
+        screen = config.calibrator.capture_window(hwnd)
+        if screen is None:
+            return
+        
+        # Extract skill area
+        x1, y1, x2, y2 = config.area_skills
+        area_skills = screen[y1:y2, x1:x2]
+        
+        # Load assist template
+        template = cv2.imread(assist_image_path, cv2.IMREAD_COLOR)
+        if template is None:
+            return
+        
+        # Check if area is large enough
+        if area_skills.shape[0] >= template.shape[0] and area_skills.shape[1] >= template.shape[1]:
+            # Template matching
+            res = cv2.matchTemplate(area_skills, template, cv2.TM_CCOEFF_NORMED)
+            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
+            
+            if max_val > 0.7:
+                # Assist button found - click it
+                th, tw = template.shape[:2]
+                click_x = x1 + max_loc[0] + tw // 2
+                click_y = y1 + max_loc[1] + th // 2
+                
+                print(f'[Assist Only] Assist button found, clicking at ({click_x}, {click_y})')
+                
+                if input_handler.perform_mouse_click_window_image(hwnd, click_x, click_y):
+                    check_assist_key.last_click_time = current_time
+                else:
+                    print('[Assist Only] Failed to click assist button')
+    except Exception as e:
+        print(f'[Assist Only] Error checking assist key: {e}')
+
+
+# ============================================================================
 # Retargeting Logic
 # ============================================================================
 
@@ -844,6 +963,15 @@ class RetargetManager:
                 'max_recursion_reached': bool
             }
         """
+        # Don't auto-target if assist_only is enabled (party leader determines target)
+        if config.assist_only_enabled:
+            return {
+                'success': False,
+                'mob_name': None,
+                'needs_retarget': False,
+                'max_recursion_reached': False
+            }
+        
         if not config.auto_attack_enabled:
             return {
                 'success': False,
@@ -870,11 +998,18 @@ class RetargetManager:
         # Trigger attack action after target action (sequence: target -> attack)
         # Only if mob filter is NOT enabled (if enabled, attack will be triggered after mob filter check)
         # Skip attack if mage mode is enabled
+        # Check assist_only mode: only attack if should_attack_basic returns True
         if not mob_filter_enabled and not config.is_mage:
-            attack_key = config.action_slots['attack']['key']
-            # Small delay to ensure target action completes before attack
-            time.sleep(0.1)
-            input_handler.send_input(attack_key)
+            # Get current enemy HP for assist_only check
+            enemy_hp_for_check = None
+            if config.assist_only_enabled and config.current_enemy_hp_percentage > 0:
+                enemy_hp_for_check = config.current_enemy_hp_percentage
+            
+            if should_attack_basic(enemy_hp_for_check):
+                attack_key = config.action_slots['attack']['key']
+                # Small delay to ensure target action completes before attack
+                time.sleep(0.1)
+                input_handler.send_input(attack_key)
         
         # Minimal delay to ensure mob name appears after targeting (optimized for speed)
         delay = (RETARGET_DELAY_RECURSIVE if recursion_depth > 0 
@@ -916,11 +1051,18 @@ class RetargetManager:
         
         # Trigger attack action after mob filter check (if mob filter is enabled)
         # Skip attack if mage mode is enabled
+        # Check assist_only mode: only attack if should_attack_basic returns True
         if mob_filter_enabled and not config.is_mage:
-            attack_key = config.action_slots['attack']['key']
-            # Small delay to ensure target action completes before attack
-            time.sleep(0.1)
-            input_handler.send_input(attack_key)
+            # Get current enemy HP for assist_only check
+            enemy_hp_for_check = None
+            if config.assist_only_enabled and config.current_enemy_hp_percentage > 0:
+                enemy_hp_for_check = config.current_enemy_hp_percentage
+            
+            if should_attack_basic(enemy_hp_for_check):
+                attack_key = config.action_slots['attack']['key']
+                # Small delay to ensure target action completes before attack
+                time.sleep(0.1)
+                input_handler.send_input(attack_key)
         
         return {
             'success': True,
@@ -955,6 +1097,10 @@ class AutoTargetManager:
     
     def try_auto_target(self, reason=""):
         """Attempt to auto-target an enemy (uses RetargetManager)"""
+        # Don't auto-target if assist_only is enabled (party leader determines target)
+        if config.assist_only_enabled:
+            return False
+        
         # Don't auto-target if we're currently looting
         if config.is_looting:
             return False
@@ -981,9 +1127,16 @@ _auto_target_manager = AutoTargetManager()
 
 def check_auto_attack():
     """Check enemy HP bar and update GUI display, auto-target when no target"""
-    # Only monitor enemy HP when auto attack is enabled
+    # Don't auto-target if assist_only is enabled (party leader determines target)
+    # But still monitor enemy HP for assist_only logic
+    if config.assist_only_enabled:
+        # Still check enemy HP for assist_only mode, but don't auto-target
+        # The assist_only logic will handle when to attack based on HP decrease
+        pass  # Continue to HP monitoring below
+    
+    # Only monitor enemy HP when auto attack is enabled (or assist_only is enabled)
     # If disabled, reset all enemy state and stop monitoring
-    if not config.auto_attack_enabled:
+    if not config.auto_attack_enabled and not config.assist_only_enabled:
         config.current_enemy_hp_percentage = 0.0
         # Reset enemy state to prevent any lingering state
         EnemyStateManager.reset_enemy_state()
@@ -1118,17 +1271,20 @@ def check_auto_attack():
                 )
                 
                 # Execute skill sequence when enemy is found (only if any skills are enabled)
+                # Check assist_only mode: only use skills if should_use_skills returns True
                 if (config.skill_sequence_manager and config.area_skills and
                     any(config.skill_sequence_config[i]['image_path'] and config.skill_sequence_config[i]['enabled'] 
                         for i in range(8))):
-                    try:
-                        screen = config.calibrator.capture_window(hwnd)
-                        if screen is not None:
-                            config.skill_sequence_manager.execute_skill_sequence(
-                                hwnd, screen, config.area_skills, enemy_found=True, run_active=config.bot_running
-                            )
-                    except Exception as e:
-                        print(f"[AutoAttack] Error executing skill sequence: {e}")
+                    # Check if should use skills based on assist_only mode
+                    if should_use_skills(enemy_hp_percentage):
+                        try:
+                            screen = config.calibrator.capture_window(hwnd)
+                            if screen is not None:
+                                config.skill_sequence_manager.execute_skill_sequence(
+                                    hwnd, screen, config.area_skills, enemy_found=True, run_active=config.bot_running
+                                )
+                        except Exception as e:
+                            print(f"[AutoAttack] Error executing skill sequence: {e}")
                 
                 # Periodic mob verification during combat
                 if (config.mob_detection_enabled and config.mob_target_list and 

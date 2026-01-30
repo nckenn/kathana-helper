@@ -827,6 +827,14 @@ class BotGUI:
                 self.is_mage_var.set(config.is_mage)
                 print(f"  Applied mage: enabled={config.is_mage}")
             
+            # Apply Assist Only setting
+            if hasattr(self, 'assist_only_var'):
+                self.assist_only_var.set(config.assist_only_enabled)
+                print(f"  Applied assist only: enabled={config.assist_only_enabled}")
+                # If assist_only is enabled, disable dependent features
+                if config.assist_only_enabled:
+                    self._set_assist_only_dependent_widgets_state('disabled')
+            
             # Apply HP settings
             self.auto_hp_var.set(config.auto_hp_enabled)
             print(f"  Applied auto HP: enabled={config.auto_hp_enabled}")
@@ -971,7 +979,7 @@ class BotGUI:
         
         # Initialize root window with customtkinter
         self.root = ctk.CTk()
-        self.root.title("Kathana Helper by xCrypto v2.1.0")
+        self.root.title("Kathana Helper by xCrypto v2.1.2")
         self.root.geometry("655x800")
         self.root.resizable(True, True)
         
@@ -1291,12 +1299,12 @@ class BotGUI:
         
         # Auto Attack checkbox
         self.auto_attack_var = tk.BooleanVar()
-        auto_attack_checkbox = ctk.CTkCheckBox(auto_attack_frame, text="Auto Attack", 
+        self.auto_attack_checkbox = ctk.CTkCheckBox(auto_attack_frame, text="Auto Attack", 
                                          variable=self.auto_attack_var,
                                          command=self.update_auto_attack,
                                          font=ctk.CTkFont(size=11))
-        auto_attack_checkbox.grid(row=0, column=0, sticky="w", pady=5)
-        create_tooltip(auto_attack_checkbox, "Automatically targets and attacks enemies. Requires enemy HP bar calibration.")
+        self.auto_attack_checkbox.grid(row=0, column=0, sticky="w", pady=5)
+        create_tooltip(self.auto_attack_checkbox, "Automatically targets and attacks enemies. Requires enemy HP bar calibration.")
         
         # Auto Loot frame
         auto_loot_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
@@ -1370,6 +1378,37 @@ class BotGUI:
                                          font=ctk.CTkFont(size=11))
         mage_checkbox.grid(row=0, column=0, sticky="w", pady=5)
         create_tooltip(mage_checkbox, "Enable if playing as a mage. Prevents attack action from triggering after targeting (mages use skills instead).")
+        
+        # Assist Only frame
+        assist_only_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
+        assist_only_frame.grid(row=5, column=0, sticky="ew", padx=(15, 5), pady=(0, 0))
+        
+        # Assist Only checkbox
+        self.assist_only_var = tk.BooleanVar(value=config.assist_only_enabled)
+        self.assist_only_checkbox = ctk.CTkCheckBox(assist_only_frame, text="Assist Only", 
+                                         variable=self.assist_only_var,
+                                         command=self.update_assist_only,
+                                         font=ctk.CTkFont(size=11))
+        self.assist_only_checkbox.grid(row=0, column=0, sticky="w", pady=5)
+        create_tooltip(self.assist_only_checkbox, "Enable assist mode: Party leader determines target. Bot only attacks when enemy HP decreases (indicating leader has started attacking). Disables Auto Attack, Mob Filter, and Auto Unstuck.")
+        
+        # If assist_only is enabled on startup, disable dependent features
+        if config.assist_only_enabled:
+            # Store previous state before disabling
+            if config._assist_only_previous_auto_attack is None:
+                config._assist_only_previous_auto_attack = config.auto_attack_enabled
+            if config._assist_only_previous_mob_detection is None:
+                config._assist_only_previous_mob_detection = config.mob_detection_enabled
+            if config._assist_only_previous_auto_change_target is None:
+                config._assist_only_previous_auto_change_target = config.auto_change_target_enabled
+            
+            # Disable features
+            config.auto_attack_enabled = False
+            config.mob_detection_enabled = False
+            config.auto_change_target_enabled = False
+            
+            # Disable checkboxes in GUI (will be set after widgets are created)
+            self.root.after(100, lambda: self._set_assist_only_dependent_widgets_state('disabled'))
         
         # Column 1: Auto HP, Auto MP, Auto Unstuck
         # Auto HP frame
@@ -1466,12 +1505,12 @@ class BotGUI:
         
         # Auto Unstuck checkbox
         self.auto_change_target_var = tk.BooleanVar(value=config.auto_change_target_enabled)
-        auto_change_target_checkbox = ctk.CTkCheckBox(auto_change_target_frame, text="Auto Unstuck", 
+        self.auto_change_target_checkbox = ctk.CTkCheckBox(auto_change_target_frame, text="Auto Unstuck", 
                                          variable=self.auto_change_target_var,
                                          command=self.update_auto_change_target,
                                          font=ctk.CTkFont(size=11))
-        auto_change_target_checkbox.grid(row=0, column=0, sticky="w", pady=5)
-        create_tooltip(auto_change_target_checkbox, "Automatically changes target when enemy HP becomes stagnant (stuck). Detects when enemy HP doesn't decrease for the timeout duration.")
+        self.auto_change_target_checkbox.grid(row=0, column=0, sticky="w", pady=5)
+        create_tooltip(self.auto_change_target_checkbox, "Automatically changes target when enemy HP becomes stagnant (stuck). Detects when enemy HP doesn't decrease for the timeout duration.")
         
         # Unstuck timeout input (seconds)
         self.unstuck_timeout_var = tk.StringVar(value=str(config.unstuck_timeout))
@@ -1486,30 +1525,32 @@ class BotGUI:
         settings_frame.rowconfigure(1, weight=0)
         settings_frame.rowconfigure(2, weight=0)
         settings_frame.rowconfigure(3, weight=0)
+        settings_frame.rowconfigure(4, weight=0)
+        settings_frame.rowconfigure(5, weight=0)
         
-        # Add Mob Filter to Settings tab
+        # Add Mob Filter to Settings tab (moved to row 6 to avoid overlap with Assist Only)
         mob_separator = ctk.CTkFrame(settings_frame, height=1, fg_color="gray50")
         
         mob_label = ctk.CTkLabel(settings_frame, text="Mob Filter", font=ctk.CTkFont(size=12, weight="bold"))
-        mob_label.grid(row=5, column=0, columnspan=2, sticky="w", padx=15, pady=(5, 5))
+        mob_label.grid(row=6, column=0, columnspan=2, sticky="w", padx=15, pady=(10, 5))
         
         # Mob detection checkbox
         self.mob_detection_var = tk.BooleanVar()
-        mob_checkbox = ctk.CTkCheckBox(settings_frame, text="Enable", 
+        self.mob_checkbox = ctk.CTkCheckBox(settings_frame, text="Enable", 
                                      variable=self.mob_detection_var,
                                      command=self.update_mob_detection,
                                      font=ctk.CTkFont(size=11))
-        mob_checkbox.grid(row=6, column=0, columnspan=2, sticky="w", padx=15, pady=(0, 5))
-        create_tooltip(mob_checkbox, "Enable mob filtering. Bot will only attack mobs in the target list. Uses OCR to read enemy names. Requires calibration.")
+        self.mob_checkbox.grid(row=7, column=0, columnspan=2, sticky="w", padx=15, pady=(0, 5))
+        create_tooltip(self.mob_checkbox, "Enable mob filtering. Bot will only attack mobs in the target list. Uses OCR to read enemy names. Requires calibration.")
         
         # Target list
-        ctk.CTkLabel(settings_frame, text="Target List (one per line, only attack mobs in this list):", font=ctk.CTkFont(size=11)).grid(row=7, column=0, columnspan=2, sticky="w", padx=15, pady=(5, 5))
+        ctk.CTkLabel(settings_frame, text="Target List (one per line, only attack mobs in this list):", font=ctk.CTkFont(size=11)).grid(row=8, column=0, columnspan=2, sticky="w", padx=15, pady=(5, 5))
         self.target_list_text = ctk.CTkTextbox(settings_frame, height=150, width=400, font=ctk.CTkFont(size=11))
-        self.target_list_text.grid(row=8, column=0, columnspan=2, sticky="ew", padx=15, pady=(0, 5))
+        self.target_list_text.grid(row=9, column=0, columnspan=2, sticky="ew", padx=15, pady=(0, 5))
         
         # Mob filter buttons
         mob_btn_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        mob_btn_frame.grid(row=9, column=0, columnspan=2, sticky="ew", padx=15, pady=(10, 15))
+        mob_btn_frame.grid(row=10, column=0, columnspan=2, sticky="ew", padx=15, pady=(10, 15))
         
         update_btn = ctk.CTkButton(mob_btn_frame, text="Update List", command=self.update_target_list, width=100, corner_radius=6)
         update_btn.grid(row=0, column=0, padx=(0, 10))
@@ -1527,7 +1568,7 @@ class BotGUI:
         
         settings_frame.columnconfigure(0, weight=1)
         settings_frame.columnconfigure(1, weight=1)
-        settings_frame.rowconfigure(8, weight=0)
+        settings_frame.rowconfigure(9, weight=0)
         
         # Hidden variables for mob detection (only used internally)
         self.mob_coords_var = tk.StringVar(value=f"{config.target_name_area['x']},{config.target_name_area['y']}")
@@ -2858,6 +2899,76 @@ class BotGUI:
         config.is_mage = self.is_mage_var.get()
         status = "enabled" if config.is_mage else "disabled"
         print(f"Mage? {status}")
+    
+    def _set_assist_only_dependent_widgets_state(self, state):
+        """Enable or disable widgets that depend on assist_only mode"""
+        if hasattr(self, 'auto_attack_checkbox'):
+            self.auto_attack_checkbox.configure(state=state)
+        if hasattr(self, 'mob_checkbox'):
+            self.mob_checkbox.configure(state=state)
+        if hasattr(self, 'auto_change_target_checkbox'):
+            self.auto_change_target_checkbox.configure(state=state)
+    
+    def update_assist_only(self):
+        """Update assist only setting"""
+        config.assist_only_enabled = self.assist_only_var.get()
+        status = "enabled" if config.assist_only_enabled else "disabled"
+        print(f"Assist Only {status}")
+        
+        if config.assist_only_enabled:
+            # Store previous state before disabling
+            if config._assist_only_previous_auto_attack is None:
+                config._assist_only_previous_auto_attack = config.auto_attack_enabled
+            if config._assist_only_previous_mob_detection is None:
+                config._assist_only_previous_mob_detection = config.mob_detection_enabled
+            if config._assist_only_previous_auto_change_target is None:
+                config._assist_only_previous_auto_change_target = config.auto_change_target_enabled
+            
+            # Disable auto attack, mob filter, and auto unstuck
+            config.auto_attack_enabled = False
+            config.mob_detection_enabled = False
+            config.auto_change_target_enabled = False
+            
+            # Update GUI checkboxes
+            if hasattr(self, 'auto_attack_var'):
+                self.auto_attack_var.set(False)
+            if hasattr(self, 'mob_detection_var'):
+                self.mob_detection_var.set(False)
+            if hasattr(self, 'auto_change_target_var'):
+                self.auto_change_target_var.set(False)
+            
+            # Disable checkboxes in GUI
+            self._set_assist_only_dependent_widgets_state('disabled')
+            
+            print("[Assist Only] Auto Attack, Mob Filter, and Auto Unstuck disabled")
+        else:
+            # Restore previous state
+            if config._assist_only_previous_auto_attack is not None:
+                config.auto_attack_enabled = config._assist_only_previous_auto_attack
+                config._assist_only_previous_auto_attack = None
+            if config._assist_only_previous_mob_detection is not None:
+                config.mob_detection_enabled = config._assist_only_previous_mob_detection
+                config._assist_only_previous_mob_detection = None
+            if config._assist_only_previous_auto_change_target is not None:
+                config.auto_change_target_enabled = config._assist_only_previous_auto_change_target
+                config._assist_only_previous_auto_change_target = None
+            
+            # Update GUI checkboxes to restored state
+            if hasattr(self, 'auto_attack_var'):
+                self.auto_attack_var.set(config.auto_attack_enabled)
+            if hasattr(self, 'mob_detection_var'):
+                self.mob_detection_var.set(config.mob_detection_enabled)
+            if hasattr(self, 'auto_change_target_var'):
+                self.auto_change_target_var.set(config.auto_change_target_enabled)
+            
+            # Re-enable checkboxes in GUI
+            self._set_assist_only_dependent_widgets_state('normal')
+            
+            # Reset enemy tracking when assist_only is disabled
+            config.enemy_initial_hp = None
+            config.enemy_detected = False
+            
+            print("[Assist Only] Auto Attack, Mob Filter, and Auto Unstuck restored to previous state")
     
     def update_auto_change_target(self):
         """Update auto change target enabled status"""
@@ -4210,7 +4321,7 @@ class BotGUI:
         
         # Create new window for minimized view
         self.minimized_window = ctk.CTkToplevel(self.root)
-        self.minimized_window.title("Kathana Helper xCrypto v2.1.1")
+        self.minimized_window.title("Kathana Helper xCrypto v2.1.2")
         
         # Position minimized window at the same location as main window
         if self.saved_window_position:

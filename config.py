@@ -191,6 +191,15 @@ current_enemy_hp_percentage = 0.0
 # Current enemy name (updated by enemy_bar_detection/bot_logic, read by GUI)
 current_enemy_name = None
 
+# Assist Only mode (party leader determines target, only attack when enemy HP decreases)
+assist_only_enabled = False
+enemy_initial_hp = None  # Track initial HP when enemy is first detected (for assist_only mode)
+enemy_detected = False  # Track if enemy has been detected (for assist_only mode)
+# Store previous state of features that are disabled when assist_only is enabled
+_assist_only_previous_auto_attack = None
+_assist_only_previous_mob_detection = None
+_assist_only_previous_auto_change_target = None
+
 
 def safe_update_gui(update_func):
     """Thread-safe GUI update - queue the update to be processed by GUI thread"""

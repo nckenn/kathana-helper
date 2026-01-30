@@ -61,6 +61,7 @@ datas = [
     ("skill_bar_2.bmp", "."),  # Skill bar template for calibration
     ("skill_bar_1_vertical.bmp", "."),  # Skill bar template for calibration
     ("skill_bar_2_vertical.bmp", "."),  # Skill bar template for calibration
+    ("assist.bmp", "."),
     ("chat_bar_1.png", "."),  # Chat scrollbar template for system message area calibration
     ("chat_bar_2.png", "."),  # Chat anchor template for system message area calibration
     ("easyocr_models", "easyocr_models"),  # Bundled EasyOCR model weights (offline OCR)
@@ -91,7 +92,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name="Kathana Helper v2.1.1",
+    name="Kathana Helper v2.1.2",
     debug=False,
     strip=False,
     upx=True,

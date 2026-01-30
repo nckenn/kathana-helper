@@ -76,6 +76,7 @@ The executable will be created in the `dist` folder.
 - **Auto Pots**: Automatic HP/MP potion usage based on thresholds
 - **Auto Repair**: Automatic equipment repair when damaged
 - **Auto Unstuck**: Detects and resolves stuck situations by changing targets
+- **Assist Only**: Party support mode - assists party leader's target by clicking assist button
 - **Skill Interval**: Configurable skill rotation with custom intervals (1-8 and F1-F10 keys)
 - **Mouse Clicker**: Automated mouse clicking at specified intervals and coordinates
 
@@ -93,6 +94,24 @@ The executable will be created in the `dist` folder.
   - Automatically resets when enemy dies or changes target
   - Executes skills in sequence when enemy is found
   - Advances to next skill when current skill disappears
+
+- **Assist Only Mode**: Party support mode for group play
+  - **Purpose**: Allows the bot to assist a party leader's target instead of auto-targeting
+  - **How it works**:
+    - Automatically disables Auto Attack, Mob Filter, and Auto Unstuck when enabled
+    - Continuously searches for and clicks the assist button (`assist.bmp`) in the skill area
+    - Clicks assist button every 1 second when found
+    - Skills execute normally (no HP decrease check needed)
+    - Basic attack (R key) is disabled (assist button handles attacking)
+  - **Setup**:
+    1. Place `assist.bmp` image file in the bot directory (same location as the bot executable)
+    2. Enable "Assist Only" checkbox in Settings tab
+    3. Ensure skill area is calibrated (assist button must be visible in skill area)
+  - **Requirements**:
+    - `assist.bmp` image file must exist in bot directory
+    - Skill area must be calibrated (assist button must be in the calibrated skill area)
+    - Party leader must have a target selected
+  - **Note**: When Assist Only is disabled, previous settings for Auto Attack, Mob Filter, and Auto Unstuck are restored
 
 - **Calibration**: Automatic detection of HP/MP bars and skill areas (available in Settings tab)
 - **Mob Filtering**: Target only specific mobs from a configurable list using OCR

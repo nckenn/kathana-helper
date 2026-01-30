@@ -298,8 +298,14 @@ def bot_loop():
                         for i in range(8))):
                     check_buffs()  # High priority - check buffs early (has internal throttling)
                 # Skill sequence is now executed inside check_auto_attack when enemy is found
-                if config.auto_attack_enabled:
+                # Also call check_auto_attack when assist_only is enabled (needs to monitor HP for assist logic)
+                if config.auto_attack_enabled or config.assist_only_enabled:
                     auto_attack.check_auto_attack()
+                
+                # Check and click assist button if assist_only is enabled (spam assist button)
+                if config.assist_only_enabled:
+                    auto_attack.check_assist_key()
+                
                 if config.auto_change_target_enabled:
                     auto_unstuck.check_auto_unstuck()
                 check_skill_slots()  # Lightweight - just checks intervals

@@ -110,10 +110,17 @@ class UnstuckExecutor:
         """Execute random movement sequence to unstick character"""
         num_movements = random.randint(MOVEMENT_COUNT_MIN, MOVEMENT_COUNT_MAX)
         
-        for _ in range(num_movements):
-            key = random.choice(MOVEMENT_KEYS)
-            input_handler.send_movement_key(key, hold_duration=MOVEMENT_HOLD_DURATION)
-            time.sleep(MOVEMENT_DELAY)
+        # Start movement sequence (sets foreground once)
+        input_handler.start_movement_sequence()
+        
+        try:
+            for _ in range(num_movements):
+                key = random.choice(MOVEMENT_KEYS)
+                input_handler.send_movement_key(key, hold_duration=MOVEMENT_HOLD_DURATION)
+                time.sleep(MOVEMENT_DELAY)
+        finally:
+            # End movement sequence (restores foreground at end)
+            input_handler.end_movement_sequence()
     
     @staticmethod
     def retarget_after_unstuck():
@@ -240,6 +247,12 @@ def check_auto_unstuck():
     for timeout period. Checks if HP change > 5% to reset timer, uses stagnant 
     HP time tracking.
     """
+    # Early exit if assist_only is enabled (party leader determines target)
+    if config.assist_only_enabled:
+        UnstuckTimer.reset()
+        update_unstuck_countdown_display(time.time())
+        return
+    
     # Early exit if disabled
     if not config.auto_change_target_enabled:
         update_unstuck_countdown_display(time.time())
