@@ -59,10 +59,76 @@ class RepairExecutor:
     
     @staticmethod
     def execute_repair(current_time):
-        """Execute repair action"""
-        input_handler.send_input(config.repair_key)
-        config.last_repair_time = current_time
-        print(f"[Auto Repair] REPAIR TRIGGERED ({config.repair_key.upper()})")
+        """Execute repair action by locating and clicking hammer.bmp in skill bar"""
+        if not config.connected_window or not config.calibrator:
+            print("[Auto Repair] Cannot execute repair: window or calibrator not available")
+            return False
+        
+        if not config.area_skills:
+            print("[Auto Repair] Cannot execute repair: skill area not calibrated")
+            return False
+        
+        try:
+            import cv2
+            import os
+        except ImportError:
+            print("[Auto Repair] Cannot execute repair: OpenCV not available")
+            return False
+        
+        # Check if hammer.bmp exists
+        hammer_image_path = config.resolve_resource_path('hammer.bmp')
+        if not hammer_image_path or not os.path.exists(hammer_image_path):
+            print(f"[Auto Repair] Cannot execute repair: hammer.bmp not found at {hammer_image_path}")
+            return False
+        
+        try:
+            hwnd = config.connected_window.handle
+            screen = config.calibrator.capture_window(hwnd)
+            if screen is None:
+                print("[Auto Repair] Cannot execute repair: failed to capture screen")
+                return False
+            
+            # Extract skill area
+            x1, y1, x2, y2 = config.area_skills
+            area_skills = screen[y1:y2, x1:x2]
+            
+            # Load hammer template
+            template = cv2.imread(hammer_image_path, cv2.IMREAD_COLOR)
+            if template is None:
+                print(f"[Auto Repair] Cannot execute repair: failed to load hammer.bmp from {hammer_image_path}")
+                return False
+            
+            # Check if area is large enough
+            if area_skills.shape[0] >= template.shape[0] and area_skills.shape[1] >= template.shape[1]:
+                # Template matching
+                res = cv2.matchTemplate(area_skills, template, cv2.TM_CCOEFF_NORMED)
+                min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
+                
+                if max_val > 0.7:
+                    # Hammer found - click it
+                    th, tw = template.shape[:2]
+                    click_x = x1 + max_loc[0] + tw // 2
+                    click_y = y1 + max_loc[1] + th // 2
+                    
+                    print(f"[Auto Repair] REPAIR TRIGGERED - Hammer found, clicking at ({click_x}, {click_y})")
+                    
+                    if input_handler.perform_mouse_click_window_image(hwnd, click_x, click_y):
+                        config.last_repair_time = current_time
+                        return True
+                    else:
+                        print("[Auto Repair] Failed to click hammer button")
+                        return False
+                else:
+                    print(f"[Auto Repair] Hammer not found in skill bar (confidence: {max_val:.3f}, threshold: 0.7)")
+                    return False
+            else:
+                print(f"[Auto Repair] Skill area too small for hammer template: {area_skills.shape} vs {template.shape}")
+                return False
+        except Exception as e:
+            print(f"[Auto Repair] Error executing repair: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
     
     @staticmethod
     def is_on_cooldown(current_time):
@@ -122,10 +188,15 @@ class ImageChangeDetector:
     def __init__(self):
         self.last_image_hash = None
         self.last_ocr_time = 0
-        self.min_ocr_interval = 2.0  # Minimum time between OCR calls even if image changes (increased to reduce load)
+        self.min_ocr_interval = 3.0  # Minimum time between OCR calls even if image changes (optimized for reliability)
         self.last_message_area = None  # Store last extracted area for debug
         self.last_empty_ocr_time = 0  # Track when we last got empty OCR result
-        self.empty_ocr_cooldown = 3600.0  # Skip OCR for 1 hour after getting empty result
+        self.empty_ocr_cooldown = 5.0  # Skip OCR for 5 seconds after getting empty result (reduced from 1 hour for better responsiveness)
+        self.consecutive_empty_count = 0  # Track consecutive empty results
+        self.max_consecutive_empty = 3  # After 3 consecutive empty results, increase cooldown
+        self.last_screen_capture = None  # Cache last screen capture to avoid repeated captures
+        self.last_screen_capture_time = 0
+        self.screen_capture_cache_duration = 0.1  # Cache screen for 100ms
     
     def extract_message_area_from_screen(self, screen):
         """Extract system message area from full screen (follows pattern from buffs/skill sequence)"""
@@ -163,24 +234,44 @@ class ImageChangeDetector:
             return None
     
     def calculate_image_hash(self, img_array):
-        """Calculate a hash of the image array for change detection"""
+        """Calculate a hash of the image array for change detection (optimized)"""
         if img_array is None:
             return None
         try:
-            # Convert numpy array to bytes and hash (fast comparison)
-            img_bytes = img_array.tobytes()
-            return hashlib.md5(img_bytes).hexdigest()
+            # OPTIMIZATION: Downscale image before hashing for faster comparison
+            # Use every 4th pixel to reduce hash calculation time
+            if img_array.size > 0:
+                # Sample every 4th pixel for faster hashing
+                sampled = img_array[::4, ::4]
+                img_bytes = sampled.tobytes()
+                return hashlib.md5(img_bytes).hexdigest()
+            return None
         except Exception:
             return None
     
     def has_image_changed(self, screen, current_time):
         """Check if the system message area image has changed (follows pattern from buffs)"""
+        # OPTIMIZATION: Dynamic min_ocr_interval based on check interval
+        # If check interval is very low (< 3s), increase min_ocr_interval to prevent spam
+        check_interval = config.AUTO_REPAIR_CHECK_INTERVAL
+        if check_interval < 3.0:
+            # Scale min_ocr_interval: if check every 1s, do OCR at most every 3s
+            # if check every 2s, do OCR at most every 3s
+            dynamic_min_interval = max(3.0, check_interval * 2.0)
+        else:
+            dynamic_min_interval = self.min_ocr_interval
+        
         # Enforce minimum interval between OCR calls
-        if current_time - self.last_ocr_time < self.min_ocr_interval:
+        if current_time - self.last_ocr_time < dynamic_min_interval:
             return False
         
-        # Skip OCR if we recently got empty result (avoid repeated OCR on empty messages)
-        if current_time - self.last_empty_ocr_time < self.empty_ocr_cooldown:
+        # OPTIMIZATION: Adaptive empty OCR cooldown
+        # If we've had many consecutive empty results, use longer cooldown
+        if self.consecutive_empty_count >= self.max_consecutive_empty:
+            extended_cooldown = self.empty_ocr_cooldown * (self.consecutive_empty_count - self.max_consecutive_empty + 1)
+            if current_time - self.last_empty_ocr_time < extended_cooldown:
+                return False
+        elif current_time - self.last_empty_ocr_time < self.empty_ocr_cooldown:
             return False
         
         # Extract message area from screen (like buffs extract area_skills)
@@ -191,7 +282,7 @@ class ImageChangeDetector:
         # Store for debug saving
         self.last_message_area = message_area.copy()
         
-        # Calculate hash
+        # Calculate hash (optimized: use smaller hash for faster comparison)
         current_hash = self.calculate_image_hash(message_area)
         if current_hash is None:
             return False
@@ -200,6 +291,8 @@ class ImageChangeDetector:
         if current_hash != self.last_image_hash:
             self.last_image_hash = current_hash
             self.last_ocr_time = current_time
+            # Reset empty count when we detect a change (new message appeared)
+            self.consecutive_empty_count = 0
             return True
         
         return False
@@ -207,6 +300,12 @@ class ImageChangeDetector:
     def mark_empty_ocr(self, current_time):
         """Mark that we got an empty OCR result to avoid repeated checks"""
         self.last_empty_ocr_time = current_time
+        self.consecutive_empty_count += 1
+    
+    def mark_successful_ocr(self):
+        """Mark that we got a successful OCR result (even if no break warning)"""
+        # Reset empty count on successful OCR (message was read, just no break warning)
+        self.consecutive_empty_count = 0
     
     def save_debug_image(self):
         """Save debug image of system message area (like buffs save debug images)"""
@@ -245,7 +344,7 @@ def get_repair_trigger_count():
 def check_auto_repair():
     """
     Check system messages for 'is about to break' warning and trigger repair 
-    if detected 3 times. Optimized to minimize delays.
+    if detected 1 time. Optimized to minimize delays.
     """
     # Early exit if disabled
     if not config.auto_repair_enabled:
@@ -300,8 +399,20 @@ def check_auto_repair():
         else:
             hwnd = config.connected_window
         
-        # Capture full screen (like auto_attack and buffs do)
-        screen = config.calibrator.capture_window(hwnd)
+        # OPTIMIZATION: Cache screen capture to avoid repeated captures when check interval is low
+        # Only capture if cache is expired or doesn't exist
+        screen = None
+        if (_image_change_detector.last_screen_capture is not None and 
+            current_time - _image_change_detector.last_screen_capture_time < 
+            _image_change_detector.screen_capture_cache_duration):
+            screen = _image_change_detector.last_screen_capture
+        else:
+            # Capture full screen (like auto_attack and buffs do)
+            screen = config.calibrator.capture_window(hwnd)
+            if screen is not None:
+                _image_change_detector.last_screen_capture = screen
+                _image_change_detector.last_screen_capture_time = current_time
+        
         if screen is None:
             return
         
@@ -316,9 +427,12 @@ def check_auto_repair():
         # Read system message (only when image changed)
         message_text = ocr_utils.read_system_message_ocr(debug_prefix="[Auto Repair]")
         
-        # Debug: Log when message is read (but no break warning detected)
+        # Mark OCR result for optimization tracking
         if message_text:
-            # Check what text was read
+            # Successful OCR (even if no break warning)
+            _image_change_detector.mark_successful_ocr()
+            
+            # Debug: Log when message is read (but no break warning detected)
             if isinstance(message_text, dict):
                 lines = message_text.get('lines', [])
                 full_text = message_text.get('full', '')
@@ -326,18 +440,18 @@ def check_auto_repair():
                     # Only log if it contains relevant keywords to avoid spam
                     text_lower = full_text.lower()
                     if 'about' in text_lower or 'break' in text_lower:
-                        print(f"[Auto Repair] OCR read message (checking for break warning): {full_text[:100]}")
-                else:
-                    print(f"[Auto Repair] OCR returned empty lines")
-            else:
-                print(f"[Auto Repair] OCR returned non-dict: {type(message_text)}")
+                        if not hasattr(check_auto_repair, 'last_keyword_log'):
+                            check_auto_repair.last_keyword_log = 0
+                        if current_time - check_auto_repair.last_keyword_log > 10.0:
+                            print(f"[Auto Repair] OCR read message with keywords (checking for break warning): {full_text[:100]}")
+                            check_auto_repair.last_keyword_log = current_time
         else:
             # Mark empty OCR to avoid repeated checks
             _image_change_detector.mark_empty_ocr(current_time)
             # Only log occasionally to avoid spam
             if not hasattr(check_auto_repair, 'last_no_message_log'):
                 check_auto_repair.last_no_message_log = 0
-            if current_time - check_auto_repair.last_no_message_log > 5.0:
+            if current_time - check_auto_repair.last_no_message_log > 10.0:
                 print(f"[Auto Repair] OCR returned no message (system message area may be empty or OCR failed)")
                 check_auto_repair.last_no_message_log = current_time
         
@@ -381,9 +495,11 @@ def check_auto_repair():
         # Check if repair should be triggered
         if _break_warning_tracker.should_trigger_repair():
             if not RepairExecutor.is_on_cooldown(current_time):
-                # Execute repair
-                RepairExecutor.execute_repair(current_time)
-                _break_warning_tracker.clear()
+                # Execute repair (returns True if successful)
+                if RepairExecutor.execute_repair(current_time):
+                    _break_warning_tracker.clear()
+                else:
+                    print("[Auto Repair] Repair execution failed - hammer not found or click failed")
             else:
                 # Log cooldown (throttled)
                 if _repair_state_manager.should_log_cooldown(current_time):

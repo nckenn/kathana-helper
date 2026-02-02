@@ -770,9 +770,18 @@ class Calibrator:
                 screen_h, screen_w = screen_img.shape[:2]
                 
                 # Height is exactly the scrollbar height (clamped to screen)
+                # Can be reduced via SYSTEM_MESSAGE_HEIGHT_REDUCTION config
                 chat_top = max(0, scrollbar_y)
                 chat_bottom = min(screen_h, scrollbar_y + template_h)
                 chat_height = max(0, chat_bottom - chat_top)
+                
+                # Apply height reduction if configured (reduces from bottom)
+                if config.SYSTEM_MESSAGE_HEIGHT_REDUCTION > 0:
+                    chat_height = max(10, chat_height - config.SYSTEM_MESSAGE_HEIGHT_REDUCTION)  # Minimum 10px height
+                    chat_bottom = chat_top + chat_height
+                
+                # Calculate center Y position (after any height reduction)
+                chat_center_y = chat_top + chat_height // 2
 
                 # Text region begins immediately to the right of the scrollbar (no gap)
                 gap_from_scrollbar = 0
@@ -828,7 +837,7 @@ class Calibrator:
 
                 # Calculate center and dimensions for system_message_area format
                 chat_center_x = chat_left + chat_width // 2
-                chat_center_y = chat_top + chat_height // 2
+                # chat_center_y is already calculated above (after height reduction if any)
                 
                 # Store as (x, y, width, height) where x,y is center
                 self.system_message_area = (chat_center_x, chat_center_y, chat_width, chat_height)

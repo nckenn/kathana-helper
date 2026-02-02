@@ -75,9 +75,10 @@ MOB_IMAGES_FOLDER = "mob_images"
 
 # Auto repair system
 system_message_area = {'x': 0, 'y': 0, 'width': 0, 'height': 0}
+SYSTEM_MESSAGE_HEIGHT_REDUCTION = 100  # Reduce height by this many pixels (0 = no reduction, useful for smaller OCR area)
 last_repair_time = 0
 REPAIR_COOLDOWN = 5.0
-AUTO_REPAIR_CHECK_INTERVAL = 30.0  # Check every 30 seconds to avoid delays in skill sequence execution
+AUTO_REPAIR_CHECK_INTERVAL = 3.0  # Fixed at 3 seconds for optimal performance and reliability
 BREAK_WARNING_TRIGGER_COUNT = 1  # Number of detections required to trigger repair
 last_auto_repair_check_time = 0
 

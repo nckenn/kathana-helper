@@ -43,6 +43,7 @@ hiddenimports = [
 datas = [
     ("config.py", "."),
     ("window_utils.py", "."),
+    ("debug_utils.py", "."),
     ("input_handler.py", "."),
     ("auto_attack.py", "."),
     ("ocr_utils.py", "."),
@@ -62,6 +63,7 @@ datas = [
     ("skill_bar_1_vertical.bmp", "."),  # Skill bar template for calibration
     ("skill_bar_2_vertical.bmp", "."),  # Skill bar template for calibration
     ("assist.bmp", "."),
+    ("hammer.bmp", "."),
     ("chat_bar_1.png", "."),  # Chat scrollbar template for system message area calibration
     ("chat_bar_2.png", "."),  # Chat anchor template for system message area calibration
     ("easyocr_models", "easyocr_models"),  # Bundled EasyOCR model weights (offline OCR)

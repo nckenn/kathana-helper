@@ -90,8 +90,8 @@ def save_settings():
             'looting_duration': config.LOOTING_DURATION,
             'auto_repair_enabled': config.auto_repair_enabled,
             'break_warning_trigger_count': config.BREAK_WARNING_TRIGGER_COUNT,
-            'auto_repair_check_interval': config.AUTO_REPAIR_CHECK_INTERVAL,
-            'repair_key': config.repair_key,
+            # 'auto_repair_check_interval': config.AUTO_REPAIR_CHECK_INTERVAL,  # Fixed at 3.0 seconds, no longer configurable
+            # 'repair_key': config.repair_key,  # Removed - now using image detection (hammer.bmp)
             # system_message_area is NOT saved - calibration data should not be persisted
             'auto_change_target_enabled': config.auto_change_target_enabled,
             'unstuck_timeout': config.unstuck_timeout,
@@ -140,17 +140,14 @@ def save_settings():
                         settings['break_warning_trigger_count'] = int(gui.break_warning_trigger_count_var.get())
                     except ValueError:
                         settings['break_warning_trigger_count'] = config.BREAK_WARNING_TRIGGER_COUNT
-                if hasattr(gui, 'auto_repair_check_interval_var'):
-                    try:
-                        settings['auto_repair_check_interval'] = float(gui.auto_repair_check_interval_var.get())
-                    except ValueError:
-                        settings['auto_repair_check_interval'] = config.AUTO_REPAIR_CHECK_INTERVAL
+                # auto_repair_check_interval removed - fixed at 3.0 seconds
                 if hasattr(gui, 'hp_key_var'):
                     settings['hp_key'] = gui.hp_key_var.get()
                 if hasattr(gui, 'mp_key_var'):
                     settings['mp_key'] = gui.mp_key_var.get()
-                if hasattr(gui, 'repair_key_var'):
-                    settings['repair_key'] = gui.repair_key_var.get()
+                # repair_key removed - now using image detection (hammer.bmp)
+                # if hasattr(gui, 'repair_key_var'):
+                #     settings['repair_key'] = gui.repair_key_var.get()
                 if hasattr(gui, 'auto_change_target_var'):
                     settings['auto_change_target_enabled'] = gui.auto_change_target_var.get()
                 if hasattr(gui, 'unstuck_timeout_var'):
@@ -234,10 +231,12 @@ def load_settings():
             config.auto_repair_enabled = settings['auto_repair_enabled']
         if 'break_warning_trigger_count' in settings:
             config.BREAK_WARNING_TRIGGER_COUNT = settings['break_warning_trigger_count']
-        if 'auto_repair_check_interval' in settings:
-            config.AUTO_REPAIR_CHECK_INTERVAL = settings['auto_repair_check_interval']
-        if 'repair_key' in settings:
-            config.repair_key = settings['repair_key']
+        # auto_repair_check_interval removed - fixed at 3.0 seconds
+        # if 'auto_repair_check_interval' in settings:
+        #     config.AUTO_REPAIR_CHECK_INTERVAL = settings['auto_repair_check_interval']
+        # repair_key removed - now using image detection (hammer.bmp)
+        # if 'repair_key' in settings:
+        #     config.repair_key = settings['repair_key']
         # system_message_area is NOT loaded - calibration data should not be persisted
         if 'auto_change_target_enabled' in settings:
             config.auto_change_target_enabled = settings['auto_change_target_enabled']
@@ -262,6 +261,10 @@ def load_settings():
             config.mp_key = settings['mp_key']
         # mp_bar_area is NOT loaded - calibration data should not be persisted
         # (calibration must be performed each session)
+        
+        # repair_key removed - now using image detection (hammer.bmp)
+        # if 'repair_key' in settings:
+        #     config.repair_key = settings['repair_key']
         
         # Load mouse clicker settings
         if 'mouse_clicker_enabled' in settings:

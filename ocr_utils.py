@@ -429,8 +429,20 @@ def filter_messages_by_keywords(ocr_result, keywords, case_sensitive=False):
     return filtered
 
 
+# Cache compiled regex pattern for better performance
+_break_warning_pattern = None
+
+def _get_break_warning_pattern():
+    """Get or compile the break warning regex pattern (cached)"""
+    global _break_warning_pattern
+    if _break_warning_pattern is None:
+        # Pattern: must contain "is", "about", "to", and "break" in that order (allowing some flexibility)
+        _break_warning_pattern = re.compile(r'is.*?about.*?to.*?break', re.IGNORECASE)
+    return _break_warning_pattern
+
+
 def check_item_break_warning(ocr_result):
-    """Check for 'is about to break' keyword in system message OCR result
+    """Check for 'is about to break' keyword in system message OCR result (optimized)
     
     Returns True if the keyword is found, False otherwise.
     Example message: "Datu Madanti is about to break"
@@ -438,88 +450,44 @@ def check_item_break_warning(ocr_result):
     if not ocr_result:
         return False
     
-    # Filter lines containing "about" and "break" keywords
+    # OPTIMIZATION: Early exit - filter lines first to avoid processing unnecessary data
     break_lines = filter_messages_by_keywords(ocr_result, ['about', 'break'], case_sensitive=False)
     
+    # If no lines contain both keywords, exit early
+    if not break_lines:
+        return False
+    
+    # Get compiled pattern (cached)
+    pattern = _get_break_warning_pattern()
+    
+    # OPTIMIZATION: Check break_lines first (most likely to contain the warning)
+    # Process in reverse order (newest messages first)
+    for line in reversed(break_lines):
+        if pattern.search(line):
+            # Log detection (throttled)
+            current_time = time.time()
+            if not hasattr(check_item_break_warning, 'last_debug_time'):
+                check_item_break_warning.last_debug_time = 0
+            if current_time - check_item_break_warning.last_debug_time > 2.0:
+                print(f"[Auto Repair] Item break warning detected: {line[:80]}")
+                check_item_break_warning.last_debug_time = current_time
+            return True
+    
+    # OPTIMIZATION: Fallback to full text only if we have break_lines but pattern didn't match
+    # This handles cases where the pattern might span multiple lines
     if isinstance(ocr_result, dict):
-        lines = break_lines if break_lines else ocr_result.get('lines', [])
-        full_text = ocr_result.get('full', '')
         space_text = ocr_result.get('space', '')
-    else:
-        lines = [ocr_result] if ocr_result else []
-        full_text = ocr_result
-        space_text = ocr_result
+        if space_text and pattern.search(space_text):
+            current_time = time.time()
+            if not hasattr(check_item_break_warning, 'last_debug_time'):
+                check_item_break_warning.last_debug_time = 0
+            if current_time - check_item_break_warning.last_debug_time > 2.0:
+                print(f"[Auto Repair] Item break warning detected (fallback): {space_text[:80]}")
+                check_item_break_warning.last_debug_time = current_time
+            return True
     
-    try:
-        # Check lines for "is about to break" pattern
-        # More flexible pattern to handle OCR variations (e.g., "isabout", "aboutto", etc.)
-        # Pattern: must contain "is", "about", "to", and "break" in that order (allowing some flexibility)
-        pattern = r'is.*?about.*?to.*?break'
-        
-        if break_lines:
-            for line in reversed(break_lines):
-                # Case-insensitive match with flexible spacing
-                if re.search(pattern, line, re.IGNORECASE):
-                    current_time = time.time()
-                    if not hasattr(check_item_break_warning, 'last_debug_time'):
-                        check_item_break_warning.last_debug_time = 0
-                    if current_time - check_item_break_warning.last_debug_time > 2.0:
-                        print(f"[Auto Repair] Item break warning detected: {line[:80]}")
-                        check_item_break_warning.last_debug_time = current_time
-                    return True
-        
-        # Fallback: check full text (all lines combined)
-        text_to_parse = space_text if space_text else full_text
-        if text_to_parse:
-            if re.search(pattern, text_to_parse, re.IGNORECASE):
-                current_time = time.time()
-                if not hasattr(check_item_break_warning, 'last_debug_time'):
-                    check_item_break_warning.last_debug_time = 0
-                if current_time - check_item_break_warning.last_debug_time > 2.0:
-                    print(f"[Auto Repair] Item break warning detected (fallback): {text_to_parse[:80]}")
-                    check_item_break_warning.last_debug_time = current_time
-                return True
-        
-        # Additional fallback: Check if we have all keywords even if pattern doesn't match exactly
-        # This handles cases where OCR might split words incorrectly
-        if break_lines:
-            for line in reversed(break_lines):
-                line_lower = line.lower()
-                # Check if all required words are present (in any order but should be close)
-                has_is = 'is' in line_lower
-                has_about = 'about' in line_lower
-                has_to = 'to' in line_lower
-                has_break = 'break' in line_lower
-                
-                if has_is and has_about and has_to and has_break:
-                    # Try to find positions to verify order
-                    pos_is = line_lower.find('is')
-                    pos_about = line_lower.find('about')
-                    pos_to = line_lower.find(' to ')  # Space before/after 'to' to avoid matching 'to' in words
-                    if pos_to == -1:
-                        pos_to = line_lower.find('to', pos_about)
-                    pos_break = line_lower.find('break')
-                    
-                    # Check if they appear in roughly the right order (allow some flexibility)
-                    if (pos_is < pos_break and pos_about < pos_break and 
-                        (pos_to == -1 or (pos_about < pos_to < pos_break))):
-                        current_time = time.time()
-                        if not hasattr(check_item_break_warning, 'last_debug_time'):
-                            check_item_break_warning.last_debug_time = 0
-                        if current_time - check_item_break_warning.last_debug_time > 2.0:
-                            print(f"[Auto Repair] Item break warning detected (flexible match): {line[:80]}")
-                            check_item_break_warning.last_debug_time = current_time
-                        return True
-                
-    except Exception as e:
-        current_time = time.time()
-        if not hasattr(check_item_break_warning, 'last_error_time'):
-            check_item_break_warning.last_error_time = 0
-        if current_time - check_item_break_warning.last_error_time > 10.0:
-            error_text = str(ocr_result)[:100] if not isinstance(ocr_result, dict) else str(ocr_result.get('full', ''))[:100]
-            print(f"[Auto Repair] Error checking break warning: {e}, text: {error_text}")
-            check_item_break_warning.last_error_time = current_time
-    
+    # OPTIMIZATION: Removed complex keyword position checking fallback
+    # The main pattern should catch most cases, and if it doesn't, the OCR quality is likely too poor
     return False
 
 

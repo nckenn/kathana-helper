@@ -20,6 +20,7 @@ import auto_attack
 import ocr_utils
 import calibration
 from license_manager import get_license_manager
+import debug_utils
 
 
 class ToolTip:
@@ -807,13 +808,6 @@ class BotGUI:
             if hasattr(self, 'auto_repair_var'):
                 self.auto_repair_var.set(config.auto_repair_enabled)
                 print(f"  Applied auto repair: enabled={config.auto_repair_enabled}")
-            if hasattr(self, 'auto_repair_check_interval_var'):
-                self.auto_repair_check_interval_var.set(str(config.AUTO_REPAIR_CHECK_INTERVAL))
-                print(f"  Applied auto repair check interval: {config.AUTO_REPAIR_CHECK_INTERVAL}s")
-            if hasattr(self, 'repair_key_var'):
-                self.repair_key_var.set(config.repair_key)
-                print(f"  Applied repair key: {config.repair_key}")
-            
             # Apply Auto Change Target settings
             if hasattr(self, 'auto_change_target_var'):
                 self.auto_change_target_var.set(config.auto_change_target_enabled)
@@ -979,7 +973,7 @@ class BotGUI:
         
         # Initialize root window with customtkinter
         self.root = ctk.CTk()
-        self.root.title("Kathana Helper by xCrypto v2.1.2")
+        self.root.title("Kathana Helper v2.1.2")
         self.root.geometry("655x800")
         self.root.resizable(True, True)
         
@@ -991,6 +985,10 @@ class BotGUI:
         # Track last active tab in skill selector
         self.last_skill_selector_tab = None
         
+        # Debug window for click coordinate debugging
+        self.debug_window = None
+        self.debug_text = None
+        
         # Preload skill images cache
         self.skill_images_cache = {}  # {job_key: [(image_path, image_obj, img_file), ...]}
         
@@ -999,6 +997,9 @@ class BotGUI:
         
         # Preload all skill images in background (non-blocking)
         self.root.after(100, self._preload_skill_images)
+        
+        # Initialize debug system with callback
+        debug_utils.set_debug_enabled(debug_utils.get_debug_enabled(), callback=self.add_debug_message)
         
         # Configure root window grid to allow resizing
         self.root.columnconfigure(0, weight=1)
@@ -1292,6 +1293,30 @@ class BotGUI:
         settings_frame.rowconfigure(3, weight=0)
         settings_frame.rowconfigure(4, weight=0)
         
+        # Debug Tools frame (at the top)
+        debug_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
+        debug_frame.grid(row=0, column=0, columnspan=2, sticky="ew", padx=15, pady=(10, 5))
+        
+        debug_label = ctk.CTkLabel(debug_frame, text="Debug Tools:", font=ctk.CTkFont(size=12, weight="bold"))
+        debug_label.grid(row=0, column=0, sticky="w", padx=(0, 10))
+        
+        self.debug_var = tk.BooleanVar(value=debug_utils.get_debug_enabled())
+        self.debug_button = ctk.CTkButton(
+            debug_frame,
+            text="Debug Mode: OFF",
+            command=self.toggle_debug_mode,
+            width=150,
+            height=28,
+            corner_radius=6,
+            fg_color=("gray70", "gray30") if not self.debug_var.get() else ("#3b8ed0", "#1f6aa5")
+        )
+        self.debug_button.grid(row=0, column=1, sticky="w", padx=(0, 10))
+        create_tooltip(self.debug_button, "Enable/disable debug mode. When enabled, all debug messages from all modules will be displayed in a debug window. Useful for troubleshooting issues on different laptops/units.")
+        
+        # Update button text based on initial state
+        if self.debug_var.get():
+            self.debug_button.configure(text="Debug Mode: ON", fg_color=("green", "darkgreen"))
+        
         # Column 0: Auto Attack, Auto Loot, Auto Repair
         # Auto Attack frame
         auto_attack_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
@@ -1324,6 +1349,7 @@ class BotGUI:
         looting_duration_entry = ctk.CTkEntry(auto_loot_frame, textvariable=self.looting_duration_var, width=50, font=ctk.CTkFont(size=11))
         looting_duration_entry.grid(row=0, column=1, padx=(10, 5))
         looting_duration_entry.bind('<KeyRelease>', lambda event: self.update_looting_duration())
+        looting_duration_entry.bind('<FocusOut>', lambda event: self.update_looting_duration())
         looting_seconds_label = ctk.CTkLabel(auto_loot_frame, text="s", font=ctk.CTkFont(size=11))
         looting_seconds_label.grid(row=0, column=2, sticky="w")
         create_tooltip(looting_duration_entry, "Input: Looting duration in seconds. This is how long the bot prevents auto-targeting after looting starts. Lower values allow faster retargeting to the next enemy.")
@@ -1339,32 +1365,7 @@ class BotGUI:
                                          command=self.update_auto_repair,
                                          font=ctk.CTkFont(size=11))
         auto_repair_checkbox.grid(row=0, column=0, sticky="w", pady=5)
-        create_tooltip(auto_repair_checkbox, "Automatically repairs items when 'is about to break' warning appears. Requires system message area calibration and OCR.")
-        
-        # Auto repair check interval input
-        self.auto_repair_check_interval_var = tk.StringVar(value=str(config.AUTO_REPAIR_CHECK_INTERVAL))
-        auto_repair_check_interval_entry = ctk.CTkEntry(auto_repair_frame, textvariable=self.auto_repair_check_interval_var, width=50, font=ctk.CTkFont(size=11))
-        auto_repair_check_interval_entry.grid(row=0, column=1, padx=(10, 5))
-        auto_repair_check_interval_entry.bind('<KeyRelease>', lambda event: self.update_auto_repair_check_interval())
-        auto_repair_seconds_label = ctk.CTkLabel(auto_repair_frame, text="s", font=ctk.CTkFont(size=11))
-        auto_repair_seconds_label.grid(row=0, column=2, sticky="w")
-        create_tooltip(auto_repair_check_interval_entry, "Input: Auto repair check interval in seconds. How often the bot checks for 'is about to break' warnings. Higher values reduce CPU usage and prevent skill sequence delays. Recommended: 30+ seconds.")
-        
-        # Repair key registration
-        self.repair_key_var = tk.StringVar(value=config.repair_key)
-        def update_repair_key_button_text(var=self.repair_key_var, btn=None):
-            if var.get():
-                btn.configure(text=var.get().upper())
-            else:
-                btn.configure(text="Set Key")
-        repair_key_button = ctk.CTkButton(auto_repair_frame, width=60, height=28,
-                                         command=self.register_repair_key,
-                                         font=ctk.CTkFont(size=10), corner_radius=4)
-        repair_key_button.grid(row=0, column=3, padx=(10, 0), pady=5)
-        update_repair_key_button_text(btn=repair_key_button)
-        self.repair_key_var.trace_add('write', lambda *args: update_repair_key_button_text(btn=repair_key_button))
-        repair_key_button.bind('<Button-3>', lambda e: self.clear_repair_key())
-        create_tooltip(repair_key_button, "Click to register the hotkey for repair. Right-click to clear.")
+        create_tooltip(auto_repair_checkbox, "Automatically repairs items when 'is about to break' warning appears. Requires system message area calibration and OCR. Check interval is fixed at 3 seconds for optimal performance.")
         
         # Mage frame
         mage_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
@@ -1428,6 +1429,8 @@ class BotGUI:
         self.hp_threshold_var = tk.StringVar(value=str(config.hp_threshold))
         hp_threshold_entry = ctk.CTkEntry(auto_hp_frame, textvariable=self.hp_threshold_var, width=50, font=ctk.CTkFont(size=11))
         hp_threshold_entry.grid(row=0, column=1, padx=(10, 5))
+        hp_threshold_entry.bind('<KeyRelease>', lambda event: self.update_hp_threshold())
+        hp_threshold_entry.bind('<FocusOut>', lambda event: self.update_hp_threshold())
         hp_percent_label = ctk.CTkLabel(auto_hp_frame, text="%", font=ctk.CTkFont(size=11))
         hp_percent_label.grid(row=0, column=2, sticky="w")
         create_tooltip(hp_threshold_entry, "Input: HP percentage threshold (0-100). Enter the HP percentage below which the bot will automatically use HP potions. Example: 70 means potion is used when HP drops below 70%.")
@@ -1472,6 +1475,8 @@ class BotGUI:
         self.mp_threshold_var = tk.StringVar(value=str(config.mp_threshold))
         mp_threshold_entry = ctk.CTkEntry(auto_mp_frame, textvariable=self.mp_threshold_var, width=50, font=ctk.CTkFont(size=11))
         mp_threshold_entry.grid(row=0, column=1, padx=(10, 5))
+        mp_threshold_entry.bind('<KeyRelease>', lambda event: self.update_mp_threshold())
+        mp_threshold_entry.bind('<FocusOut>', lambda event: self.update_mp_threshold())
         mp_percent_label = ctk.CTkLabel(auto_mp_frame, text="%", font=ctk.CTkFont(size=11))
         mp_percent_label.grid(row=0, column=2, sticky="w")
         create_tooltip(mp_threshold_entry, "Input: MP percentage threshold (0-100). Enter the MP percentage below which the bot will automatically use MP potions. Example: 50 means potion is used when MP drops below 50%.")
@@ -1517,6 +1522,7 @@ class BotGUI:
         unstuck_timeout_entry = ctk.CTkEntry(auto_change_target_frame, textvariable=self.unstuck_timeout_var, width=50, font=ctk.CTkFont(size=11))
         unstuck_timeout_entry.grid(row=0, column=1, padx=(10, 5))
         unstuck_timeout_entry.bind('<KeyRelease>', lambda event: self.update_unstuck_timeout())
+        unstuck_timeout_entry.bind('<FocusOut>', lambda event: self.update_unstuck_timeout())
         unstuck_seconds_label = ctk.CTkLabel(auto_change_target_frame, text="s", font=ctk.CTkFont(size=11))
         unstuck_seconds_label.grid(row=0, column=2, sticky="w")
         create_tooltip(unstuck_timeout_entry, "Input: Unstuck timeout in seconds. Time to wait before considering enemy HP stagnant (stuck). If enemy HP doesn't decrease for this duration, bot will switch targets. Lower values = faster target switching. Default: 8 seconds.")
@@ -1713,6 +1719,7 @@ class BotGUI:
             interval_entry = ctk.CTkEntry(slot_frame, textvariable=self.skill_intervals[slot], width=60, font=ctk.CTkFont(size=11))
             interval_entry.grid(row=0, column=2, padx=(0, 5))
             interval_entry.bind('<KeyRelease>', lambda event, s=slot: self.update_skill_interval(s))
+            interval_entry.bind('<FocusOut>', lambda event, s=slot: self.update_skill_interval(s))
             # Seconds label
             seconds_label = ctk.CTkLabel(slot_frame, text="s", font=ctk.CTkFont(size=11))
             seconds_label.grid(row=0, column=3, sticky="w")
@@ -1885,6 +1892,7 @@ class BotGUI:
         mouse_clicker_interval_entry = ctk.CTkEntry(row1_frame, textvariable=self.mouse_clicker_interval_var, width=80, font=ctk.CTkFont(size=11))
         mouse_clicker_interval_entry.grid(row=0, column=1, padx=(0, 0))
         mouse_clicker_interval_entry.bind('<KeyRelease>', lambda event: self.update_mouse_clicker_interval())
+        mouse_clicker_interval_entry.bind('<FocusOut>', lambda event: self.update_mouse_clicker_interval())
         
         # Second row: Mode selection and coordinates
         row2_frame = ctk.CTkFrame(mouse_clicker_frame, fg_color="transparent")
@@ -2108,7 +2116,10 @@ class BotGUI:
                                 'width': width,
                                 'height': height
                             }
-                            print(f"[Calibration] System message area set: {config.system_message_area}")
+                            if config.SYSTEM_MESSAGE_HEIGHT_REDUCTION > 0:
+                                print(f"[Calibration] System message area set: {config.system_message_area} (height reduced by {config.SYSTEM_MESSAGE_HEIGHT_REDUCTION}px)")
+                            else:
+                                print(f"[Calibration] System message area set: {config.system_message_area}")
                         except Exception as e:
                             print(f"[Calibration] Error storing system message area: {e}")
                     
@@ -2178,6 +2189,138 @@ class BotGUI:
             self.start_bot()
         else:
             self.stop_bot()
+    
+    def toggle_debug_mode(self):
+        """Toggle global debug mode on/off"""
+        current_state = debug_utils.get_debug_enabled()
+        new_state = debug_utils.set_debug_enabled(not current_state, callback=self.add_debug_message)
+        self.debug_var.set(new_state)
+        
+        if new_state:
+            self.debug_button.configure(text="Debug Mode: ON", fg_color=("green", "darkgreen"))
+            self.show_debug_window()
+            debug_utils.debug_print("Debug mode ENABLED - all debug messages will be shown here", "DebugSystem")
+        else:
+            self.debug_button.configure(text="Debug Mode: OFF", fg_color=("gray70", "gray30"))
+            if hasattr(self, 'debug_window') and self.debug_window:
+                try:
+                    self.debug_window.destroy()
+                except:
+                    pass
+                self.debug_window = None
+    
+    def show_debug_window(self):
+        """Show or create the debug window"""
+        # Check if window exists and is valid
+        window_exists = False
+        if hasattr(self, 'debug_window') and self.debug_window is not None:
+            try:
+                self.debug_window.winfo_exists()
+                window_exists = True
+            except:
+                window_exists = False
+        
+        if not window_exists:
+            self.debug_window = ctk.CTkToplevel(self.root)
+            self.debug_window.title("Debug Window - All Module Messages")
+            self.debug_window.geometry("800x500")
+            self.debug_window.resizable(True, True)
+            
+            # Create scrollable text frame
+            debug_frame = ctk.CTkFrame(self.debug_window)
+            debug_frame.pack(fill="both", expand=True, padx=10, pady=10)
+            
+            # Text widget for messages (using tkinter Text for better performance)
+            text_frame = tk.Frame(debug_frame, bg=ctk.ThemeManager.theme["CTkFrame"]["fg_color"][1])
+            text_frame.pack(fill="both", expand=True)
+            
+            scrollbar = tk.Scrollbar(text_frame)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            
+            self.debug_text = tk.Text(
+                text_frame,
+                wrap=tk.WORD,
+                yscrollcommand=scrollbar.set,
+                bg=ctk.ThemeManager.theme["CTkFrame"]["fg_color"][1],
+                fg=ctk.ThemeManager.theme["CTkLabel"]["text_color"][1],
+                font=("Consolas", 10),
+                padx=10,
+                pady=10
+            )
+            self.debug_text.pack(side=tk.LEFT, fill="both", expand=True)
+            scrollbar.config(command=self.debug_text.yview)
+            
+            # Clear button
+            button_frame = ctk.CTkFrame(debug_frame)
+            button_frame.pack(fill="x", pady=(10, 0))
+            
+            clear_button = ctk.CTkButton(
+                button_frame,
+                text="Clear",
+                command=self.clear_debug_messages,
+                width=100,
+                height=28
+            )
+            clear_button.pack(side=tk.LEFT, padx=(0, 10))
+            
+            close_button = ctk.CTkButton(
+                button_frame,
+                text="Close",
+                command=self.close_debug_window,
+                width=100,
+                height=28
+            )
+            close_button.pack(side=tk.LEFT)
+            
+            # Handle window close
+            self.debug_window.protocol("WM_DELETE_WINDOW", self.close_debug_window)
+        else:
+            # Bring existing window to front
+            self.debug_window.lift()
+            self.debug_window.focus()
+    
+    def add_debug_message(self, message):
+        """Add a debug message to the debug window (thread-safe)"""
+        # Schedule update in main thread to avoid threading issues
+        if hasattr(self, 'root') and self.root:
+            self.root.after(0, lambda: self._add_debug_message_sync(message))
+        else:
+            # Fallback if root doesn't exist
+            print(f"[Click Debug] {message}")
+    
+    def _add_debug_message_sync(self, message):
+        """Internal method to add debug message (must be called from main thread)"""
+        if hasattr(self, 'debug_text') and self.debug_text:
+            try:
+                timestamp = time.strftime("%H:%M:%S")
+                formatted_message = f"[{timestamp}] {message}\n"
+                self.debug_text.insert(tk.END, formatted_message)
+                self.debug_text.see(tk.END)  # Auto-scroll to bottom
+                # Limit to last 1000 lines to prevent memory issues
+                lines = self.debug_text.get("1.0", tk.END).split('\n')
+                if len(lines) > 1000:
+                    self.debug_text.delete("1.0", f"{len(lines) - 1000}.0")
+            except Exception as e:
+                # Fallback to print if text widget fails
+                print(f"[Click Debug] {message}")
+    
+    def clear_debug_messages(self):
+        """Clear all debug messages from the window"""
+        if hasattr(self, 'debug_text') and self.debug_text:
+            self.debug_text.delete("1.0", tk.END)
+    
+    def close_debug_window(self):
+        """Close the debug window and disable debug mode"""
+        if hasattr(self, 'debug_window') and self.debug_window:
+            try:
+                self.debug_window.destroy()
+            except:
+                pass
+            self.debug_window = None
+        # Disable debug mode
+        debug_utils.set_debug_enabled(False, callback=None)
+        self.debug_var.set(False)
+        self.debug_button.configure(text="Debug Mode: OFF", fg_color=("gray70", "gray30"))
     
     def start_bot(self):
         if not config.bot_running:
@@ -2750,60 +2893,6 @@ class BotGUI:
         config.mp_key = '9'  # Reset to default
         print("MP key cleared, reset to default: 9")
     
-    def register_repair_key(self):
-        """Register a key for repair by capturing keyboard input"""
-        popup = ctk.CTkToplevel(self.root)
-        popup.title("Press a key")
-        popup.geometry("300x150")
-        popup.transient(self.root)
-        popup.grab_set()
-        
-        root_x = self.root.winfo_x()
-        root_y = self.root.winfo_y()
-        popup.geometry(f'+{root_x + 50}+{root_y + 50}')
-        
-        label = ctk.CTkLabel(popup, text="Press any key to register...", 
-                            font=ctk.CTkFont(size=12))
-        label.pack(pady=30)
-        
-        def on_key_press(event):
-            key = event.keysym.upper()
-            
-            if len(key) == 1:
-                self.repair_key_var.set(key)
-                config.repair_key = key.lower()
-                print(f"Repair key registered: {key}")
-                popup.destroy()
-            elif key in ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12']:
-                self.repair_key_var.set(key)
-                config.repair_key = key.lower()
-                print(f"Repair key registered: {key}")
-                popup.destroy()
-            elif key in ['SPACE', 'TAB', 'RETURN', 'ESCAPE']:
-                key_map = {
-                    'SPACE': 'SPACE',
-                    'TAB': 'TAB',
-                    'RETURN': 'ENTER',
-                    'ESCAPE': 'ESC'
-                }
-                mapped_key = key_map.get(key, key)
-                self.repair_key_var.set(mapped_key)
-                config.repair_key = mapped_key.lower()
-                print(f"Repair key registered: {mapped_key}")
-                popup.destroy()
-        
-        popup.bind('<Key>', on_key_press)
-        popup.focus_set()
-        
-        cancel_btn = ctk.CTkButton(popup, text="Cancel", command=popup.destroy, width=100)
-        cancel_btn.pack(pady=10)
-    
-    def clear_repair_key(self):
-        """Clear repair key"""
-        self.repair_key_var.set('')
-        config.repair_key = 'f10'  # Reset to default
-        print("Repair key cleared, reset to default: f10")
-    
     def send_key(self, key_input):
         """Send a key input (used by BuffsManager)"""
         try:
@@ -2879,20 +2968,6 @@ class BotGUI:
         config.auto_repair_enabled = self.auto_repair_var.get()
         status = "enabled" if config.auto_repair_enabled else "disabled"
         print(f"Auto Repair {status}")
-    
-    def update_auto_repair_check_interval(self):
-        """Update auto repair check interval value"""
-        try:
-            interval = float(self.auto_repair_check_interval_var.get())
-            if interval > 0:
-                config.AUTO_REPAIR_CHECK_INTERVAL = interval
-                print(f"Auto repair check interval updated to {config.AUTO_REPAIR_CHECK_INTERVAL}s")
-            else:
-                print(f"Invalid auto repair check interval: must be greater than 0")
-                self.auto_repair_check_interval_var.set(str(config.AUTO_REPAIR_CHECK_INTERVAL))
-        except ValueError:
-            print(f"Invalid auto repair check interval value")
-            self.auto_repair_check_interval_var.set(str(config.AUTO_REPAIR_CHECK_INTERVAL))
     
     def update_is_mage(self):
         """Update mage setting"""
@@ -2999,12 +3074,40 @@ class BotGUI:
         status = "enabled" if config.auto_hp_enabled else "disabled"
         print(f"Auto HP {status}")
     
+    def update_hp_threshold(self):
+        """Update HP threshold value"""
+        try:
+            threshold = float(self.hp_threshold_var.get())
+            if 0 <= threshold <= 100:
+                config.hp_threshold = threshold
+                print(f"HP threshold updated to {config.hp_threshold}%")
+            else:
+                print(f"Invalid HP threshold: must be between 0 and 100")
+                self.hp_threshold_var.set(str(config.hp_threshold))
+        except ValueError:
+            print(f"Invalid HP threshold value")
+            self.hp_threshold_var.set(str(config.hp_threshold))
+    
     def update_auto_mp(self):
         """Update auto MP enabled status"""
 
         config.auto_mp_enabled = self.auto_mp_var.get()
         status = "enabled" if config.auto_mp_enabled else "disabled"
         print(f"Auto MP {status}")
+    
+    def update_mp_threshold(self):
+        """Update MP threshold value"""
+        try:
+            threshold = float(self.mp_threshold_var.get())
+            if 0 <= threshold <= 100:
+                config.mp_threshold = threshold
+                print(f"MP threshold updated to {config.mp_threshold}%")
+            else:
+                print(f"Invalid MP threshold: must be between 0 and 100")
+                self.mp_threshold_var.set(str(config.mp_threshold))
+        except ValueError:
+            print(f"Invalid MP threshold value")
+            self.mp_threshold_var.set(str(config.mp_threshold))
     
     def update_mouse_clicker(self):
         """Update mouse clicker enabled status"""
@@ -4321,7 +4424,7 @@ class BotGUI:
         
         # Create new window for minimized view
         self.minimized_window = ctk.CTkToplevel(self.root)
-        self.minimized_window.title("Kathana Helper xCrypto v2.1.2")
+        self.minimized_window.title("Kathana Helper v2.1.2")
         
         # Position minimized window at the same location as main window
         if self.saved_window_position:
