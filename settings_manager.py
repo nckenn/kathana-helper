@@ -76,8 +76,7 @@ def save_settings():
             # target_hp_bar_area is NOT saved - detection/calibration region should not be persisted
             'auto_attack_enabled': config.auto_attack_enabled,
             'auto_hp_enabled': config.auto_hp_enabled,
-            'hp_threshold': config.hp_threshold,
-            'hp_key': config.hp_key,
+            'hp_thresholds': config.hp_thresholds,
             # hp_bar_area is NOT saved - calibration data should not be persisted
             'auto_mp_enabled': config.auto_mp_enabled,
             'mp_threshold': config.mp_threshold,
@@ -116,7 +115,7 @@ def save_settings():
             if hasattr(BotGUI, '_instance') and BotGUI._instance:
                 gui = BotGUI._instance
                 settings['auto_attack_enabled'] = gui.auto_attack_var.get()
-                settings['hp_threshold'] = int(gui.hp_threshold_var.get())
+                settings['hp_thresholds'] = config.hp_thresholds
                 # hp_bar_area is NOT saved - calibration data should not be persisted
                 settings['mp_threshold'] = int(gui.mp_threshold_var.get())
                 # mp_bar_area is NOT saved - calibration data should not be persisted
@@ -141,8 +140,6 @@ def save_settings():
                     except ValueError:
                         settings['break_warning_trigger_count'] = config.BREAK_WARNING_TRIGGER_COUNT
                 # auto_repair_check_interval removed - fixed at 3.0 seconds
-                if hasattr(gui, 'hp_key_var'):
-                    settings['hp_key'] = gui.hp_key_var.get()
                 if hasattr(gui, 'mp_key_var'):
                     settings['mp_key'] = gui.mp_key_var.get()
                 # repair_key removed - now using image detection (hammer.bmp)
@@ -246,10 +243,22 @@ def load_settings():
         # Load HP/MP settings
         if 'auto_hp_enabled' in settings:
             config.auto_hp_enabled = settings['auto_hp_enabled']
-        if 'hp_threshold' in settings:
-            config.hp_threshold = settings['hp_threshold']
-        if 'hp_key' in settings:
-            config.hp_key = settings['hp_key']
+        
+        # Load multiple HP thresholds
+        if 'hp_thresholds' in settings:
+            config.hp_thresholds = settings['hp_thresholds']
+            # Validate and sort thresholds
+            if isinstance(config.hp_thresholds, list) and len(config.hp_thresholds) > 0:
+                # Sort by threshold (highest first)
+                config.hp_thresholds.sort(key=lambda x: x.get('threshold', 0), reverse=True)
+                print("Loaded HP thresholds configuration")
+            else:
+                # Invalid format, use default
+                config.hp_thresholds = [{'threshold': 70, 'key': '0'}]
+        else:
+            # No thresholds in settings, use default
+            config.hp_thresholds = [{'threshold': 70, 'key': '0'}]
+        
         # hp_bar_area is NOT loaded - calibration data should not be persisted
         # (calibration must be performed each session)
         

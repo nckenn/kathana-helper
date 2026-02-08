@@ -20,12 +20,14 @@ mouse_clicker_enabled = False
 is_mage = False  # If enabled, attack action won't be triggered after target
 
 # Auto HP/MP/Repair hotkeys (configurable)
-hp_key = '0'  # Default HP potion key
 mp_key = '9'  # Default MP potion key
 repair_key = 'f10'  # Default repair key
 
 # HP/MP thresholds and areas
-hp_threshold = 70  # Default HP threshold percentage (0-100)
+# Multiple HP thresholds: list of dicts with 'threshold' (0-100) and 'key' (str)
+# Example: [{'threshold': 80, 'key': '0'}, {'threshold': 50, 'key': '3'}]
+# Thresholds should be ordered from highest to lowest
+hp_thresholds = [{'threshold': 70, 'key': '0'}]  # Default single threshold
 hp_bar_area = {'x': 152, 'y': 69, 'width': 0, 'height': 0}
 mp_threshold = 50  # Default MP threshold percentage (0-100)
 mp_bar_area = {'x': 428, 'y': 139, 'width': 0, 'height': 0}

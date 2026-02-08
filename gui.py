@@ -275,7 +275,7 @@ class BotGUI:
             if 'expires' in license_info['data']:
                 from datetime import datetime
                 expires = datetime.fromisoformat(license_info['data']['expires'])
-                info_text += f"Expires: {expires.strftime('%Y-%m-%d')}"
+                info_text += f"{expires.strftime('%Y-%m-%d')}"
             info_label = ctk.CTkLabel(
                 main_frame,
                 text=info_text,
@@ -490,7 +490,7 @@ class BotGUI:
             if 'expires' in license_info['data']:
                 from datetime import datetime
                 expires = datetime.fromisoformat(license_info['data']['expires'])
-                info_text += f"Expires: {expires.strftime('%Y-%m-%d')}"
+                info_text += f"{expires.strftime('%Y-%m-%d')}"
             info_label = ctk.CTkLabel(
                 main_frame,
                 text=info_text,
@@ -600,13 +600,13 @@ class BotGUI:
                     expires_str = expires_date.strftime('%B %d, %Y')
                     days_left = (expires_date - datetime.now()).days
                     if days_left < 0:
-                        expiry_info = f"Expired: {expires_str}"
+                        expiry_info = f"{expires_str}"
                     elif days_left <= 7:
-                        expiry_info = f"Expires: {expires_str} ({days_left} day{'s' if days_left != 1 else ''} left)"
+                        expiry_info = f"{expires_str} ({days_left} day{'s' if days_left != 1 else ''} left)"
                     else:
-                        expiry_info = f"Expires: {expires_str}"
+                        expiry_info = f"{expires_str}"
                 except:
-                    expiry_info = f"Expires: {expires}"
+                    expiry_info = f"{expires}"
             else:
                 expiry_info = "No expiration"
             
@@ -658,17 +658,17 @@ class BotGUI:
                     days_left = (expires_date - datetime.now()).days
                     if days_left < 0:
                         status_color = "red"
-                        expiry_info = f"Expired: {expires_str}"
+                        expiry_info = f"{expires_str}"
                     elif days_left <= 7:
                         status_color = "orange"
-                        expiry_info = f"Expires: {expires_str} ({days_left} day{'s' if days_left != 1 else ''} left)"
+                        expiry_info = f"{expires_str} ({days_left} day{'s' if days_left != 1 else ''} left)"
                     elif days_left <= 30:
                         status_color = "yellow"
-                        expiry_info = f"Expires: {expires_str} ({days_left} days left)"
+                        expiry_info = f"{expires_str} ({days_left} days left)"
                     else:
-                        expiry_info = f"Expires: {expires_str}"
+                        expiry_info = f"{expires_str}"
                 except:
-                    expiry_info = f"Expires: {expires}"
+                    expiry_info = f"{expires}"
             else:
                 expiry_info = "No expiration"
             
@@ -834,15 +834,13 @@ class BotGUI:
             print(f"  Applied auto HP: enabled={config.auto_hp_enabled}")
             # Load HP settings from global variables
             try:
-                self.hp_threshold_var.set(str(config.hp_threshold))
-                if hasattr(self, 'hp_key_var'):
-                    self.hp_key_var.set(config.hp_key)
                 self.hp_x_var.set(str(config.hp_bar_area['x']))
                 self.hp_y_var.set(str(config.hp_bar_area['y']))
                 self.hp_width_var.set(str(config.hp_bar_area['width']))
                 self.hp_height_var.set(str(config.hp_bar_area['height']))
                 self.hp_coords_var.set(f"{config.hp_bar_area['x']},{config.hp_bar_area['y']}")
-                print(f"  Applied HP threshold: {config.hp_threshold}%, key: {config.hp_key}, area: {config.hp_bar_area}")
+                thresholds_info = ", ".join([f"{t['threshold']}%={t['key']}" for t in config.hp_thresholds])
+                print(f"  Applied HP thresholds: {thresholds_info}, area: {config.hp_bar_area}")
             except Exception as e:
                 print(f"  Error applying HP settings: {e}")
             
@@ -976,6 +974,27 @@ class BotGUI:
         self.root.title("Kathana Helper v2.1.2")
         self.root.geometry("655x800")
         self.root.resizable(True, True)
+        
+        # Set application icon
+        try:
+            # Get the directory where the script/executable is located
+            if getattr(sys, 'frozen', False):
+                # If running as compiled executable (PyInstaller)
+                # Use the directory where the executable is located, not _MEIPASS
+                base_path = os.path.dirname(sys.executable)
+            else:
+                # If running as script
+                base_path = os.path.dirname(os.path.abspath(__file__))
+            
+            icon_path = os.path.join(base_path, 'icon.ico')
+            if os.path.exists(icon_path):
+                # Set icon for Windows taskbar, window, and desktop
+                self.root.iconbitmap(icon_path)
+                print(f'✅ Application icon set: {icon_path}')
+            else:
+                print(f'⚠️ Icon file not found at: {icon_path}')
+        except Exception as e:
+            print(f'❌ Error setting application icon: {e}')
         
         # Track minimized state
         self.is_minimized = False
@@ -1219,11 +1238,11 @@ class BotGUI:
                     elif days_left <= 30:
                         status_color = "yellow"
                         status_indicator = "●"
-                        expiry_info = f"Expires: {expires_str} ({days_left} days left)"
+                        expiry_info = f"{expires_str} ({days_left} days left)"
                     else:
-                        expiry_info = f"Expires: {expires_str}"
+                        expiry_info = f"{expires_str}"
                 except:
-                    expiry_info = f"Expires: {expires}"
+                    expiry_info = f"{expires}"
             else:
                 expiry_info = "No expiration"
             
@@ -1386,7 +1405,7 @@ class BotGUI:
         
         # Assist Only checkbox
         self.assist_only_var = tk.BooleanVar(value=config.assist_only_enabled)
-        self.assist_only_checkbox = ctk.CTkCheckBox(assist_only_frame, text="Assist Only", 
+        self.assist_only_checkbox = ctk.CTkCheckBox(assist_only_frame, text="Assist Mode", 
                                          variable=self.assist_only_var,
                                          command=self.update_assist_only,
                                          font=ctk.CTkFont(size=11))
@@ -1423,33 +1442,14 @@ class BotGUI:
                                          command=self.update_auto_hp,
                                          font=ctk.CTkFont(size=11))
         auto_hp_checkbox.grid(row=0, column=0, sticky="w", pady=5)
-        create_tooltip(auto_hp_checkbox, "Automatically uses HP potions when HP drops below the threshold. Requires HP bar calibration.")
+        create_tooltip(auto_hp_checkbox, "Automatically uses HP potions when HP drops below configured thresholds. Requires HP bar calibration.")
         
-        # HP threshold input (percentage)
-        self.hp_threshold_var = tk.StringVar(value=str(config.hp_threshold))
-        hp_threshold_entry = ctk.CTkEntry(auto_hp_frame, textvariable=self.hp_threshold_var, width=50, font=ctk.CTkFont(size=11))
-        hp_threshold_entry.grid(row=0, column=1, padx=(10, 5))
-        hp_threshold_entry.bind('<KeyRelease>', lambda event: self.update_hp_threshold())
-        hp_threshold_entry.bind('<FocusOut>', lambda event: self.update_hp_threshold())
-        hp_percent_label = ctk.CTkLabel(auto_hp_frame, text="%", font=ctk.CTkFont(size=11))
-        hp_percent_label.grid(row=0, column=2, sticky="w")
-        create_tooltip(hp_threshold_entry, "Input: HP percentage threshold (0-100). Enter the HP percentage below which the bot will automatically use HP potions. Example: 70 means potion is used when HP drops below 70%.")
-        
-        # HP key registration
-        self.hp_key_var = tk.StringVar(value=config.hp_key)
-        def update_hp_key_button_text(var=self.hp_key_var, btn=None):
-            if var.get():
-                btn.configure(text=var.get().upper())
-            else:
-                btn.configure(text="Set Key")
-        hp_key_button = ctk.CTkButton(auto_hp_frame, width=60, height=28,
-                                     command=self.register_hp_key,
-                                     font=ctk.CTkFont(size=10), corner_radius=4)
-        hp_key_button.grid(row=0, column=3, padx=(10, 0), pady=5)
-        update_hp_key_button_text(btn=hp_key_button)
-        self.hp_key_var.trace_add('write', lambda *args: update_hp_key_button_text(btn=hp_key_button))
-        hp_key_button.bind('<Button-3>', lambda e: self.clear_hp_key())
-        create_tooltip(hp_key_button, "Click to register the hotkey for HP potion. Right-click to clear.")
+        # Ellipsis button for multiple HP thresholds configuration
+        hp_thresholds_button = ctk.CTkButton(auto_hp_frame, text="⋯", width=28, height=28,
+                                            command=self.configure_hp_thresholds,
+                                            font=ctk.CTkFont(size=16), corner_radius=4)
+        hp_thresholds_button.grid(row=0, column=1, padx=(10, 0), pady=5)
+        create_tooltip(hp_thresholds_button, "Configure multiple HP thresholds with different keys. Example: 80% = key 0, 50% = key 3")
         
         # HP bar area input (x, y, width, height) - hidden, only used internally
         self.hp_x_var = tk.StringVar(value=str(config.hp_bar_area['x']))
@@ -2785,17 +2785,177 @@ class BotGUI:
         status = "enabled" if config.skill_sequence_config[idx]['enabled'] else "disabled"
         print(f"Skill Sequence {idx + 1} {status}")
     
-    def register_hp_key(self):
-        """Register a key for HP potion by capturing keyboard input"""
-        popup = ctk.CTkToplevel(self.root)
-        popup.title("Press a key")
-        popup.geometry("300x150")
-        popup.transient(self.root)
-        popup.grab_set()
+    def configure_hp_thresholds(self):
+        """Open dialog to configure multiple HP thresholds"""
+        dialog = ctk.CTkToplevel(self.root)
+        dialog.title("Configure HP Thresholds")
+        dialog.geometry("500x400")
+        dialog.transient(self.root)
+        dialog.grab_set()
         
         root_x = self.root.winfo_x()
         root_y = self.root.winfo_y()
-        popup.geometry(f'+{root_x + 50}+{root_y + 50}')
+        dialog.geometry(f'+{root_x + 50}+{root_y + 50}')
+        
+        # Main frame
+        main_frame = ctk.CTkFrame(dialog)
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # Title
+        title_label = ctk.CTkLabel(main_frame, text="HP Thresholds Configuration",
+                                  font=ctk.CTkFont(size=16, weight="bold"))
+        title_label.pack(pady=(0, 10))
+        
+        # Instructions
+        instructions = ctk.CTkLabel(main_frame, 
+                                   text="Configure multiple thresholds. When HP drops below a threshold,\nthe corresponding key will be pressed. Thresholds are checked from highest to lowest.",
+                                   font=ctk.CTkFont(size=11),
+                                   justify="left")
+        instructions.pack(pady=(0, 15))
+        
+        # Scrollable frame for threshold entries
+        scroll_frame = ctk.CTkScrollableFrame(main_frame, height=200)
+        scroll_frame.pack(fill="both", expand=True, pady=(0, 15))
+        
+        # Initialize thresholds list from config (ensure it exists)
+        if not hasattr(config, 'hp_thresholds') or not config.hp_thresholds:
+            config.hp_thresholds = [{'threshold': 70, 'key': '0'}]
+        
+        threshold_widgets = []
+        
+        def add_threshold_row(threshold_entry=None):
+            """Add a new threshold row"""
+            row_frame = ctk.CTkFrame(scroll_frame)
+            row_frame.pack(fill="x", pady=5)
+            
+            threshold_var = tk.StringVar(value=str(threshold_entry['threshold']) if threshold_entry else "70")
+            key_var = tk.StringVar(value=threshold_entry['key'] if threshold_entry else "0")
+            
+            # Threshold entry
+            threshold_label = ctk.CTkLabel(row_frame, text="Threshold:", width=80)
+            threshold_label.grid(row=0, column=0, padx=5, pady=5)
+            
+            threshold_entry_widget = ctk.CTkEntry(row_frame, textvariable=threshold_var, width=60)
+            threshold_entry_widget.grid(row=0, column=1, padx=5, pady=5)
+            
+            percent_label = ctk.CTkLabel(row_frame, text="%")
+            percent_label.grid(row=0, column=2, padx=2, pady=5)
+            
+            # Key button
+            key_label = ctk.CTkLabel(row_frame, text="Key:", width=50)
+            key_label.grid(row=0, column=3, padx=5, pady=5)
+            
+            def update_key_button_text(var=key_var, btn=None):
+                if var.get():
+                    btn.configure(text=var.get().upper())
+                else:
+                    btn.configure(text="Set Key")
+            
+            key_button = ctk.CTkButton(row_frame, width=60, height=28,
+                                      command=lambda: self.register_key_in_dialog(key_var, dialog),
+                                      font=ctk.CTkFont(size=10), corner_radius=4)
+            key_button.grid(row=0, column=4, padx=5, pady=5)
+            update_key_button_text(btn=key_button)
+            key_var.trace_add('write', lambda *args: update_key_button_text(btn=key_button))
+            
+            # Delete button
+            delete_button = ctk.CTkButton(row_frame, text="×", width=30, height=28,
+                                         command=lambda: remove_threshold_row(row_frame, widget_data),
+                                         font=ctk.CTkFont(size=16), corner_radius=4)
+            delete_button.grid(row=0, column=5, padx=5, pady=5)
+            
+            widget_data = {
+                'frame': row_frame,
+                'threshold_var': threshold_var,
+                'key_var': key_var,
+                'key_button': key_button
+            }
+            threshold_widgets.append(widget_data)
+        
+        def remove_threshold_row(row_frame, widget_data):
+            """Remove a threshold row"""
+            if len(threshold_widgets) > 1:  # Keep at least one row
+                row_frame.destroy()
+                threshold_widgets.remove(widget_data)
+            else:
+                messagebox.showwarning("Warning", "At least one threshold must be configured.")
+        
+        # Add initial rows from config
+        for threshold_entry in config.hp_thresholds:
+            add_threshold_row(threshold_entry)
+        
+        # If no thresholds, add one default
+        if not threshold_widgets:
+            add_threshold_row()
+        
+        # Buttons frame
+        buttons_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        buttons_frame.pack(fill="x", pady=(10, 0))
+        
+        add_button = ctk.CTkButton(buttons_frame, text="Add Threshold", width=120,
+                                   command=lambda: add_threshold_row())
+        add_button.pack(side="left", padx=5)
+        
+        def save_thresholds():
+            """Save thresholds to config"""
+            try:
+                new_thresholds = []
+                for widget_data in threshold_widgets:
+                    threshold_str = widget_data['threshold_var'].get().strip()
+                    key_str = widget_data['key_var'].get().strip()
+                    
+                    if not threshold_str or not key_str:
+                        messagebox.showerror("Error", "All thresholds must have both a percentage and a key.")
+                        return
+                    
+                    try:
+                        threshold = float(threshold_str)
+                        if not (0 <= threshold <= 100):
+                            messagebox.showerror("Error", "Threshold must be between 0 and 100.")
+                            return
+                    except ValueError:
+                        messagebox.showerror("Error", f"Invalid threshold value: {threshold_str}")
+                        return
+                    
+                    new_thresholds.append({
+                        'threshold': threshold,
+                        'key': key_str.lower()
+                    })
+                
+                # Sort by threshold (highest first) and save
+                new_thresholds.sort(key=lambda x: x['threshold'], reverse=True)
+                config.hp_thresholds = new_thresholds
+                
+                # Update display summary (optional - could show in tooltip or label)
+                print(f"HP thresholds configured: {len(new_thresholds)} thresholds")
+                for t in new_thresholds:
+                    print(f"  {t['threshold']}% = key {t['key']}")
+                
+                dialog.destroy()
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to save thresholds: {e}")
+        
+        save_button = ctk.CTkButton(buttons_frame, text="Save", width=100,
+                                   command=save_thresholds)
+        save_button.pack(side="right", padx=5)
+        
+        cancel_button = ctk.CTkButton(buttons_frame, text="Cancel", width=100,
+                                     command=dialog.destroy)
+        cancel_button.pack(side="right", padx=5)
+        
+        dialog.focus_set()
+    
+    def register_key_in_dialog(self, key_var, parent_dialog):
+        """Register a key for HP threshold in the dialog"""
+        popup = ctk.CTkToplevel(parent_dialog)
+        popup.title("Press a key")
+        popup.geometry("300x150")
+        popup.transient(parent_dialog)
+        popup.grab_set()
+        
+        parent_x = parent_dialog.winfo_x()
+        parent_y = parent_dialog.winfo_y()
+        popup.geometry(f'+{parent_x + 50}+{parent_y + 50}')
         
         label = ctk.CTkLabel(popup, text="Press any key to register...", 
                             font=ctk.CTkFont(size=12))
@@ -2805,14 +2965,12 @@ class BotGUI:
             key = event.keysym.upper()
             
             if len(key) == 1:
-                self.hp_key_var.set(key)
-                config.hp_key = key.lower()
-                print(f"HP key registered: {key}")
+                key_var.set(key)
+                print(f"Key registered: {key}")
                 popup.destroy()
             elif key in ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12']:
-                self.hp_key_var.set(key)
-                config.hp_key = key.lower()
-                print(f"HP key registered: {key}")
+                key_var.set(key)
+                print(f"Key registered: {key}")
                 popup.destroy()
             elif key in ['SPACE', 'TAB', 'RETURN', 'ESCAPE']:
                 key_map = {
@@ -2822,9 +2980,8 @@ class BotGUI:
                     'ESCAPE': 'ESC'
                 }
                 mapped_key = key_map.get(key, key)
-                self.hp_key_var.set(mapped_key)
-                config.hp_key = mapped_key.lower()
-                print(f"HP key registered: {mapped_key}")
+                key_var.set(mapped_key)
+                print(f"Key registered: {mapped_key}")
                 popup.destroy()
         
         popup.bind('<Key>', on_key_press)
@@ -2832,12 +2989,6 @@ class BotGUI:
         
         cancel_btn = ctk.CTkButton(popup, text="Cancel", command=popup.destroy, width=100)
         cancel_btn.pack(pady=10)
-    
-    def clear_hp_key(self):
-        """Clear HP key"""
-        self.hp_key_var.set('')
-        config.hp_key = '0'  # Reset to default
-        print("HP key cleared, reset to default: 0")
     
     def register_mp_key(self):
         """Register a key for MP potion by capturing keyboard input"""
@@ -3073,20 +3224,6 @@ class BotGUI:
         config.auto_hp_enabled = self.auto_hp_var.get()
         status = "enabled" if config.auto_hp_enabled else "disabled"
         print(f"Auto HP {status}")
-    
-    def update_hp_threshold(self):
-        """Update HP threshold value"""
-        try:
-            threshold = float(self.hp_threshold_var.get())
-            if 0 <= threshold <= 100:
-                config.hp_threshold = threshold
-                print(f"HP threshold updated to {config.hp_threshold}%")
-            else:
-                print(f"Invalid HP threshold: must be between 0 and 100")
-                self.hp_threshold_var.set(str(config.hp_threshold))
-        except ValueError:
-            print(f"Invalid HP threshold value")
-            self.hp_threshold_var.set(str(config.hp_threshold))
     
     def update_auto_mp(self):
         """Update auto MP enabled status"""

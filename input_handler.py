@@ -275,17 +275,12 @@ def window_image_to_client(hwnd, window_x, window_y):
 
 
 def perform_mouse_click_client(hwnd, client_x, client_y):
-    """Perform a left mouse click using client-area coordinates via SendMessage."""
+    """Perform a left mouse click using client-area coordinates via PostMessage (works in background/alt-tab mode)."""
     try:
         # Validate window handle
         if not win32gui.IsWindow(hwnd):
             debug_utils.debug_print_error("Invalid window handle", "InputHandler")
             return False
-        
-        # Check if window is visible (not minimized)
-        if not win32gui.IsWindowVisible(hwnd):
-            debug_utils.debug_print_warning("Window is not visible (might be minimized)", "InputHandler")
-            # Still try to send message, some windows accept messages when minimized
         
         # Get client area dimensions for validation
         try:
@@ -300,18 +295,19 @@ def perform_mouse_click_client(hwnd, client_x, client_y):
         except Exception as e:
             debug_utils.debug_print_warning(f"Could not validate client bounds: {e}", "InputHandler")
         
-        # Perform the click
+        # Perform the click using PostMessage (asynchronous, better for background clicks)
+        # PostMessage works better than SendMessage for background/alt-tab scenarios
+        # It doesn't require the window to be in foreground and handles minimized windows better
         lParam = win32api.MAKELONG(int(client_x), int(client_y))
-        result_down = win32api.SendMessage(hwnd, win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, lParam)
-        sleep(0.05)
-        result_up = win32api.SendMessage(hwnd, win32con.WM_LBUTTONUP, 0, lParam)
         
-        # Check if messages were processed (0 usually means success)
-        if result_down == 0 and result_up == 0:
-            return True
-        else:
-            debug_utils.debug_print_warning(f"SendMessage returned non-zero: down={result_down}, up={result_up}", "InputHandler")
-            return True  # Still return True as non-zero doesn't always mean failure
+        # Use PostMessage instead of SendMessage for better background/alt-tab compatibility
+        # PostMessage is asynchronous and doesn't wait for the message to be processed,
+        # which prevents issues with skill disappearing during alt-tab
+        win32api.PostMessage(hwnd, win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, lParam)
+        sleep(0.05)
+        win32api.PostMessage(hwnd, win32con.WM_LBUTTONUP, 0, lParam)
+        
+        return True
     except Exception as e:
         debug_utils.debug_print_error("Error in perform_mouse_click_client", "InputHandler", e)
         return False
