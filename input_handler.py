@@ -15,6 +15,36 @@ _movement_sequence_active = False
 _previous_foreground_hwnd = None
 
 
+def parse_key_with_modifiers(key_string):
+    """Parse a key string that may contain modifiers (e.g., 'Ctrl+1', 'Shift+2', 'Alt+3')
+    
+    Returns:
+        tuple: (modifiers_list, base_key_string)
+        modifiers_list: List of modifier names ['Ctrl', 'Shift', 'Alt'] or []
+        base_key_string: The base key without modifiers (e.g., '1', 'f1', 'a')
+    """
+    if '+' in key_string:
+        parts = key_string.split('+')
+        modifiers = []
+        base_key = None
+        
+        for part in parts:
+            part_lower = part.lower().strip()
+            if part_lower in ['ctrl', 'control']:
+                modifiers.append('Ctrl')
+            elif part_lower in ['shift']:
+                modifiers.append('Shift')
+            elif part_lower in ['alt']:
+                modifiers.append('Alt')
+            else:
+                # This is the base key
+                base_key = part.strip()
+        
+        return modifiers, base_key if base_key else key_string
+    else:
+        return [], key_string
+
+
 def get_virtual_key_code(key):
     """Convert key string to virtual key code"""
     key_mappings = {
@@ -31,13 +61,38 @@ def get_virtual_key_code(key):
         'space': 0x20, 'enter': 0x0D, 'escape': 0x1B, 'tab': 0x09,
         'shift': 0x10, 'ctrl': 0x11, 'alt': 0x12
     }
-    return key_mappings.get(key.lower(), ord(key.upper()) if len(key) == 1 else 0)
+    # Extract base key if there are modifiers
+    _, base_key = parse_key_with_modifiers(key)
+    return key_mappings.get(base_key.lower(), ord(base_key.upper()) if len(base_key) == 1 else 0)
 
 
-def send_silent_key(hwnd, vk_code, use_scan_code=False):
+def send_silent_key(hwnd, vk_code, use_scan_code=False, modifiers=None):
     """Send a key press directly to a window handle without interfering with chat
-    Supports scan codes for function keys (F1-F12) for better compatibility"""
+    Supports scan codes for function keys (F1-F12) for better compatibility
+    Supports modifier keys (Ctrl, Shift, Alt) when modifiers list is provided
+    
+    Args:
+        hwnd: Window handle
+        vk_code: Virtual key code of the base key
+        use_scan_code: Whether to use scan codes (for F1-F12)
+        modifiers: List of modifier names ['Ctrl', 'Shift', 'Alt'] or None
+    """
     try:
+        # Modifier key codes
+        modifier_codes = {
+            'Ctrl': 0x11,   # VK_CONTROL
+            'Shift': 0x10,  # VK_SHIFT
+            'Alt': 0x12     # VK_MENU (Alt)
+        }
+        
+        # Press modifier keys first
+        if modifiers:
+            for mod in modifiers:
+                if mod in modifier_codes:
+                    mod_vk = modifier_codes[mod]
+                    win32api.SendMessage(hwnd, win32con.WM_KEYDOWN, mod_vk, 0)
+            sleep(0.01)  # Small delay to ensure modifiers are registered
+        
         # Handle function keys with scan codes if requested
         if use_scan_code and vk_code >= 0x70 and vk_code <= 0x7B:  # F1-F12
             try:
@@ -50,14 +105,25 @@ def send_silent_key(hwnd, vk_code, use_scan_code=False):
                 win32api.PostMessage(hwnd, win32con.WM_KEYDOWN, vk_code, lparam_down)
                 sleep(0.08)
                 win32api.PostMessage(hwnd, win32con.WM_KEYUP, vk_code, lparam_up)
-                return True
             except Exception as e:
                 print(f"Error using scan code, falling back to simple method: {e}")
+                # Fallback to standard method
+                win32api.SendMessage(hwnd, win32con.WM_KEYDOWN, vk_code, 0)
+                sleep(0.01)
+                win32api.SendMessage(hwnd, win32con.WM_KEYUP, vk_code, 0)
+        else:
+            # Standard method for regular keys (use SendMessage for synchronous behavior)
+            win32api.SendMessage(hwnd, win32con.WM_KEYDOWN, vk_code, 0)
+            sleep(0.01)
+            win32api.SendMessage(hwnd, win32con.WM_KEYUP, vk_code, 0)
         
-        # Standard method for regular keys (use SendMessage for synchronous behavior)
-        win32api.SendMessage(hwnd, win32con.WM_KEYDOWN, vk_code, 0)
-        sleep(0.01)
-        win32api.SendMessage(hwnd, win32con.WM_KEYUP, vk_code, 0)
+        # Release modifier keys
+        if modifiers:
+            sleep(0.01)  # Small delay before releasing modifiers
+            for mod in reversed(modifiers):  # Release in reverse order
+                if mod in modifier_codes:
+                    mod_vk = modifier_codes[mod]
+                    win32api.SendMessage(hwnd, win32con.WM_KEYUP, mod_vk, 0)
     except Exception as e:
         print(f"Error sending silent key: {e}")
         return False
@@ -66,23 +132,84 @@ def send_silent_key(hwnd, vk_code, use_scan_code=False):
 
 def send_input(key):
     """Send input silently to connected window without interfering with chat
-    Supports function keys (F1-F12) with scan codes for better compatibility"""
+    Supports function keys (F1-F12) with scan codes for better compatibility
+    Supports modifier keys (Ctrl, Shift, Alt) combined with numbers or other keys
+    Examples: 'Ctrl+1', 'Shift+2', 'Alt+3', 'Ctrl+Shift+4'"""
     try:
         if config.connected_window:
             try:
                 hwnd = config.connected_window.handle
-                vk_code = get_virtual_key_code(key)
+                
+                # Parse modifiers and base key
+                modifiers, base_key = parse_key_with_modifiers(key)
+                vk_code = get_virtual_key_code(base_key)
                 
                 if vk_code:
                     # Use scan codes for function keys (F1-F12)
                     use_scan_code = (vk_code >= 0x70 and vk_code <= 0x7B)
-                    if send_silent_key(hwnd, vk_code, use_scan_code=use_scan_code):
+                    if send_silent_key(hwnd, vk_code, use_scan_code=use_scan_code, modifiers=modifiers if modifiers else None):
                         return
             except Exception as e:
                 print(f"Silent input failed, falling back to regular input: {e}")
             
+            # Fallback: try to send with pydirectinput for modifier combinations
+            if '+' in key.lower():
+                # Parse and send with pydirectinput
+                parts = key.split('+')
+                modifiers_pyd = []
+                base_key_pyd = None
+                for part in parts:
+                    part_lower = part.lower().strip()
+                    if part_lower in ['ctrl', 'control']:
+                        modifiers_pyd.append('ctrl')
+                    elif part_lower in ['shift']:
+                        modifiers_pyd.append('shift')
+                    elif part_lower in ['alt']:
+                        modifiers_pyd.append('alt')
+                    else:
+                        base_key_pyd = part.strip()
+                
+                if base_key_pyd:
+                    # Hold modifiers, press key, release modifiers
+                    for mod in modifiers_pyd:
+                        pydirectinput.keyDown(mod)
+                    sleep(0.01)
+                    pydirectinput.press(base_key_pyd.lower())
+                    sleep(0.01)
+                    for mod in reversed(modifiers_pyd):
+                        pydirectinput.keyUp(mod)
+                    return
+            
             config.connected_window.send_keystrokes(key)
         else:
+            # No connected window - use pydirectinput
+            if '+' in key.lower():
+                # Parse and send with pydirectinput
+                parts = key.split('+')
+                modifiers_pyd = []
+                base_key_pyd = None
+                for part in parts:
+                    part_lower = part.lower().strip()
+                    if part_lower in ['ctrl', 'control']:
+                        modifiers_pyd.append('ctrl')
+                    elif part_lower in ['shift']:
+                        modifiers_pyd.append('shift')
+                    elif part_lower in ['alt']:
+                        modifiers_pyd.append('alt')
+                    else:
+                        base_key_pyd = part.strip()
+                
+                if base_key_pyd:
+                    # Hold modifiers, press key, release modifiers
+                    for mod in modifiers_pyd:
+                        pydirectinput.keyDown(mod)
+                    sleep(0.01)
+                    pydirectinput.press(base_key_pyd.lower())
+                    sleep(0.01)
+                    for mod in reversed(modifiers_pyd):
+                        pydirectinput.keyUp(mod)
+                    return
+            
             pydirectinput.press(key)
     except Exception as e:
         print(f"Error sending input {key}: {e}")
@@ -316,35 +443,60 @@ def perform_mouse_click_client(hwnd, client_x, client_y):
 def perform_mouse_click_window_image(hwnd, window_x, window_y):
     """
     Click a point specified in 'window image' coordinates (same coordinate space as Calibrator.capture_window()).
-    Converts to client coords for SendMessage; falls back to pyautogui click with screen coords.
+    Converts to client coords for PostMessage (works in background/alt-tab mode).
+    Avoids pyautogui when window is in background to prevent dragging issues.
     """
     try:
-        # 1) Try client-coord click (background click)
+        # Check if window is in foreground
+        is_foreground = (win32gui.GetForegroundWindow() == hwnd)
+        
+        # 1) Try client-coord click (background click) - this should work in alt-tab mode
         client_x, client_y = window_image_to_client(hwnd, window_x, window_y)
-        debug_utils.debug_print(f"Attempting client-coord click: window_image=({window_x}, {window_y}) -> client=({client_x}, {client_y})", "InputHandler")
+        debug_utils.debug_print(f"Attempting client-coord click: window_image=({window_x}, {window_y}) -> client=({client_x}, {client_y}), foreground={is_foreground}", "InputHandler")
+        
         if perform_mouse_click_client(hwnd, client_x, client_y):
             debug_utils.debug_print("SUCCESS: Using client-coord click method (background click)", "InputHandler")
             return True
 
-        # 2) Fallback to real cursor click on screen coords
-        # IMPORTANT: Use client-to-screen conversion for accurate screen coordinates
-        debug_utils.debug_print("Client-coord click failed, falling back to pyautogui click", "InputHandler")
+        # 2) If PostMessage failed, try SendMessage as alternative (still works in background)
+        debug_utils.debug_print("PostMessage click failed, trying SendMessage as alternative", "InputHandler")
         try:
-            # Convert client coordinates to screen coordinates (more accurate than window rect)
-            screen_coords = win32gui.ClientToScreen(hwnd, (client_x, client_y))
-            screen_x, screen_y = screen_coords[0], screen_coords[1]
-            debug_utils.debug_print(f"Using pyautogui click with client-to-screen conversion: screen=({screen_x}, {screen_y}) from client=({client_x}, {client_y})", "InputHandler")
+            # Validate coordinates
+            client_rect = win32gui.GetClientRect(hwnd)
+            if 0 <= client_x < client_rect[2] and 0 <= client_y < client_rect[3]:
+                lParam = win32api.MAKELONG(int(client_x), int(client_y))
+                win32api.SendMessage(hwnd, win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, lParam)
+                sleep(0.05)
+                win32api.SendMessage(hwnd, win32con.WM_LBUTTONUP, 0, lParam)
+                debug_utils.debug_print("SUCCESS: Using SendMessage click method", "InputHandler")
+                return True
         except Exception as e:
-            # Fallback to window rect method if client-to-screen fails
-            debug_utils.debug_print_warning(f"ClientToScreen failed ({e}), using window rect method", "InputHandler")
-            window_left, window_top, _, _ = win32gui.GetWindowRect(hwnd)
-            screen_x = window_left + int(window_x)
-            screen_y = window_top + int(window_y)
-            debug_utils.debug_print(f"Using pyautogui click with window rect: screen=({screen_x}, {screen_y})", "InputHandler")
-        
-        pyautogui.click(screen_x, screen_y)
-        debug_utils.debug_print("SUCCESS: Using pyautogui click method (screen coords)", "InputHandler")
-        return True
+            debug_utils.debug_print_warning(f"SendMessage click failed: {e}", "InputHandler")
+
+        # 3) Only use pyautogui if window is in foreground (to avoid dragging in alt-tab mode)
+        if is_foreground:
+            debug_utils.debug_print("Window is in foreground, falling back to pyautogui click", "InputHandler")
+            try:
+                # Convert client coordinates to screen coordinates (more accurate than window rect)
+                screen_coords = win32gui.ClientToScreen(hwnd, (client_x, client_y))
+                screen_x, screen_y = screen_coords[0], screen_coords[1]
+                debug_utils.debug_print(f"Using pyautogui click with client-to-screen conversion: screen=({screen_x}, {screen_y}) from client=({client_x}, {client_y})", "InputHandler")
+            except Exception as e:
+                # Fallback to window rect method if client-to-screen fails
+                debug_utils.debug_print_warning(f"ClientToScreen failed ({e}), using window rect method", "InputHandler")
+                window_left, window_top, _, _ = win32gui.GetWindowRect(hwnd)
+                screen_x = window_left + int(window_x)
+                screen_y = window_top + int(window_y)
+                debug_utils.debug_print(f"Using pyautogui click with window rect: screen=({screen_x}, {screen_y})", "InputHandler")
+            
+            pyautogui.click(screen_x, screen_y)
+            debug_utils.debug_print("SUCCESS: Using pyautogui click method (screen coords)", "InputHandler")
+            return True
+        else:
+            # Window is in background - avoid pyautogui to prevent dragging
+            debug_utils.debug_print_warning("Window is in background (alt-tab mode) and PostMessage/SendMessage failed. Avoiding pyautogui to prevent dragging issues.", "InputHandler")
+            return False
+            
     except Exception as e:
         debug_utils.debug_print_error("Error in perform_mouse_click_window_image", "InputHandler", e)
         return False

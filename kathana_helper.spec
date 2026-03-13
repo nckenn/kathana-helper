@@ -95,7 +95,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name="Kathana Helper v2.1.2",
+    name="Kathana Helper v2.2.0",
     debug=False,
     strip=False,
     upx=True,

@@ -105,7 +105,8 @@ def save_settings():
             'skill_sequence_config': {str(i): {
                 'enabled': config.skill_sequence_config[i]['enabled'],
                 'image_path': convert_to_relative_path(config.skill_sequence_config[i].get('image_path')),  # Convert to relative
-                'key': config.skill_sequence_config[i].get('key', '')
+                'key': config.skill_sequence_config[i].get('key', ''),
+                'bypass': config.skill_sequence_config[i].get('bypass', False)
             } for i in range(8)}
         }
         
@@ -324,6 +325,7 @@ def load_settings():
                             image_path = convert_to_relative_path(image_path)
                         config.skill_sequence_config[idx]['image_path'] = image_path
                         config.skill_sequence_config[idx]['key'] = skill_data.get('key', '')
+                        config.skill_sequence_config[idx]['bypass'] = skill_data.get('bypass', False)
                 except (ValueError, KeyError):
                     continue
             print("Loaded skill sequence configuration")

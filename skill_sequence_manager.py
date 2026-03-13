@@ -77,12 +77,15 @@ class SkillSequenceManager:
         # Resolve relative paths and filter to valid skills
         valid_skills = []
         skill_index_map = {}  # Map resolved paths to original indices
+        bypass_list = []  # Track bypass status for each valid skill
         for i, relative_path in enumerate(skill_sequence):
             if relative_path:
                 resolved_path = config.resolve_resource_path(relative_path)
                 if resolved_path and os.path.exists(resolved_path):
                     valid_skills.append(resolved_path)
                     skill_index_map[resolved_path] = i
+                    # Get bypass status for this skill
+                    bypass_list.append(config.skill_sequence_config[i].get('bypass', False))
         
         n = len(valid_skills)
         
@@ -165,13 +168,28 @@ class SkillSequenceManager:
                 self.skill_waiting_activation = True
             else:
                 # Skill not found
-                if self.skill_waiting_activation:
-                    # Skill disappeared after activation, advance to next
-                    print(f'[SKILL-SEQUENCE] Skill {original_idx + 1} disappeared, advancing to next')
+                # Check if bypass is active for this skill
+                bypass_active = False
+                if idx < len(bypass_list):
+                    bypass_active = bypass_list[idx]
+                
+                if bypass_active:
+                    # Bypass enabled: skip to next skill immediately
+                    print(f'[SKILL-SEQUENCE] Skill {original_idx + 1} not found with bypass enabled, skipping to next.')
                     self.skill_sequence_index += 1
                     if self.skill_sequence_index >= n:
-                        print('[SKILL-SEQUENCE] Last skill executed, resetting sequence')
+                        print('[SKILL-SEQUENCE] Last skill, resetting sequence.')
                         self.skill_sequence_index = 0
                     self.skill_waiting_activation = False
+                else:
+                    # Bypass not enabled: wait for skill to disappear (existing behavior)
+                    if self.skill_waiting_activation:
+                        # Skill disappeared after activation, advance to next
+                        print(f'[SKILL-SEQUENCE] Skill {original_idx + 1} disappeared, advancing to next')
+                        self.skill_sequence_index += 1
+                        if self.skill_sequence_index >= n:
+                            print('[SKILL-SEQUENCE] Last skill executed, resetting sequence')
+                            self.skill_sequence_index = 0
+                        self.skill_waiting_activation = False
         else:
             print(f'[SKILL-SEQUENCE] Template or area invalid for skill {original_idx + 1}')

@@ -17,8 +17,8 @@ class Calibrator:
     
     def __init__(self):
         """Initialize the calibrator"""
-        self.hp_dimensions = (164, 15)  # Expected HP bar dimensions (width, height)
-        self.mp_dimensions = (164, 15)  # Expected MP bar dimensions (width, height)
+        self.hp_dimensions = (210, 15)  # Expected HP bar dimensions (width, height)
+        self.mp_dimensions = (210, 15)  # Expected MP bar dimensions (width, height)
         self.hp_position = None  # (x, y) position of HP bar
         self.mp_position = None  # (x, y) position of MP bar
         self.skills_bar1_position = None  # (x, y) position of first skill bar
@@ -148,6 +148,7 @@ class Calibrator:
         
         valid_red_bars = []
         valid_blue_bars = []
+        red_bars_without_blue = []  # Store red bars without blue for fallback
         
         # Look for red bars with expected dimensions
         for i, red_contour in enumerate(red_contours):
@@ -155,7 +156,8 @@ class Calibrator:
             print(f'[Calibration] Analyzing red contour {i}: pos=({red_x},{red_y}), dim={red_w}x{red_h}')
             
             # Check if dimensions match expected HP bar (with some tolerance)
-            if 160 <= red_w <= 168 and 12 <= red_h <= 16:
+            # New UI dimensions: 210x15
+            if 205 <= red_w <= 215 and 13 <= red_h <= 17:
                 # Look for associated blue bar (MP bar should be below HP bar)
                 has_associated_blue = False
                 associated_blue = None
@@ -164,8 +166,9 @@ class Calibrator:
                     blue_x, blue_y, blue_w, blue_h = cv2.boundingRect(blue_contour)
                     
                     # Check if blue bar has similar width and is positioned below red bar
-                    if (160 <= blue_w <= 168 and 12 <= blue_h <= 16 and 
-                        abs(blue_y - (red_y + 14)) <= 5):  # MP bar is typically ~14 pixels below HP
+                    # New UI dimensions: 210x15
+                    if (205 <= blue_w <= 215 and 13 <= blue_h <= 17 and 
+                        abs(blue_y - (red_y + 15)) <= 5):  # MP bar is typically ~15 pixels below HP
                         has_associated_blue = True
                         associated_blue = (blue_x, blue_y, blue_w, blue_h, j)
                         print(f'[Calibration] Found associated blue bar at ({blue_x}, {blue_y})')
@@ -176,11 +179,14 @@ class Calibrator:
                     valid_blue_bars.append(associated_blue)
                     print(f'[Calibration] Valid HP bar found (with associated MP bar)')
                 else:
-                    print(f'[Calibration] Red bar without blue bar - EXCLUDED (likely Kubasang)')
+                    # Store red bars without blue for potential fallback use
+                    red_bars_without_blue.append((red_x, red_y, red_w, red_h, i))
+                    print(f'[Calibration] Red bar without blue bar - stored for fallback (pos: {red_x},{red_y}, dim: {red_w}x{red_h})')
             else:
                 print(f'[Calibration] Red contour does not match HP bar dimensions')
         
         print(f'[Calibration] Valid blue bars (associated with HP): {len(valid_blue_bars)}')
+        print(f'[Calibration] Red bars without blue (fallback candidates): {len(red_bars_without_blue)}')
         
         if valid_red_bars and valid_blue_bars:
             # Use the first valid pair
@@ -198,8 +204,94 @@ class Calibrator:
             self.save_debug_image(screen_img[mp_y:mp_y + mp_h, mp_x:mp_x + mp_w], 'mp_found')
             
             return True
+        elif red_bars_without_blue:
+            # Fallback: Use red bar even without blue bar if no valid pair was found
+            # This handles cases where MP bar might not be visible or detected
+            hp_x, hp_y, hp_w, hp_h, hp_idx = red_bars_without_blue[0]
+            
+            self.hp_position = (hp_x, hp_y)
+            # Try to find any blue bar nearby as MP (even if not perfectly aligned)
+            mp_position_found = False
+            for j, blue_contour in enumerate(blue_contours):
+                blue_x, blue_y, blue_w, blue_h = cv2.boundingRect(blue_contour)
+                # More lenient check for MP bar when using fallback
+                if (200 <= blue_w <= 220 and 13 <= blue_h <= 17 and 
+                    abs(blue_x - hp_x) <= 10):  # Allow some X offset
+                    self.mp_position = (blue_x, blue_y)
+                    mp_position_found = True
+                    print(f'[Calibration] Fallback: Found nearby MP bar at ({blue_x}, {blue_y})')
+                    break
+            
+            if not mp_position_found:
+                # If no MP bar found, estimate position based on HP bar
+                estimated_mp_y = hp_y + 15
+                self.mp_position = (hp_x, estimated_mp_y)
+                print(f'[Calibration] Fallback: No MP bar found, using estimated position ({hp_x}, {estimated_mp_y})')
+            
+            print(f'[Calibration] Fallback: HP bar selected: ({hp_x}, {hp_y}) with dimensions: {hp_w}x{hp_h}')
+            print(f'[Calibration] Fallback: MP position set to: {self.mp_position}')
+            
+            # Save debug images
+            self.save_debug_image(screen_img[hp_y:hp_y + hp_h, hp_x:hp_x + hp_w], 'hp_found_fallback')
+            if mp_position_found:
+                mp_x, mp_y = self.mp_position
+                mp_w, mp_h = self.mp_dimensions
+                self.save_debug_image(screen_img[mp_y:mp_y + mp_h, mp_x:mp_x + mp_w], 'mp_found_fallback')
+            
+            return True
         else:
+            # No valid bars found - create comprehensive debug images
             print('[Calibration] No valid HP/MP bars found (with both bars associated)')
+            
+            # Create debug image showing all detected contours with labels
+            debug_img_all = screen_img.copy()
+            for i, red_contour in enumerate(red_contours):
+                red_x, red_y, red_w, red_h = cv2.boundingRect(red_contour)
+                cv2.rectangle(debug_img_all, (red_x, red_y), (red_x + red_w, red_y + red_h), (0, 0, 255), 2)
+                # Add text label
+                cv2.putText(debug_img_all, f'R{i}: {red_w}x{red_h}', 
+                           (red_x, red_y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+            
+            for j, blue_contour in enumerate(blue_contours):
+                blue_x, blue_y, blue_w, blue_h = cv2.boundingRect(blue_contour)
+                cv2.rectangle(debug_img_all, (blue_x, blue_y), (blue_x + blue_w, blue_y + blue_h), (255, 0, 0), 2)
+                # Add text label
+                cv2.putText(debug_img_all, f'B{j}: {blue_w}x{blue_h}', 
+                           (blue_x, blue_y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 0), 1)
+            
+            self.save_debug_image(debug_img_all, 'no_bars_found_all_contours')
+            
+            # Create debug image showing only contours that match dimensions but were excluded
+            debug_img_excluded = screen_img.copy()
+            excluded_count = 0
+            for i, red_contour in enumerate(red_contours):
+                red_x, red_y, red_w, red_h = cv2.boundingRect(red_contour)
+                if 205 <= red_w <= 215 and 13 <= red_h <= 17:
+                    cv2.rectangle(debug_img_excluded, (red_x, red_y), (red_x + red_w, red_y + red_h), (0, 255, 255), 3)
+                    cv2.putText(debug_img_excluded, f'EXCLUDED R{i}', 
+                               (red_x, red_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+                    excluded_count += 1
+            
+            if excluded_count > 0:
+                self.save_debug_image(debug_img_excluded, 'no_bars_found_excluded_red_bars')
+            
+            # Save a cropped region around detected red bars for closer inspection
+            if red_contours:
+                # Find bounding box of all red contours
+                all_red_x = [cv2.boundingRect(c)[0] for c in red_contours]
+                all_red_y = [cv2.boundingRect(c)[1] for c in red_contours]
+                all_red_w = [cv2.boundingRect(c)[2] for c in red_contours]
+                all_red_h = [cv2.boundingRect(c)[3] for c in red_contours]
+                
+                min_x = max(0, min(all_red_x) - 50)
+                min_y = max(0, min(all_red_y) - 50)
+                max_x = min(screen_img.shape[1], max(x + w for x, w in zip(all_red_x, all_red_w)) + 50)
+                max_y = min(screen_img.shape[0], max(y + h for y, h in zip(all_red_y, all_red_h)) + 50)
+                
+                cropped_region = screen_img[min_y:max_y, min_x:max_x]
+                if cropped_region.size > 0:
+                    self.save_debug_image(cropped_region, 'no_bars_found_red_region_cropped')
+            
             return False
     
     def find_skill_bars(self, screen_img):
@@ -583,7 +675,7 @@ class Calibrator:
             
             # Constants for enemy detection area (matching auto_attack.py)
             SEARCH_AREA_OFFSET_Y = 19  # Pixels below MP position
-            SEARCH_AREA_WIDTH = 163    # Width of search area
+            SEARCH_AREA_WIDTH = 210    # Width of search area (updated to match new UI)
             SEARCH_AREA_HEIGHT = 35    # Height of search area
             SEARCH_AREA_OFFSET_X = -1  # X offset from MP position
             NAME_AREA_HEIGHT = 18      # Height of name area
@@ -636,8 +728,8 @@ class Calibrator:
             # Look for a red bar with reasonable dimensions
             for contour in hp_contours:
                 x, y, w, h = cv2.boundingRect(contour)
-                # HP bar should be roughly 10-163 pixels wide and 6-18 pixels tall
-                if w >= 10 and w <= 163 and h >= 6 and h <= 18:
+                # HP bar should be roughly 10-210 pixels wide and 6-18 pixels tall (updated for new UI)
+                if w >= 10 and w <= 210 and h >= 6 and h <= 18:
                     hp_x = x
                     hp_y = y + NAME_AREA_HEIGHT  # Adjust Y to absolute position in search area
                     hp_w = w

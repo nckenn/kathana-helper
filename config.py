@@ -180,7 +180,8 @@ skill_sequence_config = {
     i: {
         'enabled': False,
         'image_path': None,
-        'key': ''
+        'key': '',
+        'bypass': False  # If True, skip skill if not found (not on cooldown/available)
     } for i in range(8)
 }
 

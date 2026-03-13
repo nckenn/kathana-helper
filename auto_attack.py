@@ -27,7 +27,7 @@ if config.mob_detection_lock is None:
 
 # Search area dimensions relative to MP position
 SEARCH_AREA_OFFSET_Y = 19  # Pixels below MP position
-SEARCH_AREA_WIDTH = 163    # Width of search area
+SEARCH_AREA_WIDTH = 210    # Width of search area (updated to match new UI)
 SEARCH_AREA_HEIGHT = 35    # Height of search area
 SEARCH_AREA_OFFSET_X = -1  # X offset from MP position
 
@@ -296,18 +296,31 @@ def should_target_current_mob():
     if not config.mob_target_list:
         return True
     
-    # Only attack if mob is in target list
+    # Only attack if mob is in target list - STRICT MATCHING
     detected_normalized = normalize_text(config.current_target_mob)
+    detected_words = detected_normalized.split()
+    
     for target_mob in config.mob_target_list:
         target_normalized = normalize_text(target_mob)
-        # Check for exact match or contains match
+        target_words = target_normalized.split()
+        
+        # STRICT: Only match if exact word-by-word match (same number of words, same words in order)
         if contains_complete_word(target_mob, config.current_target_mob):
             return True
-        # Also check similarity for partial matches
-        if abs(len(detected_normalized) - len(target_normalized)) <= 2:
-            similarity = calculate_similarity(detected_normalized, target_normalized)
-            if similarity >= 0.7:
-                return True
+        
+        # STRICT: Additional check - if target has more words than detected, don't match
+        # This prevents "Ananga" from matching "Ananga Dvant"
+        if len(target_words) > len(detected_words):
+            continue
+        
+        # STRICT: Only allow similarity match if lengths are very close (<= 1 char) and similarity is very high (>= 0.95)
+        # This handles minor OCR errors (e.g., "Ananga Dvanta" vs "Ananga Dvant") but prevents partial matches
+        if len(target_words) == len(detected_words):
+            length_diff = abs(len(detected_normalized) - len(target_normalized))
+            if length_diff <= 1:
+                similarity = calculate_similarity(detected_normalized, target_normalized)
+                if similarity >= 0.95:
+                    return True
     
     return False
 
@@ -583,28 +596,45 @@ class EnemyNameValidator:
     
     @staticmethod
     def match_targets(detected_name, targets):
-        """Check if detected name matches any target in the list"""
+        """Check if detected name matches any target in the list - STRICT MATCHING"""
         if not detected_name or not targets:
             return False, []
         
         detected_name_normalized = normalize_text(detected_name)
+        detected_words = detected_name_normalized.split()
         similarities = []
         
         for target in targets:
             target_normalized = normalize_text(target)
+            target_words = target_normalized.split()
+            
+            # STRICT: Exact word-by-word match
             if contains_complete_word(target, detected_name):
                 similarity = 1.0
             else:
-                if abs(len(detected_name_normalized) - len(target_normalized)) <= 2:
-                    similarity = calculate_similarity(
-                        detected_name_normalized, target_normalized
-                    ) if target_normalized else 0
+                # STRICT: If target has more words than detected, don't match
+                # This prevents "Ananga" from matching "Ananga Dvant"
+                if len(target_words) > len(detected_words):
+                    similarity = 0
+                # STRICT: Only allow similarity match if same word count, very close length (<= 1 char), and high similarity (>= 0.95)
+                elif len(target_words) == len(detected_words):
+                    length_diff = abs(len(detected_name_normalized) - len(target_normalized))
+                    if length_diff <= 1:
+                        similarity = calculate_similarity(
+                            detected_name_normalized, target_normalized
+                        ) if target_normalized else 0
+                        # Require very high similarity for strict matching
+                        if similarity < 0.95:
+                            similarity = 0
+                    else:
+                        similarity = 0
                 else:
                     similarity = 0
             similarities.append(similarity)
         
         max_similarity = max(similarities) if similarities else 0
-        return max_similarity >= TARGET_SIMILARITY_THRESHOLD, similarities
+        # Use higher threshold for strict matching
+        return max_similarity >= 0.95, similarities
 
 
 class EnemyHpProcessor:
@@ -885,12 +915,12 @@ def check_assist_key():
     if not assist_image_path or not os.path.exists(assist_image_path):
         return
     
-    # Throttle assist clicks (spam every 1 second)
+    # Throttle assist clicks (spam every 3 seconds)
     current_time = time.time()
     if not hasattr(check_assist_key, 'last_click_time'):
         check_assist_key.last_click_time = 0
     
-    if current_time - check_assist_key.last_click_time < 1.0:
+    if current_time - check_assist_key.last_click_time < 3.0:
         return
     
     try:

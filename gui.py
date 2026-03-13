@@ -914,6 +914,9 @@ class BotGUI:
                     try:
                         # Update enabled state
                         self.skill_sequence_vars[i].set(config.skill_sequence_config[i]['enabled'])
+                        # Update bypass state
+                        if hasattr(self, 'skill_sequence_bypass_vars') and i in self.skill_sequence_bypass_vars:
+                            self.skill_sequence_bypass_vars[i].set(config.skill_sequence_config[i].get('bypass', False))
                         # Load image if exists - resolve relative path
                         if config.skill_sequence_config[i].get('image_path'):
                             image_path = self.convert_to_absolute_path(config.skill_sequence_config[i]['image_path'])
@@ -971,7 +974,7 @@ class BotGUI:
         
         # Initialize root window with customtkinter
         self.root = ctk.CTk()
-        self.root.title("Kathana Helper v2.1.2")
+        self.root.title("Kathana Helper v2.2.0")
         self.root.geometry("655x800")
         self.root.resizable(True, True)
         
@@ -1605,13 +1608,15 @@ class BotGUI:
         info_text = ctk.CTkLabel(info_frame, 
                                 text="1. Click the skill image to select a skill\n"
                                      "2. Enable the checkbox to activate the skill\n"
-                                     "3. Skills execute automatically in sequence when enemy is found",
+                                     "3. Skills execute automatically in sequence when enemy is found\n"
+                                     "4. Skip if CD: If enabled, skip skill if not found (on cooldown/not available) and move to next skill",
                                 font=ctk.CTkFont(size=12),
                                 justify="left", anchor="w")
         info_text.grid(row=1, column=0, sticky="w", padx=10, pady=(0, 10))
         
         # Initialize skill sequence variables
         self.skill_sequence_vars = {}
+        self.skill_sequence_bypass_vars = {}
         self.skill_sequence_canvases = []
         self.skill_sequence_state = []
         
@@ -1631,7 +1636,7 @@ class BotGUI:
             padx_left = 10 if col == 0 else 5
             padx_right = 5 if col == 0 else 10
             skill_slot_frame.grid(row=row, column=col, sticky="ew", padx=(padx_left, padx_right), pady=3)
-            skill_slot_frame.columnconfigure(3, weight=1)
+            skill_slot_frame.columnconfigure(3, weight=1)  # Make column 3 expandable to push bypass to right
             
             # Enable checkbox (no text, just the box)
             self.skill_sequence_vars[i] = tk.BooleanVar(value=config.skill_sequence_config[i]['enabled'])
@@ -1653,6 +1658,14 @@ class BotGUI:
             canvas.bind('<Button-1>', lambda e, idx=i: self.show_skill_sequence_selector(idx))
             canvas.bind('<Button-3>', lambda e, idx=i: self.clear_skill_sequence_skill(idx))
             self.skill_sequence_canvases.append(canvas)
+            
+            # Skip if unavailable checkbox (skip skill if not found/on cooldown) - rightmost position
+            self.skill_sequence_bypass_vars[i] = tk.BooleanVar(value=config.skill_sequence_config[i].get('bypass', False))
+            bypass_checkbox = ctk.CTkCheckBox(skill_slot_frame, text="Skip if CD", 
+                                             variable=self.skill_sequence_bypass_vars[i],
+                                             command=lambda idx=i: self.update_skill_sequence_bypass(idx),
+                                             font=ctk.CTkFont(size=10), width=80)
+            bypass_checkbox.grid(row=0, column=3, padx=(5, 8), pady=6, sticky="e")
             
             # Initialize skill sequence state
             self.skill_sequence_state.append({
@@ -2785,6 +2798,13 @@ class BotGUI:
         status = "enabled" if config.skill_sequence_config[idx]['enabled'] else "disabled"
         print(f"Skill Sequence {idx + 1} {status}")
     
+    def update_skill_sequence_bypass(self, idx):
+        """Update skill sequence bypass status"""
+        if hasattr(self, 'skill_sequence_bypass_vars') and idx in self.skill_sequence_bypass_vars:
+            config.skill_sequence_config[idx]['bypass'] = self.skill_sequence_bypass_vars[idx].get()
+            status = "enabled" if config.skill_sequence_config[idx]['bypass'] else "disabled"
+            print(f"Skill Sequence {idx + 1} bypass {status}")
+    
     def configure_hp_thresholds(self):
         """Open dialog to configure multiple HP thresholds"""
         dialog = ctk.CTkToplevel(self.root)
@@ -2964,14 +2984,59 @@ class BotGUI:
         def on_key_press(event):
             key = event.keysym.upper()
             
+            # Check for modifier keys
+            modifiers = []
+            state = event.state
+            keysym = event.keysym.upper()
+            
+            # Check state bits for modifiers
+            if state & 0x0004:  # Control key
+                modifiers.append('Ctrl')
+            if state & 0x0001:  # Shift key
+                modifiers.append('Shift')
+            # Check for Alt key - can be in state or keysym
+            if state & 0x20000 or keysym in ['ALT_L', 'ALT_R', 'META']:  # Alt key
+                if 'Alt' not in modifiers:
+                    modifiers.append('Alt')
+            
+            # Check if it's a number key (0-9)
+            if key in ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']:
+                if modifiers:
+                    # Combine modifier with number (e.g., "Ctrl+1", "Shift+2")
+                    combined_key = '+'.join(modifiers) + '+' + key
+                    key_var.set(combined_key)
+                    print(f"Key registered: {combined_key}")
+                    popup.destroy()
+                    return
+                else:
+                    # Just the number key
+                    key_var.set(key)
+                    print(f"Key registered: {key}")
+                    popup.destroy()
+                    return
+            
+            # Handle single character keys (letters, etc.)
             if len(key) == 1:
-                key_var.set(key)
-                print(f"Key registered: {key}")
-                popup.destroy()
+                if modifiers:
+                    # Combine modifier with key
+                    combined_key = '+'.join(modifiers) + '+' + key
+                    key_var.set(combined_key)
+                    print(f"Key registered: {combined_key}")
+                    popup.destroy()
+                else:
+                    key_var.set(key)
+                    print(f"Key registered: {key}")
+                    popup.destroy()
             elif key in ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12']:
-                key_var.set(key)
-                print(f"Key registered: {key}")
-                popup.destroy()
+                if modifiers:
+                    combined_key = '+'.join(modifiers) + '+' + key
+                    key_var.set(combined_key)
+                    print(f"Key registered: {combined_key}")
+                    popup.destroy()
+                else:
+                    key_var.set(key)
+                    print(f"Key registered: {key}")
+                    popup.destroy()
             elif key in ['SPACE', 'TAB', 'RETURN', 'ESCAPE']:
                 key_map = {
                     'SPACE': 'SPACE',
@@ -2980,9 +3045,15 @@ class BotGUI:
                     'ESCAPE': 'ESC'
                 }
                 mapped_key = key_map.get(key, key)
-                key_var.set(mapped_key)
-                print(f"Key registered: {mapped_key}")
-                popup.destroy()
+                if modifiers:
+                    combined_key = '+'.join(modifiers) + '+' + mapped_key
+                    key_var.set(combined_key)
+                    print(f"Key registered: {combined_key}")
+                    popup.destroy()
+                else:
+                    key_var.set(mapped_key)
+                    print(f"Key registered: {mapped_key}")
+                    popup.destroy()
         
         popup.bind('<Key>', on_key_press)
         popup.focus_set()
@@ -3009,16 +3080,65 @@ class BotGUI:
         def on_key_press(event):
             key = event.keysym.upper()
             
+            # Check for modifier keys
+            modifiers = []
+            state = event.state
+            keysym = event.keysym.upper()
+            
+            # Check state bits for modifiers
+            if state & 0x0004:  # Control key
+                modifiers.append('Ctrl')
+            if state & 0x0001:  # Shift key
+                modifiers.append('Shift')
+            # Check for Alt key - can be in state or keysym
+            if state & 0x20000 or keysym in ['ALT_L', 'ALT_R', 'META']:  # Alt key
+                if 'Alt' not in modifiers:
+                    modifiers.append('Alt')
+            
+            # Check if it's a number key (0-9)
+            if key in ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']:
+                if modifiers:
+                    # Combine modifier with number (e.g., "Ctrl+1", "Shift+2")
+                    combined_key = '+'.join(modifiers) + '+' + key
+                    self.mp_key_var.set(combined_key)
+                    config.mp_key = combined_key.lower()
+                    print(f"MP key registered: {combined_key}")
+                    popup.destroy()
+                    return
+                else:
+                    # Just the number key
+                    self.mp_key_var.set(key)
+                    config.mp_key = key.lower()
+                    print(f"MP key registered: {key}")
+                    popup.destroy()
+                    return
+            
+            # Handle single character keys (letters, etc.)
             if len(key) == 1:
-                self.mp_key_var.set(key)
-                config.mp_key = key.lower()
-                print(f"MP key registered: {key}")
-                popup.destroy()
+                if modifiers:
+                    # Combine modifier with key
+                    combined_key = '+'.join(modifiers) + '+' + key
+                    self.mp_key_var.set(combined_key)
+                    config.mp_key = combined_key.lower()
+                    print(f"MP key registered: {combined_key}")
+                    popup.destroy()
+                else:
+                    self.mp_key_var.set(key)
+                    config.mp_key = key.lower()
+                    print(f"MP key registered: {key}")
+                    popup.destroy()
             elif key in ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12']:
-                self.mp_key_var.set(key)
-                config.mp_key = key.lower()
-                print(f"MP key registered: {key}")
-                popup.destroy()
+                if modifiers:
+                    combined_key = '+'.join(modifiers) + '+' + key
+                    self.mp_key_var.set(combined_key)
+                    config.mp_key = combined_key.lower()
+                    print(f"MP key registered: {combined_key}")
+                    popup.destroy()
+                else:
+                    self.mp_key_var.set(key)
+                    config.mp_key = key.lower()
+                    print(f"MP key registered: {key}")
+                    popup.destroy()
             elif key in ['SPACE', 'TAB', 'RETURN', 'ESCAPE']:
                 key_map = {
                     'SPACE': 'SPACE',
@@ -3027,10 +3147,17 @@ class BotGUI:
                     'ESCAPE': 'ESC'
                 }
                 mapped_key = key_map.get(key, key)
-                self.mp_key_var.set(mapped_key)
-                config.mp_key = mapped_key.lower()
-                print(f"MP key registered: {mapped_key}")
-                popup.destroy()
+                if modifiers:
+                    combined_key = '+'.join(modifiers) + '+' + mapped_key
+                    self.mp_key_var.set(combined_key)
+                    config.mp_key = combined_key.lower()
+                    print(f"MP key registered: {combined_key}")
+                    popup.destroy()
+                else:
+                    self.mp_key_var.set(mapped_key)
+                    config.mp_key = mapped_key.lower()
+                    print(f"MP key registered: {mapped_key}")
+                    popup.destroy()
         
         popup.bind('<Key>', on_key_press)
         popup.focus_set()
@@ -4561,7 +4688,7 @@ class BotGUI:
         
         # Create new window for minimized view
         self.minimized_window = ctk.CTkToplevel(self.root)
-        self.minimized_window.title("Kathana Helper v2.1.2")
+        self.minimized_window.title("Kathana Helper v2.2.0")
         
         # Position minimized window at the same location as main window
         if self.saved_window_position:
