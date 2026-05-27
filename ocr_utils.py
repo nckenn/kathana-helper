@@ -115,7 +115,7 @@ def check_ocr_availability():
         if not _get_easyocr_local_model_dir():
             _apply_ssl_cert_workaround()
         # Try GPU first if enabled
-        if config.ocr_use_gpu:
+        if config.get_effective_ocr_use_gpu():
             try:
                 reader_kwargs = _build_easyocr_reader_kwargs()
                 try:
@@ -277,7 +277,7 @@ def initialize_ocr_reader():
         print("Initializing EasyOCR (this may take a moment)...")
         
         # Try GPU first if enabled
-        if config.ocr_use_gpu:
+        if config.get_effective_ocr_use_gpu():
             try:
                 reader_kwargs = _build_easyocr_reader_kwargs()
                 try:
@@ -303,6 +303,58 @@ def initialize_ocr_reader():
             print(f"Error initializing EasyOCR: {e}")
             return False
     return True
+
+
+def _parse_ocr_results(results, debug_prefix="[System Message]"):
+    """Parse EasyOCR readtext results into standard dict format."""
+    if not results:
+        return None
+    text_lines = []
+    for result in results:
+        if len(result) >= 2:
+            text = result[1].strip()
+            if text:
+                text_lines.append(text)
+    if not text_lines:
+        return None
+    full_text = '\n'.join(text_lines)
+    space_separated = ' '.join(text_lines)
+    current_time = time.time()
+    if not hasattr(_parse_ocr_results, 'last_debug_time'):
+        _parse_ocr_results.last_debug_time = {}
+    if debug_prefix not in _parse_ocr_results.last_debug_time:
+        _parse_ocr_results.last_debug_time[debug_prefix] = 0
+    if current_time - _parse_ocr_results.last_debug_time[debug_prefix] > 5.0:
+        print(f"{debug_prefix} OCR read ({len(text_lines)} lines):")
+        for i, line in enumerate(text_lines):
+            print(f"  [{i}] {line}")
+        _parse_ocr_results.last_debug_time[debug_prefix] = current_time
+    return {'lines': text_lines, 'full': full_text, 'space': space_separated}
+
+
+def read_system_message_ocr_from_image(img_array, debug_prefix="[System Message]"):
+    """Run OCR on a pre-captured warning/message region image."""
+    if img_array is None or not initialize_ocr_reader():
+        return None
+    try:
+        img_array = _downscale_for_ocr(img_array)
+        results = config.ocr_reader.readtext(
+            img_array,
+            detail=1,
+            paragraph=False,
+            batch_size=1,
+        )
+        return _parse_ocr_results(results, debug_prefix=debug_prefix)
+    except Exception as e:
+        current_time = time.time()
+        if not hasattr(read_system_message_ocr_from_image, 'last_error_time'):
+            read_system_message_ocr_from_image.last_error_time = {}
+        if debug_prefix not in read_system_message_ocr_from_image.last_error_time:
+            read_system_message_ocr_from_image.last_error_time[debug_prefix] = 0
+        if current_time - read_system_message_ocr_from_image.last_error_time[debug_prefix] > 10.0:
+            print(f"{debug_prefix} Error reading system message from image: {e}")
+            read_system_message_ocr_from_image.last_error_time[debug_prefix] = current_time
+        return None
 
 
 def read_system_message_ocr(debug_prefix="[System Message]"):
@@ -358,40 +410,7 @@ def read_system_message_ocr(debug_prefix="[System Message]"):
                 return None
         
         img_array = np.array(img)
-        img_array = _downscale_for_ocr(img_array)
-        results = config.ocr_reader.readtext(
-            img_array,
-            detail=1,
-            paragraph=False,
-            batch_size=1,
-        )
-        
-        if results and len(results) > 0:
-            text_lines = []
-            for result in results:
-                if len(result) >= 2:
-                    text = result[1].strip()
-                    if text:
-                        text_lines.append(text)
-            
-            if text_lines:
-                full_text = '\n'.join(text_lines)
-                space_separated = ' '.join(text_lines)
-                
-                current_time = time.time()
-                if not hasattr(read_system_message_ocr, 'last_debug_time'):
-                    read_system_message_ocr.last_debug_time = {}
-                if debug_prefix not in read_system_message_ocr.last_debug_time:
-                    read_system_message_ocr.last_debug_time[debug_prefix] = 0
-                if current_time - read_system_message_ocr.last_debug_time[debug_prefix] > 5.0:
-                    print(f"{debug_prefix} OCR read ({len(text_lines)} lines):")
-                    for i, line in enumerate(text_lines):
-                        print(f"  [{i}] {line}")
-                    read_system_message_ocr.last_debug_time[debug_prefix] = current_time
-                
-                return {'lines': text_lines, 'full': full_text, 'space': space_separated}
-        
-        return None
+        return read_system_message_ocr_from_image(img_array, debug_prefix=debug_prefix)
             
     except Exception as e:
         current_time = time.time()

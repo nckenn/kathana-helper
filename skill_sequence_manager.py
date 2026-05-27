@@ -48,21 +48,23 @@ class SkillSequenceManager:
     
     def execute_skill_sequence(self, hwnd, screen, area_skills, enemy_found, run_active=True):
         """
-        Execute skill sequence:
-        - Cycles through enabled skills in sequence
-        - Checks if skill is present in area_skills (template matching > 0.7)
-        - If skill found, activate it by clicking its location in the captured window image
-        - If skill disappears (was waiting_activation), advance to next skill
-        - Resets sequence when new enemy is detected or enemy is lost
+        Execute skill sequence via template matching on the skill bar (all modes).
+        Assist mode only changes how the assist button is triggered, not skills.
         """
         if not run_active:
             return
-        
+
         if not CV2_AVAILABLE:
             return
         
         # Check if area_skills is available (should be tuple (x1, y1, x2, y2))
         if not area_skills or not isinstance(area_skills, (tuple, list)) or len(area_skills) != 4:
+            return
+
+        if screen is None and config.calibrator:
+            import frame_cache
+            screen = frame_cache.get_frame(hwnd, config.calibrator)
+        if screen is None:
             return
         
         # Build skill_sequence list from config (paths should be relative)
@@ -126,7 +128,10 @@ class SkillSequenceManager:
         
         # Extract area from screen (area_skills is in "window image" coordinates)
         x1, y1, x2, y2 = area_skills
-        area = screen[y1:y2, x1:x2]
+        import frame_cache
+        area = frame_cache.crop_rect(screen, x1, y1, x2, y2, frame_cache.get_origin())
+        if area is None or area.size == 0:
+            return
         
         # Get current skill index
         idx = self.skill_sequence_index % n

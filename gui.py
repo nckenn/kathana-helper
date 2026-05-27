@@ -808,6 +808,8 @@ class BotGUI:
             if hasattr(self, 'auto_repair_var'):
                 self.auto_repair_var.set(config.auto_repair_enabled)
                 print(f"  Applied auto repair: enabled={config.auto_repair_enabled}")
+            if hasattr(self, 'repair_key_var'):
+                self.repair_key_var.set(config.repair_key)
             # Apply Auto Change Target settings
             if hasattr(self, 'auto_change_target_var'):
                 self.auto_change_target_var.set(config.auto_change_target_enabled)
@@ -825,9 +827,11 @@ class BotGUI:
             if hasattr(self, 'assist_only_var'):
                 self.assist_only_var.set(config.assist_only_enabled)
                 print(f"  Applied assist only: enabled={config.assist_only_enabled}")
-                # If assist_only is enabled, disable dependent features
                 if config.assist_only_enabled:
                     self._set_assist_only_dependent_widgets_state('disabled')
+            if hasattr(self, 'assist_key_var'):
+                self.assist_key_var.set(config.assist_key)
+            # Low CPU mode is always enabled (no UI var)
             
             # Apply HP settings
             self.auto_hp_var.set(config.auto_hp_enabled)
@@ -974,7 +978,7 @@ class BotGUI:
         
         # Initialize root window with customtkinter
         self.root = ctk.CTk()
-        self.root.title("Kathana Helper v2.2.0")
+        self.root.title("Kathana Helper v2.2.1")
         self.root.geometry("655x800")
         self.root.resizable(True, True)
         
@@ -1002,6 +1006,7 @@ class BotGUI:
         # Track minimized state
         self.is_minimized = False
         self.minimized_window = None
+        self.minimized_toggle_bot_button = None
         self.saved_window_position = None  # Store window position when minimizing
         
         # Track last active tab in skill selector
@@ -1020,8 +1025,8 @@ class BotGUI:
         # Preload all skill images in background (non-blocking)
         self.root.after(100, self._preload_skill_images)
         
-        # Initialize debug system with callback
-        debug_utils.set_debug_enabled(debug_utils.get_debug_enabled(), callback=self.add_debug_message)
+        # Initialize debug system (disabled — no debug UI button)
+        debug_utils.set_debug_enabled(False, callback=None)
         
         # Configure root window grid to allow resizing
         self.root.columnconfigure(0, weight=1)
@@ -1315,29 +1320,7 @@ class BotGUI:
         settings_frame.rowconfigure(3, weight=0)
         settings_frame.rowconfigure(4, weight=0)
         
-        # Debug Tools frame (at the top)
-        debug_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        debug_frame.grid(row=0, column=0, columnspan=2, sticky="ew", padx=15, pady=(10, 5))
-        
-        debug_label = ctk.CTkLabel(debug_frame, text="Debug Tools:", font=ctk.CTkFont(size=12, weight="bold"))
-        debug_label.grid(row=0, column=0, sticky="w", padx=(0, 10))
-        
-        self.debug_var = tk.BooleanVar(value=debug_utils.get_debug_enabled())
-        self.debug_button = ctk.CTkButton(
-            debug_frame,
-            text="Debug Mode: OFF",
-            command=self.toggle_debug_mode,
-            width=150,
-            height=28,
-            corner_radius=6,
-            fg_color=("gray70", "gray30") if not self.debug_var.get() else ("#3b8ed0", "#1f6aa5")
-        )
-        self.debug_button.grid(row=0, column=1, sticky="w", padx=(0, 10))
-        create_tooltip(self.debug_button, "Enable/disable debug mode. When enabled, all debug messages from all modules will be displayed in a debug window. Useful for troubleshooting issues on different laptops/units.")
-        
-        # Update button text based on initial state
-        if self.debug_var.get():
-            self.debug_button.configure(text="Debug Mode: ON", fg_color=("green", "darkgreen"))
+        # Low CPU mode is always enabled (no UI toggle)
         
         # Column 0: Auto Attack, Auto Loot, Auto Repair
         # Auto Attack frame
@@ -1387,7 +1370,30 @@ class BotGUI:
                                          command=self.update_auto_repair,
                                          font=ctk.CTkFont(size=11))
         auto_repair_checkbox.grid(row=0, column=0, sticky="w", pady=5)
-        create_tooltip(auto_repair_checkbox, "Automatically repairs items when 'is about to break' warning appears. Requires system message area calibration and OCR. Check interval is fixed at 3 seconds for optimal performance.")
+        create_tooltip(
+            auto_repair_checkbox,
+            "Detects light-green 'is about to break' warning text in the calibrated system message "
+            "region (checked every 300ms) and presses the repair hotkey.",
+        )
+
+        # (No label) Repair key button
+        self.repair_key_var = tk.StringVar(value=config.repair_key)
+        def update_repair_key_button_text(var=self.repair_key_var, btn=None):
+            key = var.get().upper() if var.get() else "Set"
+            if btn:
+                btn.configure(text=key)
+        repair_key_button = ctk.CTkButton(
+            auto_repair_frame, width=60, height=28,
+            command=self.register_repair_key,
+            font=ctk.CTkFont(size=11))
+        repair_key_button.grid(row=0, column=2, padx=(0, 0), pady=5)
+        update_repair_key_button_text(btn=repair_key_button)
+        self.repair_key_var.trace_add('write', lambda *args: update_repair_key_button_text(btn=repair_key_button))
+        repair_key_button.bind('<Button-3>', lambda e: self.clear_repair_key())
+        create_tooltip(
+            repair_key_button,
+            "Hotkey bound to Nakudo Hammer of Zosimo (or repair skill). Click to register, right-click to clear.",
+        )
         
         # Mage frame
         mage_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
@@ -1413,7 +1419,27 @@ class BotGUI:
                                          command=self.update_assist_only,
                                          font=ctk.CTkFont(size=11))
         self.assist_only_checkbox.grid(row=0, column=0, sticky="w", pady=5)
-        create_tooltip(self.assist_only_checkbox, "Enable assist mode: Party leader determines target. Bot only attacks when enemy HP decreases (indicating leader has started attacking). Disables Auto Attack, Mob Filter, and Auto Unstuck.")
+        create_tooltip(
+            self.assist_only_checkbox,
+            "Assist mode: party leader picks targets. Only the assist button uses a hotkey "
+            "instead of searching assist.bmp on the skill bar. Buffs and skills still use images.",
+        )
+
+        # (No label) Assist key button
+        self.assist_key_var = tk.StringVar(value=config.assist_key)
+        def update_assist_key_button_text(var=self.assist_key_var, btn=None):
+            key = var.get().upper() if var.get() else "Set"
+            if btn:
+                btn.configure(text=key)
+        assist_key_button = ctk.CTkButton(
+            assist_only_frame, width=60, height=28,
+            command=self.register_assist_key,
+            font=ctk.CTkFont(size=11))
+        assist_key_button.grid(row=0, column=2, padx=(0, 0), pady=5)
+        update_assist_key_button_text(btn=assist_key_button)
+        self.assist_key_var.trace_add('write', lambda *args: update_assist_key_button_text(btn=assist_key_button))
+        assist_key_button.bind('<Button-3>', lambda e: self.clear_assist_key())
+        create_tooltip(assist_key_button, "Hotkey for party assist. Click to register, right-click to clear.")
         
         # If assist_only is enabled on startup, disable dependent features
         if config.assist_only_enabled:
@@ -1528,7 +1554,7 @@ class BotGUI:
         unstuck_timeout_entry.bind('<FocusOut>', lambda event: self.update_unstuck_timeout())
         unstuck_seconds_label = ctk.CTkLabel(auto_change_target_frame, text="s", font=ctk.CTkFont(size=11))
         unstuck_seconds_label.grid(row=0, column=2, sticky="w")
-        create_tooltip(unstuck_timeout_entry, "Input: Unstuck timeout in seconds. Time to wait before considering enemy HP stagnant (stuck). If enemy HP doesn't decrease for this duration, bot will switch targets. Lower values = faster target switching. Default: 8 seconds.")
+        create_tooltip(unstuck_timeout_entry, "Input: Unstuck timeout in seconds. Time to wait before considering enemy HP stagnant (stuck). Slow boss chip damage still resets the countdown. Lower values switch targets sooner. Default: 8 seconds.")
         
         # Configure options frame rows for proper visibility
         settings_frame.rowconfigure(1, weight=0)
@@ -1537,11 +1563,11 @@ class BotGUI:
         settings_frame.rowconfigure(4, weight=0)
         settings_frame.rowconfigure(5, weight=0)
         
-        # Add Mob Filter to Settings tab (moved to row 6 to avoid overlap with Assist Only)
         mob_separator = ctk.CTkFrame(settings_frame, height=1, fg_color="gray50")
+        mob_separator.grid(row=6, column=0, columnspan=2, sticky="ew", padx=15, pady=(4, 0))
         
         mob_label = ctk.CTkLabel(settings_frame, text="Mob Filter", font=ctk.CTkFont(size=12, weight="bold"))
-        mob_label.grid(row=6, column=0, columnspan=2, sticky="w", padx=15, pady=(10, 5))
+        mob_label.grid(row=7, column=0, columnspan=2, sticky="w", padx=15, pady=(10, 5))
         
         # Mob detection checkbox
         self.mob_detection_var = tk.BooleanVar()
@@ -1549,17 +1575,17 @@ class BotGUI:
                                      variable=self.mob_detection_var,
                                      command=self.update_mob_detection,
                                      font=ctk.CTkFont(size=11))
-        self.mob_checkbox.grid(row=7, column=0, columnspan=2, sticky="w", padx=15, pady=(0, 5))
+        self.mob_checkbox.grid(row=8, column=0, columnspan=2, sticky="w", padx=15, pady=(0, 5))
         create_tooltip(self.mob_checkbox, "Enable mob filtering. Bot will only attack mobs in the target list. Uses OCR to read enemy names. Requires calibration.")
         
         # Target list
-        ctk.CTkLabel(settings_frame, text="Target List (one per line, only attack mobs in this list):", font=ctk.CTkFont(size=11)).grid(row=8, column=0, columnspan=2, sticky="w", padx=15, pady=(5, 5))
+        ctk.CTkLabel(settings_frame, text="Target List (one per line, only attack mobs in this list):", font=ctk.CTkFont(size=11)).grid(row=9, column=0, columnspan=2, sticky="w", padx=15, pady=(5, 5))
         self.target_list_text = ctk.CTkTextbox(settings_frame, height=150, width=400, font=ctk.CTkFont(size=11))
-        self.target_list_text.grid(row=9, column=0, columnspan=2, sticky="ew", padx=15, pady=(0, 5))
+        self.target_list_text.grid(row=10, column=0, columnspan=2, sticky="ew", padx=15, pady=(0, 5))
         
         # Mob filter buttons
         mob_btn_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        mob_btn_frame.grid(row=10, column=0, columnspan=2, sticky="ew", padx=15, pady=(10, 15))
+        mob_btn_frame.grid(row=11, column=0, columnspan=2, sticky="ew", padx=15, pady=(10, 15))
         
         update_btn = ctk.CTkButton(mob_btn_frame, text="Update List", command=self.update_target_list, width=100, corner_radius=6)
         update_btn.grid(row=0, column=0, padx=(0, 10))
@@ -1574,10 +1600,7 @@ class BotGUI:
         self.record_target_btn.grid(row=0, column=2)
         create_tooltip(self.record_target_btn, "Records the currently targeted enemy name and adds it to the mob target list. Requires calibration and an active target.")
         
-        
-        settings_frame.columnconfigure(0, weight=1)
-        settings_frame.columnconfigure(1, weight=1)
-        settings_frame.rowconfigure(9, weight=0)
+        settings_frame.rowconfigure(13, weight=0)
         
         # Hidden variables for mob detection (only used internally)
         self.mob_coords_var = tk.StringVar(value=f"{config.target_name_area['x']},{config.target_name_area['y']}")
@@ -2037,6 +2060,8 @@ class BotGUI:
     
     def on_window_change(self, *args):
         """Called when window selection changes - reset connection"""
+        import frame_cache
+        frame_cache.invalidate()
         if config.connected_window:
             config.connected_window = None
             self.connect_button.configure(text="Connect", state="normal")
@@ -2053,6 +2078,8 @@ class BotGUI:
             print("Please select a valid window")
             return
         
+        import frame_cache
+        frame_cache.invalidate()
         # Disconnect if already connected
         if config.connected_window:
             config.connected_window = None
@@ -2204,23 +2231,29 @@ class BotGUI:
             self.stop_bot()
     
     def toggle_debug_mode(self):
-        """Toggle global debug mode on/off"""
+        """Toggle global debug mode on/off (internal; no UI button)."""
         current_state = debug_utils.get_debug_enabled()
         new_state = debug_utils.set_debug_enabled(not current_state, callback=self.add_debug_message)
-        self.debug_var.set(new_state)
-        
+        if hasattr(self, 'debug_var'):
+            self.debug_var.set(new_state)
         if new_state:
-            self.debug_button.configure(text="Debug Mode: ON", fg_color=("green", "darkgreen"))
+            if hasattr(self, 'debug_button'):
+                self.debug_button.configure(text="Debug Mode: ON", fg_color=("green", "darkgreen"))
             self.show_debug_window()
             debug_utils.debug_print("Debug mode ENABLED - all debug messages will be shown here", "DebugSystem")
         else:
-            self.debug_button.configure(text="Debug Mode: OFF", fg_color=("gray70", "gray30"))
+            if hasattr(self, 'debug_button'):
+                self.debug_button.configure(text="Debug Mode: OFF", fg_color=("gray70", "gray30"))
             if hasattr(self, 'debug_window') and self.debug_window:
                 try:
                     self.debug_window.destroy()
                 except:
                     pass
                 self.debug_window = None
+
+    def update_low_cpu_mode(self):
+        """Deprecated: Low CPU mode is always enabled."""
+        config.low_cpu_mode = True
     
     def show_debug_window(self):
         """Show or create the debug window"""
@@ -2332,8 +2365,10 @@ class BotGUI:
             self.debug_window = None
         # Disable debug mode
         debug_utils.set_debug_enabled(False, callback=None)
-        self.debug_var.set(False)
-        self.debug_button.configure(text="Debug Mode: OFF", fg_color=("gray70", "gray30"))
+        if hasattr(self, 'debug_var'):
+            self.debug_var.set(False)
+        if hasattr(self, 'debug_button'):
+            self.debug_button.configure(text="Debug Mode: OFF", fg_color=("gray70", "gray30"))
     
     def start_bot(self):
         if not config.bot_running:
@@ -2341,7 +2376,7 @@ class BotGUI:
             if not config.connected_window:
                 print("Please connect to a window first")
                 return
-                
+            
             # Reset all bot state for clean start
             bot_logic.reset_bot_state()
                 
@@ -2351,8 +2386,7 @@ class BotGUI:
             config.bot_thread = threading.Thread(target=bot_logic.bot_loop, daemon=True)
             config.bot_thread.start()
             
-            # Update button to show Stop state
-            self.toggle_bot_button.configure(text="Stop", command=self.toggle_bot, fg_color="red", hover_color="darkred")
+            self.update_toggle_bot_button_state()
             self.status_label.configure(text="Status: Running")
             
             # Start periodic status updates
@@ -2366,8 +2400,7 @@ class BotGUI:
         # Reset all bot state for clean stop
         bot_logic.reset_bot_state()
         
-        # Update button to show Start state
-        self.toggle_bot_button.configure(text="Start", command=self.toggle_bot, fg_color="green", hover_color="darkgreen")
+        self.update_toggle_bot_button_state()
         self.status_label.configure(text="Status: Stopped")
         # Keep connection status - don't reset to "Not Connected"
     
@@ -3170,6 +3203,108 @@ class BotGUI:
         self.mp_key_var.set('')
         config.mp_key = '9'  # Reset to default
         print("MP key cleared, reset to default: 9")
+
+    def register_repair_key(self):
+        """Register a key for auto repair by capturing keyboard input"""
+        popup = ctk.CTkToplevel(self.root)
+        popup.title("Press a key")
+        popup.geometry("300x150")
+        popup.transient(self.root)
+        popup.grab_set()
+        root_x = self.root.winfo_x()
+        root_y = self.root.winfo_y()
+        popup.geometry(f'+{root_x + 50}+{root_y + 50}')
+        label = ctk.CTkLabel(popup, text="Press repair hotkey...", font=ctk.CTkFont(size=12))
+        label.pack(pady=30)
+
+        def on_key_press(event):
+            key = event.keysym.upper()
+            modifiers = []
+            state = event.state
+            keysym = event.keysym.upper()
+            if state & 0x0004:
+                modifiers.append('Ctrl')
+            if state & 0x0001:
+                modifiers.append('Shift')
+            if state & 0x20000 or keysym in ['ALT_L', 'ALT_R', 'META']:
+                if 'Alt' not in modifiers:
+                    modifiers.append('Alt')
+
+            def set_key(value):
+                self.repair_key_var.set(value)
+                config.repair_key = value.lower()
+                print(f"Repair key registered: {value}")
+                popup.destroy()
+
+            if key in [str(i) for i in range(10)] or len(key) == 1:
+                set_key('+'.join(modifiers + [key]) if modifiers else key)
+            elif key in [f'F{i}' for i in range(1, 13)]:
+                set_key('+'.join(modifiers + [key]) if modifiers else key)
+            elif key in ['SPACE', 'TAB', 'RETURN', 'ESCAPE']:
+                key_map = {'SPACE': 'SPACE', 'TAB': 'TAB', 'RETURN': 'ENTER', 'ESCAPE': 'ESC'}
+                mapped = key_map.get(key, key)
+                set_key('+'.join(modifiers + [mapped]) if modifiers else mapped)
+
+        popup.bind('<Key>', on_key_press)
+        popup.focus_set()
+        ctk.CTkButton(popup, text="Cancel", command=popup.destroy, width=100).pack(pady=10)
+
+    def clear_repair_key(self):
+        """Clear repair key"""
+        self.repair_key_var.set('F10')
+        config.repair_key = 'f10'
+        print("Repair key reset to default: F10")
+
+    def register_assist_key(self):
+        """Register hotkey for party assist (assist mode)."""
+        popup = ctk.CTkToplevel(self.root)
+        popup.title("Press a key")
+        popup.geometry("300x150")
+        popup.transient(self.root)
+        popup.grab_set()
+        root_x = self.root.winfo_x()
+        root_y = self.root.winfo_y()
+        popup.geometry(f'+{root_x + 50}+{root_y + 50}')
+        label = ctk.CTkLabel(popup, text="Press assist hotkey...", font=ctk.CTkFont(size=12))
+        label.pack(pady=30)
+
+        def on_key_press(event):
+            key = event.keysym.upper()
+            modifiers = []
+            state = event.state
+            keysym = event.keysym.upper()
+            if state & 0x0004:
+                modifiers.append('Ctrl')
+            if state & 0x0001:
+                modifiers.append('Shift')
+            if state & 0x20000 or keysym in ['ALT_L', 'ALT_R', 'META']:
+                if 'Alt' not in modifiers:
+                    modifiers.append('Alt')
+
+            def set_key(value):
+                self.assist_key_var.set(value)
+                config.assist_key = value.lower()
+                print(f"Assist key registered: {value}")
+                popup.destroy()
+
+            if key in [str(i) for i in range(10)] or len(key) == 1:
+                set_key('+'.join(modifiers + [key]) if modifiers else key)
+            elif key in [f'F{i}' for i in range(1, 13)]:
+                set_key('+'.join(modifiers + [key]) if modifiers else key)
+            elif key in ['SPACE', 'TAB', 'RETURN', 'ESCAPE']:
+                key_map = {'SPACE': 'SPACE', 'TAB': 'TAB', 'RETURN': 'ENTER', 'ESCAPE': 'ESC'}
+                mapped = key_map.get(key, key)
+                set_key('+'.join(modifiers + [mapped]) if modifiers else mapped)
+
+        popup.bind('<Key>', on_key_press)
+        popup.focus_set()
+        ctk.CTkButton(popup, text="Cancel", command=popup.destroy, width=100).pack(pady=10)
+
+    def clear_assist_key(self):
+        """Clear assist key"""
+        self.assist_key_var.set('')
+        config.assist_key = ''
+        print("Assist key cleared")
     
     def send_key(self, key_input):
         """Send a key input (used by BuffsManager)"""
@@ -3264,6 +3399,8 @@ class BotGUI:
     
     def update_assist_only(self):
         """Update assist only setting"""
+        import frame_cache
+        frame_cache.invalidate()
         config.assist_only_enabled = self.assist_only_var.get()
         status = "enabled" if config.assist_only_enabled else "disabled"
         print(f"Assist Only {status}")
@@ -4446,14 +4583,31 @@ class BotGUI:
         # 1. Window is connected
         # 2. Calibration has been completed (calibrator exists)
         is_calibrated = config.calibrator is not None and config.calibrator.mp_position is not None
+
+        def cfg_min(btn, **kwargs):
+            if not btn:
+                return
+            try:
+                btn.configure(**kwargs)
+            except tk.TclError:
+                pass
+
+        minib = getattr(self, "minimized_toggle_bot_button", None)
         
         if config.connected_window and is_calibrated and not config.bot_running:
-            self.toggle_bot_button.configure(state="normal", text="Start", fg_color="green", hover_color="darkgreen", command=self.toggle_bot)
+            self.toggle_bot_button.configure(
+                state="normal", text="Start", fg_color="green", hover_color="darkgreen", command=self.toggle_bot
+            )
+            cfg_min(minib, state="normal", text="Start", fg_color="green", hover_color="darkgreen", command=self.toggle_bot)
         elif config.bot_running:
             # Keep button enabled when running so user can stop
-            self.toggle_bot_button.configure(state="normal", text="Stop", fg_color="red", hover_color="darkred", command=self.toggle_bot)
+            self.toggle_bot_button.configure(
+                state="normal", text="Stop", fg_color="red", hover_color="darkred", command=self.toggle_bot
+            )
+            cfg_min(minib, state="normal", text="Stop", fg_color="red", hover_color="darkred", command=self.toggle_bot)
         else:
             self.toggle_bot_button.configure(state="disabled")
+            cfg_min(minib, state="disabled", text="Start", fg_color="green", hover_color="darkgreen", command=self.toggle_bot)
     
     def update_mob_coordinates(self):
         """Update mob name detection coordinates"""
@@ -4637,9 +4791,8 @@ class BotGUI:
                     # Ignore errors if minimized window was closed
                     pass
         
-        # Schedule next update (every 100ms for smooth display)
         if config.bot_running:
-            self.root.after(100, self.update_status)
+            self.root.after(config.get_gui_status_interval_ms(), self.update_status)
     
     def process_gui_updates(self):
         """Process queued GUI updates from background threads (thread-safe)"""
@@ -4651,14 +4804,14 @@ class BotGUI:
         except queue.Empty:
             pass  # No more updates to process
         
-        # Schedule next check (every 50ms for responsive UI)
-        self.root.after(50, self.process_gui_updates)
+        self.root.after(config.get_gui_updates_interval_ms(), self.process_gui_updates)
     
     def toggle_minimize(self):
         """Toggle between minimized and maximized UI"""
         if self.is_minimized:
             # Restore to maximized view
             if self.minimized_window:
+                self.minimized_toggle_bot_button = None
                 self.minimized_window.destroy()
                 self.minimized_window = None
             self.root.deiconify()
@@ -4688,7 +4841,7 @@ class BotGUI:
         
         # Create new window for minimized view
         self.minimized_window = ctk.CTkToplevel(self.root)
-        self.minimized_window.title("Kathana Helper v2.2.0")
+        self.minimized_window.title("Kathana Helper v2.2.1")
         
         # Position minimized window at the same location as main window
         if self.saved_window_position:
@@ -4698,13 +4851,13 @@ class BotGUI:
                 if len(parts) >= 3:
                     x_pos = parts[1]
                     y_pos = parts[2]
-                    self.minimized_window.geometry(f"350x180+{x_pos}+{y_pos}")
+                    self.minimized_window.geometry(f"350x226+{x_pos}+{y_pos}")
                 else:
-                    self.minimized_window.geometry("350x180")
+                    self.minimized_window.geometry("350x226")
             except:
-                self.minimized_window.geometry("350x180")
+                self.minimized_window.geometry("350x226")
         else:
-            self.minimized_window.geometry("350x180")
+            self.minimized_window.geometry("350x226")
         
         self.minimized_window.resizable(False, False)
         self.minimized_window.overrideredirect(False)  # Keep window controls
@@ -4767,6 +4920,23 @@ class BotGUI:
         self.minimized_current_mob_label.grid(row=0, column=1, sticky="w", padx=(0, 10))
         self.minimized_unstuck_countdown_label = ctk.CTkLabel(enemy_name_frame, text="Unstuck: ---", font=ctk.CTkFont(size=10), text_color="gray")
         self.minimized_unstuck_countdown_label.grid(row=0, column=2)
+        
+        # Start / Stop (same behavior as main window; no need to restore big UI)
+        bot_btn_frame = ctk.CTkFrame(minimized_frame, fg_color="transparent")
+        bot_btn_frame.grid(row=4, column=0, columnspan=2, sticky="ew", padx=10, pady=(2, 10))
+        bot_btn_frame.columnconfigure(0, weight=1)
+        self.minimized_toggle_bot_button = ctk.CTkButton(
+            bot_btn_frame,
+            text="Start",
+            command=self.toggle_bot,
+            width=120,
+            height=32,
+            corner_radius=6,
+            fg_color="green",
+            hover_color="darkgreen",
+        )
+        self.minimized_toggle_bot_button.grid(row=0, column=0)
+        self.update_toggle_bot_button_state()
         
         # Handle window close - restore to maximized
         self.minimized_window.protocol("WM_DELETE_WINDOW", self.toggle_minimize)

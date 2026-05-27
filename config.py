@@ -35,6 +35,20 @@ mp_bar_area = {'x': 428, 'y': 139, 'width': 0, 'height': 0}
 # Bar detection settings
 BAR_DETECTION_DEBUG = False
 
+# Performance / CPU optimization
+SAVE_DEBUG_IMAGES = False
+low_cpu_mode = True
+
+# Base intervals (normal mode) — use getters for effective values
+_BASE_ENEMY_HP_CAPTURE_INTERVAL = 0.2
+_BASE_HP_CAPTURE_INTERVAL = 0.3
+_BASE_MP_CAPTURE_INTERVAL = 0.3
+_BASE_BUFF_CHECK_INTERVAL = 0.5
+_BASE_BOT_LOOP_SLEEP = 0.15
+_BASE_FRAME_CACHE_TTL = 0.08
+_BASE_GUI_STATUS_MS = 200
+_BASE_GUI_UPDATES_MS = 100
+
 # Skill slot system
 skill_slots = {
     1: {'enabled': True, 'interval': 1, 'last_used': 0},
@@ -80,7 +94,8 @@ system_message_area = {'x': 0, 'y': 0, 'width': 0, 'height': 0}
 SYSTEM_MESSAGE_HEIGHT_REDUCTION = 100  # Reduce height by this many pixels (0 = no reduction, useful for smaller OCR area)
 last_repair_time = 0
 REPAIR_COOLDOWN = 5.0
-AUTO_REPAIR_CHECK_INTERVAL = 3.0  # Fixed at 3 seconds for optimal performance and reliability
+AUTO_REPAIR_CHECK_INTERVAL = 3.0  # Legacy default; use get_auto_repair_check_interval()
+REPAIR_WARNING_CHECK_INTERVAL = 0.3  # Light-green warning text poll (300ms)
 BREAK_WARNING_TRIGGER_COUNT = 1  # Number of detections required to trigger repair
 last_auto_repair_check_time = 0
 
@@ -119,6 +134,9 @@ is_looting = False  # Flag to prevent auto-targeting during looting
 looting_start_time = 0
 LOOTING_DURATION = 1  # Duration to prevent auto-targeting after looting starts (reduced for faster retargeting)
 unstuck_timeout = 8.0
+# Min enemy HP change in percentage points (damage down or heal/bar up vs reference) resets auto-unstuck countdown.
+# Lower = slow boss chip damage still refreshes the timer; too low may flutter from bar read noise.
+hp_stagnant_noise_epsilon = 0.35
 last_damage_detected_time = 0
 last_damage_value = None
 last_enemy_hp_for_unstuck = None  # Track last enemy HP for unstuck detection (HP-based instead of OCR)
@@ -197,12 +215,58 @@ current_enemy_name = None
 
 # Assist Only mode (party leader determines target, only attack when enemy HP decreases)
 assist_only_enabled = False
+assist_key = ''  # Hotkey for party assist (assist mode uses key instead of assist.bmp)
+assist_click_interval_seconds = 1.0  # Min delay between assist presses
 enemy_initial_hp = None  # Track initial HP when enemy is first detected (for assist_only mode)
 enemy_detected = False  # Track if enemy has been detected (for assist_only mode)
 # Store previous state of features that are disabled when assist_only is enabled
 _assist_only_previous_auto_attack = None
 _assist_only_previous_mob_detection = None
 _assist_only_previous_auto_change_target = None
+
+
+def get_enemy_hp_capture_interval():
+    return 0.35 if low_cpu_mode else _BASE_ENEMY_HP_CAPTURE_INTERVAL
+
+
+def get_hp_capture_interval():
+    return 0.45 if low_cpu_mode else _BASE_HP_CAPTURE_INTERVAL
+
+
+def get_mp_capture_interval():
+    return 0.45 if low_cpu_mode else _BASE_MP_CAPTURE_INTERVAL
+
+
+def get_buff_check_interval():
+    return 0.65 if low_cpu_mode else _BASE_BUFF_CHECK_INTERVAL
+
+
+def get_bot_loop_sleep():
+    return 0.20 if low_cpu_mode else _BASE_BOT_LOOP_SLEEP
+
+
+def get_frame_cache_ttl():
+    return 0.12 if low_cpu_mode else _BASE_FRAME_CACHE_TTL
+
+
+def get_gui_status_interval_ms():
+    return 350 if low_cpu_mode else _BASE_GUI_STATUS_MS
+
+
+def get_gui_updates_interval_ms():
+    return 100
+
+
+def get_auto_repair_check_interval():
+    """Poll warning region every 300ms; slightly relaxed in Low CPU mode."""
+    return 0.45 if low_cpu_mode else REPAIR_WARNING_CHECK_INTERVAL
+
+
+def get_effective_ocr_use_gpu():
+    """Low CPU mode prefers CPU OCR to avoid weak iGPU overhead."""
+    if low_cpu_mode:
+        return False
+    return ocr_use_gpu
 
 
 def safe_update_gui(update_func):

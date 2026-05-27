@@ -88,6 +88,7 @@ def save_settings():
             'mouse_clicker_coords': config.mouse_clicker_coords.copy(),
             'looting_duration': config.LOOTING_DURATION,
             'auto_repair_enabled': config.auto_repair_enabled,
+            'repair_key': config.repair_key,
             'break_warning_trigger_count': config.BREAK_WARNING_TRIGGER_COUNT,
             # 'auto_repair_check_interval': config.AUTO_REPAIR_CHECK_INTERVAL,  # Fixed at 3.0 seconds, no longer configurable
             # 'repair_key': config.repair_key,  # Removed - now using image detection (hammer.bmp)
@@ -96,6 +97,7 @@ def save_settings():
             'unstuck_timeout': config.unstuck_timeout,
             'is_mage': config.is_mage,
             'assist_only_enabled': config.assist_only_enabled,
+            'assist_key': config.assist_key,
             'selected_window': config.selected_window if config.selected_window else "",
             'buffs_config': {str(i): {
                 'enabled': config.buffs_config[i]['enabled'],
@@ -135,6 +137,8 @@ def save_settings():
                         settings['looting_duration'] = config.LOOTING_DURATION
                 if hasattr(gui, 'auto_repair_var'):
                     settings['auto_repair_enabled'] = gui.auto_repair_var.get()
+                if hasattr(gui, 'repair_key_var'):
+                    settings['repair_key'] = gui.repair_key_var.get()
                 if hasattr(gui, 'break_warning_trigger_count_var'):
                     try:
                         settings['break_warning_trigger_count'] = int(gui.break_warning_trigger_count_var.get())
@@ -154,6 +158,8 @@ def save_settings():
                     settings['is_mage'] = gui.is_mage_var.get()
                 if hasattr(gui, 'assist_only_var'):
                     settings['assist_only_enabled'] = gui.assist_only_var.get()
+                if hasattr(gui, 'assist_key_var'):
+                    settings['assist_key'] = gui.assist_key_var.get()
         except (ValueError, AttributeError, ImportError) as e:
             print(f"Warning: Could not save some GUI values: {e}")
         
@@ -227,6 +233,8 @@ def load_settings():
             config.LOOTING_DURATION = settings['looting_duration']
         if 'auto_repair_enabled' in settings:
             config.auto_repair_enabled = settings['auto_repair_enabled']
+        if 'repair_key' in settings:
+            config.repair_key = settings['repair_key']
         if 'break_warning_trigger_count' in settings:
             config.BREAK_WARNING_TRIGGER_COUNT = settings['break_warning_trigger_count']
         # auto_repair_check_interval removed - fixed at 3.0 seconds
@@ -291,6 +299,11 @@ def load_settings():
         
         if 'assist_only_enabled' in settings:
             config.assist_only_enabled = settings['assist_only_enabled']
+
+        if 'assist_key' in settings:
+            config.assist_key = settings['assist_key']
+        # Low CPU mode is always enabled
+        config.low_cpu_mode = True
         
         if 'selected_window' in settings:
             config.selected_window = settings['selected_window']

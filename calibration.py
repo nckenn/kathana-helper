@@ -40,7 +40,10 @@ class Calibrator:
                 print(f'[Calibration] Error creating debug directory: {e}')
     
     def save_debug_image(self, image, name):
-        """Save a debug image"""
+        """Save a debug image (only when debug mode or SAVE_DEBUG_IMAGES is enabled)."""
+        import debug_io
+        if not debug_io.should_save_debug_images():
+            return None
         try:
             filename = f'calibrate_{name}.png'
             filepath = os.path.join(self.debug_dir, filename)
@@ -1184,139 +1187,146 @@ class Calibrator:
         }
         return status
     
-    def get_hp_percentage(self, hwnd):
+    def _hp_percentage_from_screen(self, screen):
+        """Calculate HP percentage from an already-captured screen."""
+        if self.hp_position is None or screen is None:
+            return 0
+        import debug_utils
+        try:
+            x, y = self.hp_position
+            w, h = self.hp_dimensions
+            import frame_cache
+            origin = frame_cache.get_origin()
+            hp_region = frame_cache.crop_rect(screen, x, y, x + w, y + h, origin)
+            if hp_region is None or hp_region.size == 0:
+                return 0
+            self.save_debug_image(hp_region, 'hp_region_percent')
+            hsv = cv2.cvtColor(hp_region, cv2.COLOR_BGR2HSV)
+            lower_red1 = np.array([0, 120, 120])
+            upper_red1 = np.array([10, 255, 255])
+            lower_red2 = np.array([170, 120, 120])
+            upper_red2 = np.array([180, 255, 255])
+            red_mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
+            red_mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
+            red_mask = cv2.bitwise_or(red_mask1, red_mask2)
+            self.save_debug_image(red_mask, 'hp_mask_percent')
+            red_pixels = np.sum(red_mask > 0, axis=0)
+            total_height = red_mask.shape[0]
+            last_red_column = 0
+            min_pixels_required = total_height * 0.5
+            for i in range(len(red_pixels)):
+                if red_pixels[i] >= min_pixels_required:
+                    last_red_column = i + 1
+            if last_red_column >= w - 2:
+                percentage = 100.0
+            else:
+                percentage = round(last_red_column / w * 100, 1)
+            debug_img = hp_region.copy()
+            if last_red_column > 0:
+                cv2.line(debug_img, (last_red_column - 1, 0), (last_red_column - 1, h - 1), (0, 255, 0), 1)
+            self.save_debug_image(debug_img, 'hp_last_column')
+            debug_utils.debug_print(
+                f'HP: column {last_red_column}/{w} -> {percentage}%',
+                'Calibration'
+            )
+            return percentage
+        except Exception as e:
+            print(f'[Calibration] Error calculating HP percentage: {e}')
+            return 0
+
+    def _mp_percentage_from_screen(self, screen):
+        """Calculate MP percentage from an already-captured screen."""
+        if self.mp_position is None or screen is None:
+            return 0
+        import debug_utils
+        try:
+            x, y = self.mp_position
+            w, h = self.mp_dimensions
+            import frame_cache
+            origin = frame_cache.get_origin()
+            mp_region = frame_cache.crop_rect(screen, x, y, x + w, y + h, origin)
+            if mp_region is None or mp_region.size == 0:
+                return 0
+            self.save_debug_image(mp_region, 'mp_region_percent')
+            hsv = cv2.cvtColor(mp_region, cv2.COLOR_BGR2HSV)
+            lower_blue = np.array([100, 120, 120])
+            upper_blue = np.array([140, 255, 255])
+            blue_mask = cv2.inRange(hsv, lower_blue, upper_blue)
+            self.save_debug_image(blue_mask, 'mp_mask_percent')
+            blue_pixels = np.sum(blue_mask > 0, axis=0)
+            total_height = blue_mask.shape[0]
+            last_blue_column = 0
+            min_pixels_required = total_height * 0.5
+            for i in range(len(blue_pixels)):
+                if blue_pixels[i] >= min_pixels_required:
+                    last_blue_column = i + 1
+            if last_blue_column >= w - 2:
+                percentage = 100.0
+            else:
+                percentage = round(last_blue_column / w * 100, 1)
+            debug_img = mp_region.copy()
+            if last_blue_column > 0:
+                cv2.line(debug_img, (last_blue_column - 1, 0), (last_blue_column - 1, h - 1), (0, 255, 0), 1)
+            self.save_debug_image(debug_img, 'mp_last_column')
+            debug_utils.debug_print(
+                f'MP: column {last_blue_column}/{w} -> {percentage}%',
+                'Calibration'
+            )
+            return percentage
+        except Exception as e:
+            print(f'[Calibration] Error calculating MP percentage: {e}')
+            return 0
+
+    def get_hp_mp_percentages_from_screen(self, screen):
+        """Read HP and MP from one shared frame. Returns (hp, mp) or None if screen invalid."""
+        if screen is None:
+            return None
+        hp = self._hp_percentage_from_screen(screen) if self.hp_position else 0
+        mp = self._mp_percentage_from_screen(screen) if self.mp_position else 0
+        return (hp, mp)
+
+    def get_hp_percentage(self, hwnd, screen=None):
         """
         Calculate current HP percentage by analyzing the HP bar
         
         Args:
             hwnd: Window handle
+            screen: Optional pre-captured frame
         Returns:
             float: HP percentage (0-100)
         """
         if self.hp_position is None:
             return 0
-        
         try:
-            screen = self.capture_window(hwnd)
+            if screen is None:
+                import frame_cache
+                screen = frame_cache.get_frame(hwnd, self)
             if screen is None:
                 return 0
-            
-            x, y = self.hp_position
-            w, h = self.hp_dimensions
-            
-            # Extract HP bar region
-            hp_region = screen[y:y + h, x:x + w]
-            self.save_debug_image(hp_region, 'hp_region_percent')
-            
-            # Convert to HSV for better color detection
-            hsv = cv2.cvtColor(hp_region, cv2.COLOR_BGR2HSV)
-            
-            # Red color range for HP bar
-            lower_red1 = np.array([0, 120, 120])
-            upper_red1 = np.array([10, 255, 255])
-            lower_red2 = np.array([170, 120, 120])
-            upper_red2 = np.array([180, 255, 255])
-            
-            red_mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
-            red_mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
-            red_mask = cv2.bitwise_or(red_mask1, red_mask2)
-            
-            self.save_debug_image(red_mask, 'hp_mask_percent')
-            
-            # Count red pixels per column
-            red_pixels = np.sum(red_mask > 0, axis=0)
-            total_height = red_mask.shape[0]
-            last_red_column = 0
-            min_pixels_required = total_height * 0.5  # At least 50% of height should be red
-            
-            # Find the last column with enough red pixels
-            for i in range(len(red_pixels)):
-                if red_pixels[i] >= min_pixels_required:
-                    last_red_column = i + 1
-            
-            # Calculate percentage
-            if last_red_column >= w - 2:
-                percentage = 100.0
-            else:
-                percentage = round(last_red_column / w * 100, 1)
-            
-            # Debug visualization
-            debug_img = hp_region.copy()
-            if last_red_column > 0:
-                cv2.line(debug_img, (last_red_column - 1, 0), (last_red_column - 1, h - 1), (0, 255, 0), 1)
-            self.save_debug_image(debug_img, 'hp_last_column')
-            
-            print(f'[Calibration] HP: Last red column: {last_red_column} of {w}')
-            print(f'[Calibration] HP: Calculated percentage: {percentage}%')
-            
-            return percentage
-            
+            return self._hp_percentage_from_screen(screen)
         except Exception as e:
             print(f'[Calibration] Error calculating HP percentage: {e}')
             return 0
-    
-    def get_mp_percentage(self, hwnd):
+
+    def get_mp_percentage(self, hwnd, screen=None):
         """
         Calculate current MP percentage by analyzing the MP bar
         
         Args:
             hwnd: Window handle
+            screen: Optional pre-captured frame
         Returns:
             float: MP percentage (0-100)
         """
         if self.mp_position is None:
             return 0
-        
         try:
-            screen = self.capture_window(hwnd)
+            if screen is None:
+                import frame_cache
+                screen = frame_cache.get_frame(hwnd, self)
             if screen is None:
                 return 0
-            
-            x, y = self.mp_position
-            w, h = self.mp_dimensions
-            
-            # Extract MP bar region
-            mp_region = screen[y:y + h, x:x + w]
-            self.save_debug_image(mp_region, 'mp_region_percent')
-            
-            # Convert to HSV for better color detection
-            hsv = cv2.cvtColor(mp_region, cv2.COLOR_BGR2HSV)
-            
-            # Blue color range for MP bar
-            lower_blue = np.array([100, 120, 120])
-            upper_blue = np.array([140, 255, 255])
-            blue_mask = cv2.inRange(hsv, lower_blue, upper_blue)
-            
-            self.save_debug_image(blue_mask, 'mp_mask_percent')
-            
-            # Count blue pixels per column
-            blue_pixels = np.sum(blue_mask > 0, axis=0)
-            total_height = blue_mask.shape[0]
-            last_blue_column = 0
-            min_pixels_required = total_height * 0.5  # At least 50% of height should be blue
-            
-            # Find the last column with enough blue pixels
-            for i in range(len(blue_pixels)):
-                if blue_pixels[i] >= min_pixels_required:
-                    last_blue_column = i + 1
-            
-            # Calculate percentage
-            if last_blue_column >= w - 2:
-                percentage = 100.0
-            else:
-                percentage = round(last_blue_column / w * 100, 1)
-            
-            # Debug visualization
-            debug_img = mp_region.copy()
-            if last_blue_column > 0:
-                cv2.line(debug_img, (last_blue_column - 1, 0), (last_blue_column - 1, h - 1), (0, 255, 0), 1)
-            self.save_debug_image(debug_img, 'mp_last_column')
-            
-            print(f'[Calibration] MP: Last blue column: {last_blue_column} of {w}')
-            print(f'[Calibration] MP: Calculated percentage: {percentage}%')
-            
-            return percentage
-            
+            return self._mp_percentage_from_screen(screen)
         except Exception as e:
             print(f'[Calibration] Error calculating MP percentage: {e}')
             return 0

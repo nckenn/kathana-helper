@@ -14,6 +14,9 @@ import config
 import input_handler
 import bot_logic
 import ocr_utils
+import debug_utils
+import debug_io
+import frame_cache
 
 
 # Initialize lock for thread-safe mob detection
@@ -55,7 +58,6 @@ HP_JUMP_THRESHOLD_LOW = 50   # If last avg < this and new >= 95, enemy died
 HP_JUMP_THRESHOLD_HIGH = 95
 HP_DEATH_THRESHOLD = 3.0     # HP percentage below which enemy is considered dead
 HP_PREVIOUS_READING_MIN = 10.0  # Minimum previous reading to trigger death detection
-HP_STAGNANT_THRESHOLD = 5.0  # HP difference threshold to reset stagnant timer
 
 # Targeting parameters - optimized for fast retargeting after kill
 MAX_RETARGET_RECURSION = 5
@@ -197,19 +199,17 @@ def extract_enemy_name_easyocr(name_area):
             name = best_result[1].strip()
             original_text = best_result[1]
             
-            # Save debug images
-            debug_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'debug')
-            if not os.path.exists(debug_dir):
-                os.makedirs(debug_dir)
-            cv2.imwrite(os.path.join(debug_dir, 'enemy_name_easyocr_input.png'), name_area)
-            cv2.imwrite(os.path.join(debug_dir, 'enemy_name_white_chars.png'), white_chars)
-            cv2.imwrite(os.path.join(debug_dir, 'enemy_name_mask.png'), mask_white)
-            
-            debug_img = name_area.copy()
-            cv2.putText(debug_img, f'OCR Detected: {name}', (2, 13), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1, cv2.LINE_AA)
-            cv2.putText(debug_img, f'Original Text: {original_text}', (2, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 0), 1, cv2.LINE_AA)
-            cv2.putText(debug_img, f'Confidence: {best_result[2]:.2f}', (2, 37), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 0), 1, cv2.LINE_AA)
-            cv2.imwrite(os.path.join(debug_dir, 'enemy_name_ocr_detected.png'), debug_img)
+            if debug_io.should_save_debug_images():
+                debug_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'debug')
+                os.makedirs(debug_dir, exist_ok=True)
+                debug_io.save_cv2_image(os.path.join(debug_dir, 'enemy_name_easyocr_input.png'), name_area)
+                debug_io.save_cv2_image(os.path.join(debug_dir, 'enemy_name_white_chars.png'), white_chars)
+                debug_io.save_cv2_image(os.path.join(debug_dir, 'enemy_name_mask.png'), mask_white)
+                debug_img = name_area.copy()
+                cv2.putText(debug_img, f'OCR Detected: {name}', (2, 13), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1, cv2.LINE_AA)
+                cv2.putText(debug_img, f'Original Text: {original_text}', (2, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 0), 1, cv2.LINE_AA)
+                cv2.putText(debug_img, f'Confidence: {best_result[2]:.2f}', (2, 37), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 0), 1, cv2.LINE_AA)
+                debug_io.save_cv2_image(os.path.join(debug_dir, 'enemy_name_ocr_detected.png'), debug_img)
             
             return (name, original_text)
         else:
@@ -243,41 +243,39 @@ def extract_enemy_name_easyocr(name_area):
                 text_letters_only = re.sub('[^a-zA-Z\\s]', '', text)
                 name = text_letters_only.strip()
                 
-                # Save debug image
-                debug_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'debug')
-                if not os.path.exists(debug_dir):
-                    os.makedirs(debug_dir)
-                debug_img = name_area.copy()
-                cv2.putText(debug_img, f'OCR Detected: {name}', (2, 13), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1, cv2.LINE_AA)
-                cv2.putText(debug_img, f'Original Text: {text}', (2, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 0), 1, cv2.LINE_AA)
-                cv2.putText(debug_img, f'Confidence: {confidence:.2f}', (2, 37), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 0), 1, cv2.LINE_AA)
-                cv2.putText(debug_img, 'No Filters', (2, 49), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 0, 255), 1, cv2.LINE_AA)
-                cv2.imwrite(os.path.join(debug_dir, 'enemy_name_ocr_detected.png'), debug_img)
+                if debug_io.should_save_debug_images():
+                    debug_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'debug')
+                    os.makedirs(debug_dir, exist_ok=True)
+                    debug_img = name_area.copy()
+                    cv2.putText(debug_img, f'OCR Detected: {name}', (2, 13), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1, cv2.LINE_AA)
+                    cv2.putText(debug_img, f'Original Text: {text}', (2, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 0), 1, cv2.LINE_AA)
+                    cv2.putText(debug_img, f'Confidence: {confidence:.2f}', (2, 37), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 0), 1, cv2.LINE_AA)
+                    cv2.putText(debug_img, 'No Filters', (2, 49), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 0, 255), 1, cv2.LINE_AA)
+                    debug_io.save_cv2_image(os.path.join(debug_dir, 'enemy_name_ocr_detected.png'), debug_img)
                 
                 return (name, text)
             else:
-                # No detection
-                debug_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'debug')
-                if not os.path.exists(debug_dir):
-                    os.makedirs(debug_dir)
-                debug_img = name_area.copy()
-                cv2.putText(debug_img, 'OCR Detected: NONE', (2, 13), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1, cv2.LINE_AA)
-                cv2.putText(debug_img, 'Original Text: N/A', (2, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1, cv2.LINE_AA)
-                cv2.putText(debug_img, 'Confidence: 0.00', (2, 37), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1, cv2.LINE_AA)
-                cv2.putText(debug_img, 'No Detection', (2, 49), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1, cv2.LINE_AA)
-                cv2.imwrite(os.path.join(debug_dir, 'enemy_name_ocr_detected.png'), debug_img)
+                if debug_io.should_save_debug_images():
+                    debug_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'debug')
+                    os.makedirs(debug_dir, exist_ok=True)
+                    debug_img = name_area.copy()
+                    cv2.putText(debug_img, 'OCR Detected: NONE', (2, 13), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1, cv2.LINE_AA)
+                    cv2.putText(debug_img, 'Original Text: N/A', (2, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1, cv2.LINE_AA)
+                    cv2.putText(debug_img, 'Confidence: 0.00', (2, 37), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1, cv2.LINE_AA)
+                    cv2.putText(debug_img, 'No Detection', (2, 49), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1, cv2.LINE_AA)
+                    debug_io.save_cv2_image(os.path.join(debug_dir, 'enemy_name_ocr_detected.png'), debug_img)
                 return ('', '')
-                
+
     except Exception as e:
         print(f'[Enemy Name OCR] Error: {str(e)}')
-        debug_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'debug')
-        if not os.path.exists(debug_dir):
-            os.makedirs(debug_dir)
-        debug_img = name_area.copy()
-        cv2.putText(debug_img, 'OCR Error', (2, 13), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1, cv2.LINE_AA)
-        cv2.putText(debug_img, f'Error: {str(e)[:30]}', (2, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 255), 1, cv2.LINE_AA)
-        cv2.putText(debug_img, 'Confidence: N/A', (2, 37), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1, cv2.LINE_AA)
-        cv2.imwrite(os.path.join(debug_dir, 'enemy_name_ocr_detected.png'), debug_img)
+        if debug_io.should_save_debug_images():
+            debug_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'debug')
+            os.makedirs(debug_dir, exist_ok=True)
+            debug_img = name_area.copy()
+            cv2.putText(debug_img, 'OCR Error', (2, 13), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1, cv2.LINE_AA)
+            cv2.putText(debug_img, f'Error: {str(e)[:30]}', (2, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 255), 1, cv2.LINE_AA)
+            cv2.putText(debug_img, 'Confidence: N/A', (2, 37), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1, cv2.LINE_AA)
+            debug_io.save_cv2_image(os.path.join(debug_dir, 'enemy_name_ocr_detected.png'), debug_img)
         return ('', '')
     
     return ('', '')
@@ -391,25 +389,43 @@ def detect_and_verify_mob_after_target(delay=0.05, retry_delay=0.08):
 
 class EnemyDetectionResult:
     """Container for enemy detection results"""
-    def __init__(self, found=False, hp=0.0, position=None, name=None, 
-                 ocr_text=None, avara_detected=False):
+    def __init__(self, found=False, hp=0.0, position=None, name=None,
+                 ocr_text=None, avara_detected=False, screen=None):
         self.found = found
         self.hp = hp
         self.position = position
         self.name = name
         self.ocr_text = ocr_text
         self.avara_detected = avara_detected
-    
+        self.screen = screen
+
     def to_dict(self):
         """Convert to dictionary for backward compatibility"""
-        return {
+        result = {
             'found': self.found,
             'hp': self.hp,
             'position': self.position,
             'name': self.name,
             'ocr_text': self.ocr_text,
-            'avara_detected': self.avara_detected
+            'avara_detected': self.avara_detected,
         }
+        if self.screen is not None:
+            result['screen'] = self.screen
+        return result
+
+
+def _enemy_detection_needs_early_ocr(targets):
+    """Mob filter or avoid list requires OCR before HP bar acceptance."""
+    if targets:
+        return True
+    if getattr(config, 'mob_avoid_list', None):
+        return True
+    return False
+
+
+def _use_hp_first_detection_order(targets):
+    """Low CPU: detect HP bar first; OCR only when a bar is found."""
+    return config.low_cpu_mode and not _enemy_detection_needs_early_ocr(targets)
 
 
 class EnemyStateManager:
@@ -478,36 +494,54 @@ class EnemyHpBarDetector:
         return cv2.bitwise_or(mask1, mask2)
     
     def find_hp_bar(self, mask, search_area):
-        """
-        Find the widest HP bar in the mask
-        Searches through all possible y positions to find the bar with maximum width
-        """
+        """Find the widest HP bar in the mask (vectorized strip scan)."""
+        h, w = mask.shape
+        bar_h = HP_BAR_HEIGHT
+        num_strips = h - bar_h + 1
+        if num_strips <= 0:
+            return None, 0, 0, 0
+
+        try:
+            strips = np.lib.stride_tricks.sliding_window_view(
+                mask, (bar_h, w), axis=(0, 1))[:, 0, :, :]
+            col_counts = (strips == 255).sum(axis=1)
+        except Exception:
+            col_counts = None
+
         best_y = None
         best_width = 0
         best_first = 0
         best_last = 0
-        
-        # Search through all possible y positions
-        for y in range(0, search_area.shape[0] - HP_BAR_HEIGHT + 1):
-            # Extract strip at this y position
-            strip = mask[y:y + HP_BAR_HEIGHT, :]
-            # Sum red pixels per column (axis=0 sums vertically)
-            column_sum = np.sum(strip == 255, axis=0)
-            # Find columns with at least MIN_RED_PIXELS_PER_COLUMN red pixels
-            valid_columns = np.where(column_sum >= MIN_RED_PIXELS_PER_COLUMN)[0]
-            
-            if len(valid_columns) > 0:
-                first = valid_columns[0]
-                last = valid_columns[-1]
+
+        if col_counts is not None:
+            for y in range(num_strips):
+                cols = np.where(col_counts[y] >= MIN_RED_PIXELS_PER_COLUMN)[0]
+                if len(cols) == 0:
+                    continue
+                first = int(cols[0])
+                last = int(cols[-1])
                 width = last - first + 1
-                
-                # Only update if this bar is wider
                 if width > best_width:
                     best_width = width
                     best_y = y
                     best_first = first
                     best_last = last
-        
+            return best_y, best_width, best_first, best_last
+
+        for y in range(num_strips):
+            strip = mask[y:y + bar_h, :]
+            column_sum = np.sum(strip == 255, axis=0)
+            valid_columns = np.where(column_sum >= MIN_RED_PIXELS_PER_COLUMN)[0]
+            if len(valid_columns) > 0:
+                first = int(valid_columns[0])
+                last = int(valid_columns[-1])
+                width = last - first + 1
+                if width > best_width:
+                    best_width = width
+                    best_y = y
+                    best_first = first
+                    best_last = last
+
         return best_y, best_width, best_first, best_last
     
     def calculate_hp_percentage(self, bar_width):
@@ -515,34 +549,27 @@ class EnemyHpBarDetector:
         hp_percentage = bar_width / SEARCH_AREA_WIDTH * 100
         return float(max(0, min(100, hp_percentage)))
     
-    def save_debug_images(self, search_area, mask, name_area, 
+    def save_debug_images(self, search_area, mask, name_area,
                           hp_bar_found=None, enemy_x=None, enemy_y=None):
         """Save debug images for troubleshooting"""
-        cv2.imwrite(
-            os.path.join(self.debug_dir, 'enemy_hp_search_area.png'), 
-            search_area
-        )
-        cv2.imwrite(
-            os.path.join(self.debug_dir, 'enemy_hp_mask_red.png'), 
-            mask
-        )
-        cv2.imwrite(
-            os.path.join(self.debug_dir, 'enemy_name_area_debug.png'), 
-            name_area
-        )
-        
+        if not debug_io.should_save_debug_images():
+            return
+        debug_io.save_cv2_image(
+            os.path.join(self.debug_dir, 'enemy_hp_search_area.png'), search_area)
+        debug_io.save_cv2_image(
+            os.path.join(self.debug_dir, 'enemy_hp_mask_red.png'), mask)
+        debug_io.save_cv2_image(
+            os.path.join(self.debug_dir, 'enemy_name_area_debug.png'), name_area)
         if hp_bar_found is not None and enemy_x is not None and enemy_y is not None:
-            cv2.imwrite(
-                os.path.join(
-                    self.debug_dir, 
-                    f'enemy_hp_bar_found_{enemy_x}_{enemy_y}.png'
-                ),
-                hp_bar_found
-            )
-    
-    def save_target_comparison_debug(self, search_area, detected_name, 
+            debug_io.save_cv2_image(
+                os.path.join(self.debug_dir, f'enemy_hp_bar_found_{enemy_x}_{enemy_y}.png'),
+                hp_bar_found)
+
+    def save_target_comparison_debug(self, search_area, detected_name,
                                      targets, similarities):
         """Save debug image with target comparison"""
+        if not debug_io.should_save_debug_images():
+            return
         debug_img = search_area.copy()
         cv2.putText(
             debug_img, f'OCR: {detected_name}', (2, 13),
@@ -559,10 +586,9 @@ class EnemyHpBarDetector:
                 (2, y_pos + 10),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 0, 0), 1, cv2.LINE_AA
             )
-        cv2.imwrite(
+        debug_io.save_cv2_image(
             os.path.join(self.debug_dir, 'enemy_hp_search_area_ocr_targets.png'),
-            debug_img
-        )
+            debug_img)
 
 
 class EnemyNameValidator:
@@ -669,17 +695,18 @@ class EnemyHpProcessor:
     
     @staticmethod
     def update_stagnant_tracking(current_time, hp_percentage):
-        """Update HP stagnant tracking for unstuck detection"""
-        if config.last_enemy_hp_before_stagnant is not None:
-            hp_difference = abs(
-                hp_percentage - config.last_enemy_hp_before_stagnant
-            )
-            if hp_difference > HP_STAGNANT_THRESHOLD:
-                config.enemy_hp_stagnant_time = current_time
-                config.last_enemy_hp_before_stagnant = hp_percentage
-            else:
-                config.last_enemy_hp_before_stagnant = hp_percentage
-        else:
+        """Update HP stagnant tracking for unstuck detection (slow boss DPS resets timer)."""
+        eps = getattr(config, "hp_stagnant_noise_epsilon", 0.35)
+        if config.last_enemy_hp_before_stagnant is None:
+            config.enemy_hp_stagnant_time = current_time
+            config.last_enemy_hp_before_stagnant = hp_percentage
+            return
+
+        ref = config.last_enemy_hp_before_stagnant
+        if hp_percentage < ref - eps:
+            config.enemy_hp_stagnant_time = current_time
+            config.last_enemy_hp_before_stagnant = hp_percentage
+        elif hp_percentage > ref + eps:
             config.enemy_hp_stagnant_time = current_time
             config.last_enemy_hp_before_stagnant = hp_percentage
 
@@ -688,78 +715,93 @@ class EnemyHpProcessor:
 # Main Detection Function
 # ============================================================================
 
-def detect_enemy_for_auto_attack(hwnd, targets=None):
+def detect_enemy_for_auto_attack(hwnd, targets=None, screen=None):
     """
     Detect enemy HP percentage and name for auto-attack using calibration-based method
     Uses MP position as reference to find enemy HP bar
     Only considers valid if name matches targets (if targets list is provided)
-    
+
     Args:
         hwnd: Window handle
         targets: Optional list of target mob names to attack (if None, attack all)
-        
+        screen: Optional pre-captured frame (uses frame cache if omitted)
+
     Returns:
-        dict: {'found': bool, 'hp': float, 'position': tuple or None, 
-               'name': str or None, 'ocr_text': str or None}
+        dict: detection fields plus optional 'screen' for reuse in same tick
     """
     if not config.calibrator or config.calibrator.mp_position is None:
         print('No MP position memorized')
         return EnemyDetectionResult().to_dict()
-    
+
     try:
-        # Get MP position as reference (must be available)
         mp_x, mp_y = config.calibrator.mp_position
-        print(f'MP position (memorized): ({mp_x}, {mp_y})')
-        
-        # Capture screen
-        screen = config.calibrator.capture_window(hwnd)
+        debug_utils.debug_print(f'MP position (memorized): ({mp_x}, {mp_y})', 'AutoAttack')
+
+        if screen is None:
+            screen = frame_cache.get_frame(hwnd, config.calibrator)
         if screen is None:
             return EnemyDetectionResult().to_dict()
-        
-        # Initialize detector and debug directory
+
         detector = EnemyHpBarDetector()
-        debug_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'debug')
-        if not os.path.exists(debug_dir):
-            os.makedirs(debug_dir)
-        
-        # Extract search area: screen[search_y:search_y + 35, mp_x - 1:mp_x - 1 + 163]
-        search_y = mp_y + SEARCH_AREA_OFFSET_Y  # mp_y + 19
-        search_area = screen[search_y:search_y + SEARCH_AREA_HEIGHT, mp_x - 1:mp_x - 1 + SEARCH_AREA_WIDTH]
-        
+        search_y = mp_y + SEARCH_AREA_OFFSET_Y
+        search_x = mp_x + SEARCH_AREA_OFFSET_X
+        search_area = frame_cache.crop_rect(
+            screen,
+            search_x, search_y,
+            search_x + SEARCH_AREA_WIDTH, search_y + SEARCH_AREA_HEIGHT,
+            frame_cache.get_origin(),
+        )
+
         if search_area.size == 0 or search_area.shape[0] < NAME_AREA_HEIGHT:
-            return EnemyDetectionResult().to_dict()
-        
-        # Extract enemy name area: first 18 pixels of search area
+            return EnemyDetectionResult(screen=screen).to_dict()
+
         name_area = search_area[0:NAME_AREA_HEIGHT, :]
-        
-        # Save debug image of name area
-        cv2.imwrite(os.path.join(debug_dir, 'name_area_debug.png'), name_area)
-        print(f'[DEBUG] Name area saved: {name_area.shape[1]}x{name_area.shape[0]} pixels')
-        
-        # Extract enemy name using OCR
-        detected_name, ocr_text = extract_enemy_name_easyocr(name_area)
-        
-        # Check for mobs to avoid (skip list)
+        if debug_io.should_save_debug_images():
+            debug_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'debug')
+            os.makedirs(debug_dir, exist_ok=True)
+            debug_io.save_cv2_image(os.path.join(debug_dir, 'name_area_debug.png'), name_area)
+
+        hsv = cv2.cvtColor(search_area, cv2.COLOR_BGR2HSV)
+        mask1 = cv2.inRange(hsv, RED_LOWER_1, RED_UPPER_1)
+        mask2 = cv2.inRange(hsv, RED_LOWER_2, RED_UPPER_2)
+        mask = cv2.bitwise_or(mask1, mask2)
+
+        if debug_io.should_save_debug_images():
+            debug_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'debug')
+            os.makedirs(debug_dir, exist_ok=True)
+            debug_io.save_cv2_image(os.path.join(debug_dir, 'mask_red.png'), mask)
+            debug_io.save_cv2_image(os.path.join(debug_dir, 'search_area.png'), search_area)
+        detector.save_debug_images(search_area, mask, name_area)
+
+        best_y, best_width, best_first, best_last = detector.find_hp_bar(mask, search_area)
+        bar_found = (
+            best_y is not None and best_width > 0 and best_width >= MIN_HP_BAR_WIDTH
+        )
+
+        hp_first = _use_hp_first_detection_order(targets)
+        detected_name = ''
+        ocr_text = ''
+
+        if hp_first:
+            if bar_found:
+                detected_name, ocr_text = extract_enemy_name_easyocr(name_area)
+        else:
+            detected_name, ocr_text = extract_enemy_name_easyocr(name_area)
+
         if EnemyNameValidator.check_avoid_mob_detection(detected_name):
             print(f'[TARGET] Enemy detected \'{detected_name}\' is in avoid list. Skipping attack.')
             return EnemyDetectionResult(
                 found=False,
                 name=detected_name,
                 ocr_text=ocr_text,
-                avara_detected=True  # Keep for backward compatibility, but now means "avoid mob detected"
+                avara_detected=True,
+                screen=screen,
             ).to_dict()
-        
-        # Check target list if provided
+
         if targets and detected_name:
-            matches, similarities = EnemyNameValidator.match_targets(
-                detected_name, targets
-            )
-            
-            # Save debug image with target comparison
+            matches, similarities = EnemyNameValidator.match_targets(detected_name, targets)
             detector.save_target_comparison_debug(
-                search_area, detected_name, targets, similarities
-            )
-            
+                search_area, detected_name, targets, similarities)
             if not matches:
                 max_similarity = max(similarities) if similarities else 0
                 detected_name_normalized = normalize_text(detected_name)
@@ -771,73 +813,48 @@ def detect_enemy_for_auto_attack(hwnd, targets=None):
                 return EnemyDetectionResult(
                     found=False,
                     name=detected_name,
-                    ocr_text=ocr_text
+                    ocr_text=ocr_text,
+                    screen=screen,
                 ).to_dict()
-        
-        # Create red mask for HP bar detection using HSV color ranges
-        hsv = cv2.cvtColor(search_area, cv2.COLOR_BGR2HSV)
-        mask1 = cv2.inRange(hsv, RED_LOWER_1, RED_UPPER_1)
-        mask2 = cv2.inRange(hsv, RED_LOWER_2, RED_UPPER_2)
-        mask = cv2.bitwise_or(mask1, mask2)
-        
-        # Save debug images
-        cv2.imwrite(os.path.join(debug_dir, 'mask_red.png'), mask)
-        cv2.imwrite(os.path.join(debug_dir, 'search_area.png'), search_area)
-        detector.save_debug_images(search_area, mask, name_area)
-        
-        # Find HP bar
-        best_y, best_width, best_first, best_last = detector.find_hp_bar(
-            mask, search_area
-        )
-        
-        # If we found a red bar, validate and calculate HP percentage
-        # Add minimum width check to avoid false positives from small red artifacts
-        if best_y is not None and best_width > 0 and best_width >= MIN_HP_BAR_WIDTH:
-            # Calculate enemy position
-            # enemy_x = mp_x - 1 + best_first
-            # enemy_y = search_y + best_y + 9
+
+        if bar_found:
             enemy_x = mp_x - 1 + best_first
             enemy_y = search_y + best_y + HP_BAR_CENTER_OFFSET
             position = (enemy_x, enemy_y)
-            
-            # Calculate HP percentage: hp_percentage = best_width / 163 * 100
-            hp_percentage = best_width / SEARCH_AREA_WIDTH * 100
-            hp_percentage = float(max(0, min(100, hp_percentage)))
-            
-            print(f'Enemy detected at: ({enemy_x}, {enemy_y}) - HP: {hp_percentage:.1f}% - Method: precise red bar')
-            
-            # Save debug image of found bar
-            bar_found = search_area[
+            hp_percentage = float(max(0, min(100, best_width / SEARCH_AREA_WIDTH * 100)))
+            debug_utils.debug_print(
+                f'Enemy at ({enemy_x}, {enemy_y}) HP {hp_percentage:.1f}%',
+                'AutoAttack',
+            )
+            bar_img = search_area[
                 best_y + HP_BAR_CENTER_OFFSET:best_y + HP_BAR_CENTER_OFFSET + HP_BAR_HEIGHT,
-                best_first:best_last + 1
+                best_first:best_last + 1,
             ]
-            cv2.imwrite(
-                os.path.join(debug_dir, f'bar_found_{enemy_x}_{enemy_y}.png'),
-                bar_found
-            )
             detector.save_debug_images(
-                search_area, mask, name_area, bar_found, enemy_x, enemy_y
-            )
-            
+                search_area, mask, name_area, bar_img, enemy_x, enemy_y)
             return EnemyDetectionResult(
                 found=True,
                 hp=hp_percentage,
                 position=position,
                 name=detected_name,
-                ocr_text=ocr_text
+                ocr_text=ocr_text,
+                screen=screen,
             ).to_dict()
+
+        if detected_name:
+            debug_utils.debug_print(
+                f'Name \'{detected_name}\' but no HP bar — may be dead',
+                'AutoAttack',
+            )
         else:
-            # No valid HP bar found - check if we had a name but no bar (enemy might be dead)
-            if detected_name:
-                print(f'[Enemy HP] Name detected (\'{detected_name}\') but no valid HP bar found - enemy may be dead or out of range')
-            else:
-                print('No red HP bar detected in this iteration')
-            return EnemyDetectionResult(
-                found=False,
-                name=detected_name,
-                ocr_text=ocr_text
-            ).to_dict()
-            
+            debug_utils.debug_print('No red HP bar detected', 'AutoAttack')
+        return EnemyDetectionResult(
+            found=False,
+            name=detected_name,
+            ocr_text=ocr_text,
+            screen=screen,
+        ).to_dict()
+
     except Exception as e:
         print(f"[Enemy HP Detection] Error: {e}")
         return EnemyDetectionResult().to_dict()
@@ -892,72 +909,33 @@ def reset_enemy_tracking():
 
 def check_assist_key():
     """
-    Check for assist.bmp in skill area and click it when found.
-    This should be called continuously when assist_only is enabled to spam the assist button.
+    Assist mode: press configured assist hotkey on interval.
+    Normal mode is unused (assist_only must be enabled).
     """
     if not config.assist_only_enabled:
         return
-    
-    if not config.connected_window or not config.calibrator:
+
+    if not config.connected_window:
         return
-    
-    if not config.area_skills:
+
+    assist_key = (getattr(config, 'assist_key', None) or '').strip()
+    if not assist_key:
         return
-    
-    try:
-        import cv2
-        import os
-    except ImportError:
-        return
-    
-    # Check if assist.bmp exists
-    assist_image_path = config.resolve_resource_path('assist.bmp')
-    if not assist_image_path or not os.path.exists(assist_image_path):
-        return
-    
-    # Throttle assist clicks (spam every 3 seconds)
+
+    interval = getattr(config, "assist_click_interval_seconds", 1.0)
     current_time = time.time()
     if not hasattr(check_assist_key, 'last_click_time'):
         check_assist_key.last_click_time = 0
-    
-    if current_time - check_assist_key.last_click_time < 3.0:
+
+    if current_time - check_assist_key.last_click_time < interval:
         return
-    
+
     try:
-        hwnd = config.connected_window.handle
-        screen = config.calibrator.capture_window(hwnd)
-        if screen is None:
-            return
-        
-        # Extract skill area
-        x1, y1, x2, y2 = config.area_skills
-        area_skills = screen[y1:y2, x1:x2]
-        
-        # Load assist template
-        template = cv2.imread(assist_image_path, cv2.IMREAD_COLOR)
-        if template is None:
-            return
-        
-        # Check if area is large enough
-        if area_skills.shape[0] >= template.shape[0] and area_skills.shape[1] >= template.shape[1]:
-            # Template matching
-            res = cv2.matchTemplate(area_skills, template, cv2.TM_CCOEFF_NORMED)
-            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
-            
-            if max_val > 0.7:
-                # Assist button found - click it
-                th, tw = template.shape[:2]
-                click_x = x1 + max_loc[0] + tw // 2
-                click_y = y1 + max_loc[1] + th // 2
-                
-                print(f'[Assist Only] Assist button found, clicking at ({click_x}, {click_y})')
-                
-                if input_handler.perform_mouse_click_window_image(hwnd, click_x, click_y):
-                    check_assist_key.last_click_time = current_time
-                else:
-                    print('[Assist Only] Failed to click assist button')
+        input_handler.send_input(assist_key)
+        check_assist_key.last_click_time = current_time
+        debug_utils.debug_print(f'Assist key pressed: {assist_key}', 'AssistOnly')
     except Exception as e:
-        print(f'[Assist Only] Error checking assist key: {e}')
+        print(f'[Assist Only] Error pressing assist key: {e}')
 
 
 # ============================================================================
@@ -1176,8 +1154,8 @@ def check_auto_attack():
         return
     
     current_time = time.time()
-    if (current_time - config.last_enemy_hp_capture_time < 
-            config.ENEMY_HP_CAPTURE_INTERVAL):
+    if (current_time - config.last_enemy_hp_capture_time <
+            config.get_enemy_hp_capture_interval()):
         return
     
     config.last_enemy_hp_capture_time = current_time
@@ -1303,15 +1281,20 @@ def check_auto_attack():
                 # Execute skill sequence when enemy is found (only if any skills are enabled)
                 # Check assist_only mode: only use skills if should_use_skills returns True
                 if (config.skill_sequence_manager and config.area_skills and
-                    any(config.skill_sequence_config[i]['image_path'] and config.skill_sequence_config[i]['enabled'] 
-                        for i in range(8))):
-                    # Check if should use skills based on assist_only mode
+                    any(
+                        config.skill_sequence_config[i]['image_path']
+                        and config.skill_sequence_config[i]['enabled']
+                        for i in range(8)
+                    )):
                     if should_use_skills(enemy_hp_percentage):
                         try:
-                            screen = config.calibrator.capture_window(hwnd)
-                            if screen is not None:
+                            skill_screen = result.get('screen')
+                            if skill_screen is None:
+                                skill_screen = frame_cache.get_frame(hwnd, config.calibrator)
+                            if skill_screen is not None:
                                 config.skill_sequence_manager.execute_skill_sequence(
-                                    hwnd, screen, config.area_skills, enemy_found=True, run_active=config.bot_running
+                                    hwnd, skill_screen, config.area_skills,
+                                    enemy_found=True, run_active=config.bot_running
                                 )
                         except Exception as e:
                             print(f"[AutoAttack] Error executing skill sequence: {e}")

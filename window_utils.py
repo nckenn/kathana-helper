@@ -59,31 +59,43 @@ def capture_window_region(hwnd, x, y, width, height):
     """Capture a region from a specific window at given coordinates (relative to window's client area)
     Returns a PIL Image object"""
     try:
+        bgr = capture_window_region_bgr(hwnd, x, y, width, height)
+        if bgr is None:
+            return None
+        from PIL import Image
+        rgb = bgr[:, :, ::-1]
+        return Image.fromarray(rgb)
+    except Exception as e:
+        print(f"Error capturing window region: {e}")
+        return None
+
+
+def capture_window_region_bgr(hwnd, x, y, width, height):
+    """Capture a window sub-region as a BGR numpy array (window-image coordinates)."""
+    import numpy as np
+    try:
         hwndDC = win32gui.GetWindowDC(hwnd)
         mfcDC = win32ui.CreateDCFromHandle(hwndDC)
         saveDC = mfcDC.CreateCompatibleDC()
-        
         saveBitMap = win32ui.CreateBitmap()
         saveBitMap.CreateCompatibleBitmap(mfcDC, width, height)
         saveDC.SelectObject(saveBitMap)
-        
         saveDC.BitBlt((0, 0), (width, height), mfcDC, (x, y), win32con.SRCCOPY)
-        
-        bmpinfo = saveBitMap.GetInfo()
-        bmpstr = saveBitMap.GetBitmapBits(True)
-        img = Image.frombuffer(
-            'RGB',
-            (bmpinfo['bmWidth'], bmpinfo['bmHeight']),
-            bmpstr, 'raw', 'BGRX', 0, 1)
-        
+        signedIntsArray = saveBitMap.GetBitmapBits(True)
+        img = np.frombuffer(signedIntsArray, dtype='uint8')
+        img.shape = (height, width, 4)
+        try:
+            import cv2
+            result = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+        except ImportError:
+            result = img[:, :, :3][:, :, ::-1].copy()
         win32gui.DeleteObject(saveBitMap.GetHandle())
         saveDC.DeleteDC()
         mfcDC.DeleteDC()
         win32gui.ReleaseDC(hwnd, hwndDC)
-        
-        return img
+        return result
     except Exception as e:
-        print(f"Error capturing window region: {e}")
+        print(f"Error capturing window region BGR: {e}")
         return None
 
 

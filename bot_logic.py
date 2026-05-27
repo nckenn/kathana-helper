@@ -102,97 +102,93 @@ def smart_loot():
         # Note: is_looting flag will be cleared by check_auto_attack after LOOTING_DURATION
 
 
+def _extract_buff_active_area(screen, origin):
+    """Crop the active-buffs strip from a cached frame."""
+    import frame_cache
+    if screen is None:
+        return None
+    sys_msg_x = config.system_message_area.get('x', 0)
+    sys_msg_y = config.system_message_area.get('y', 0)
+    sys_msg_width = config.system_message_area.get('width', 0)
+    sys_msg_height = config.system_message_area.get('height', 0)
+    if sys_msg_width <= 0 or sys_msg_height <= 0:
+        return None
+
+    fh, fw = screen.shape[:2]
+    full_h = fh + origin[1]
+    full_w = fw + origin[0]
+    half_width = sys_msg_width // 2
+    half_height = sys_msg_height // 2
+    sys_msg_left = sys_msg_x - half_width
+    sys_msg_right = sys_msg_x + half_width
+    sys_msg_top = sys_msg_y - half_height
+    sys_msg_left = max(0, min(full_w, sys_msg_left))
+    sys_msg_right = max(0, min(full_w, sys_msg_right))
+    sys_msg_top = max(0, min(full_h, sys_msg_top))
+    buff_height_start = max(0, sys_msg_top - 44)
+    buff_height_end = sys_msg_top - 4
+    buff_width_start = sys_msg_left - 14
+    buff_width_end = sys_msg_right + 10
+    if (buff_height_start < 0 or buff_height_end > full_h
+            or buff_width_start < 0 or buff_width_end > full_w
+            or buff_height_start >= buff_height_end
+            or buff_width_start >= buff_width_end):
+        return None
+    return frame_cache.crop_rect(
+        screen,
+        buff_width_start, buff_height_start,
+        buff_width_end, buff_height_end,
+        origin,
+    )
+
+
 def check_buffs():
-    """Check and activate buffs if needed"""
+    """Check and activate buffs if needed (image recognition — same in all modes)."""
     if not config.buffs_manager or not config.calibrator:
         return
-    
-    # Check if any enabled buffs are configured (have image paths and are enabled)
+
     buffs_configured = any(
-        config.buffs_config[i]['image_path'] and config.buffs_config[i]['enabled'] 
+        config.buffs_config[i]['image_path'] and config.buffs_config[i]['enabled']
         for i in range(8)
     )
     if not buffs_configured:
         return
-    
-    # Need both:
-    # - system_message_area: to build correct-width active-buffs strip above it
-    # - area_skills: to find/click skills for activation
-    if not config.system_message_area or not config.system_message_area.get('width', 0) > 0:
+
+    if not config.system_message_area or config.system_message_area.get('width', 0) <= 0:
         return
     if not config.area_skills:
         return
-    
-    # Throttle buff checking to reduce CPU usage (check every 0.5s instead of every 0.1s)
+
     current_time = time.time()
     if not hasattr(check_buffs, 'last_check_time'):
         check_buffs.last_check_time = 0
-    BUFF_CHECK_INTERVAL = 0.5  # Check buffs every 0.5 seconds
-    
-    if current_time - check_buffs.last_check_time < BUFF_CHECK_INTERVAL:
+    buff_interval = config.get_buff_check_interval()
+    if current_time - check_buffs.last_check_time < buff_interval:
         return
-    
     check_buffs.last_check_time = current_time
-    
+
     try:
-        import cv2
-        import os
-        
-        # Get window handle
         if hasattr(config.connected_window, 'handle'):
             hwnd = config.connected_window.handle
         else:
             hwnd = config.connected_window
-        
-        # Capture screen
-        screen = config.calibrator.capture_window(hwnd)
-        if screen is not None:
-            # Extract area_skills from stored coordinates
-            x1, y1, x2, y2 = config.area_skills
-            area_skills = screen[y1:y2, x1:x2]
-            
-            # Calculate area_buffs_activos (40 pixels above system message area)
-            # system_message_area is center-based in config: {x,y,width,height}
-            h, w = screen.shape[:2]
-            sys_msg_x = config.system_message_area.get('x', 0)
-            sys_msg_y = config.system_message_area.get('y', 0)
-            sys_msg_width = config.system_message_area.get('width', 0)
-            sys_msg_height = config.system_message_area.get('height', 0)
 
-            if sys_msg_width <= 0 or sys_msg_height <= 0:
-                return
+        import frame_cache
+        screen = frame_cache.get_frame(hwnd, config.calibrator)
+        if screen is None:
+            return
+        origin = frame_cache.get_origin()
+        area_buffs_activos = _extract_buff_active_area(screen, origin)
+        if area_buffs_activos is None:
+            return
 
-            half_width = sys_msg_width // 2
-            half_height = sys_msg_height // 2
-
-            # Convert from center -> bounds
-            sys_msg_left = sys_msg_x - half_width
-            sys_msg_right = sys_msg_x + half_width
-            sys_msg_top = sys_msg_y - half_height
-
-            # Clamp to screen
-            sys_msg_left = max(0, min(w, sys_msg_left))
-            sys_msg_right = max(0, min(w, sys_msg_right))
-            sys_msg_top = max(0, min(h, sys_msg_top))
-
-            buff_height_start = max(0, sys_msg_top - 44)
-            buff_height_end = sys_msg_top - 4
-            buff_width_start = sys_msg_left - 14
-            buff_width_end = sys_msg_right + 10
-
-            if (buff_height_start >= 0 and buff_height_end <= h and
-                buff_width_start >= 0 and buff_width_end <= w and
-                buff_height_start < buff_height_end and
-                buff_width_start < buff_width_end):
-                area_buffs_activos = screen[buff_height_start:buff_height_end, buff_width_start:buff_width_end]
-            else:
-                return
-            
-            # Call buffs manager update
-            config.buffs_manager.update_and_activate_buffs(
-                hwnd, screen, area_skills, area_buffs_activos, 
-                x1, y1, run_active=config.bot_running
-            )
+        x1, y1, x2, y2 = config.area_skills
+        area_skills = frame_cache.crop_rect(screen, x1, y1, x2, y2, origin)
+        if area_skills is None:
+            return
+        config.buffs_manager.update_and_activate_buffs(
+            hwnd, screen, area_skills, area_buffs_activos,
+            x1, y1, run_active=config.bot_running)
     except Exception as e:
         print(f"[Buffs] Error checking buffs: {e}")
         import traceback
@@ -297,8 +293,6 @@ def bot_loop():
                     any(config.buffs_config[i]['image_path'] and config.buffs_config[i]['enabled'] 
                         for i in range(8))):
                     check_buffs()  # High priority - check buffs early (has internal throttling)
-                # Skill sequence is now executed inside check_auto_attack when enemy is found
-                # Also call check_auto_attack when assist_only is enabled (needs to monitor HP for assist logic)
                 if config.auto_attack_enabled or config.assist_only_enabled:
                     auto_attack.check_auto_attack()
                 
@@ -314,9 +308,7 @@ def bot_loop():
                 if config.mouse_clicker_enabled:
                     check_mouse_clicker()
             
-        # Sleep slightly longer since most functions now have internal throttling
-        # This reduces CPU usage while maintaining responsiveness
-        time.sleep(0.15)
+        time.sleep(config.get_bot_loop_sleep())
     
     # Clean up when bot stops
     print("Bot loop stopped")

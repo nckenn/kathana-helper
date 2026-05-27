@@ -14,9 +14,6 @@ import auto_attack
 # Constants
 # ============================================================================
 
-# HP tracking thresholds
-HP_STAGNANT_THRESHOLD = 5.0  # HP difference threshold to reset stagnant timer
-
 # Unstuck movement parameters
 MOVEMENT_KEYS = ['w', 's', 'a', 'd']
 MOVEMENT_COUNT_MIN = 4
@@ -65,25 +62,26 @@ class HpStagnantTracker:
     @staticmethod
     def update_tracking(current_time, current_hp):
         """
-        Update HP stagnant tracking
-        Returns True if HP changed significantly (timer should reset)
+        Update HP stagnant tracking.
+        Refresh timer when boss HP drops/heals meaningfully vs last reference (slow chip damage counts).
         """
-        if config.last_enemy_hp_before_stagnant is not None:
-            hp_difference = abs(config.last_enemy_hp_before_stagnant - current_hp)
-            if hp_difference > HP_STAGNANT_THRESHOLD:
-                # Reset stagnant timer if HP changes significantly
-                config.enemy_hp_stagnant_time = current_time
-                config.last_enemy_hp_before_stagnant = current_hp
-                return True
-            else:
-                # Update HP but keep timer running if change is minimal
-                config.last_enemy_hp_before_stagnant = current_hp
-                return False
-        else:
-            # Initialize stagnant tracking
+        eps = getattr(config, "hp_stagnant_noise_epsilon", 0.35)
+        if config.last_enemy_hp_before_stagnant is None:
             config.enemy_hp_stagnant_time = current_time
             config.last_enemy_hp_before_stagnant = current_hp
             return False
+
+        ref = config.last_enemy_hp_before_stagnant
+        if current_hp < ref - eps:
+            config.enemy_hp_stagnant_time = current_time
+            config.last_enemy_hp_before_stagnant = current_hp
+            return True
+        if current_hp > ref + eps:
+            config.enemy_hp_stagnant_time = current_time
+            config.last_enemy_hp_before_stagnant = current_hp
+            return True
+
+        return False
     
     @staticmethod
     def get_current_hp():
@@ -243,9 +241,8 @@ def update_unstuck_countdown_display(current_time):
 
 def check_auto_unstuck():
     """
-    Check enemy HP for stagnant detection and trigger unstuck if HP is stagnant 
-    for timeout period. Checks if HP change > 5% to reset timer, uses stagnant 
-    HP time tracking.
+    Check enemy HP for stagnant detection and trigger unstuck if HP is stagnant
+    for the timeout period. HP moves above noise (see config.hp_stagnant_noise_epsilon) reset the timer.
     """
     # Early exit if assist_only is enabled (party leader determines target)
     if config.assist_only_enabled:
