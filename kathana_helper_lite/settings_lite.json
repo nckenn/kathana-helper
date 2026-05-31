@@ -1,0 +1,168 @@
+{
+  "skill_slots": {
+    "1": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "2": {
+      "enabled": true,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "3": {
+      "enabled": true,
+      "interval": 2.0,
+      "last_used": 0
+    },
+    "4": {
+      "enabled": true,
+      "interval": 3.0,
+      "last_used": 0
+    },
+    "5": {
+      "enabled": false,
+      "interval": 3.0,
+      "last_used": 0
+    },
+    "6": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "7": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "8": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "9": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "0": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "f1": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "f2": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "f3": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "f4": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "f5": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "f6": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "f7": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "f8": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "f9": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "f10": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    }
+  },
+  "action_slots": {
+    "target": {
+      "enabled": true,
+      "interval": 3.0,
+      "last_used": 0,
+      "key": "e"
+    },
+    "attack": {
+      "enabled": true,
+      "interval": 2.0,
+      "last_used": 0,
+      "key": "r"
+    },
+    "pick": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0,
+      "key": "f"
+    }
+  },
+  "auto_hp_enabled": true,
+  "auto_mp_enabled": true,
+  "hp_thresholds": [
+    {
+      "threshold": 90,
+      "key": "0"
+    }
+  ],
+  "mp_threshold": 50,
+  "mp_key": "9",
+  "hp_bar_area": {
+    "x": 590,
+    "y": 893,
+    "width": 216,
+    "height": 18
+  },
+  "mp_bar_area": {
+    "x": 588,
+    "y": 910,
+    "width": 217,
+    "height": 14
+  },
+  "selected_window": "Kathana - The Coming of the Dark Ages",
+  "mob_filter_enabled": true,
+  "mob_scan_area": {
+    "x": 588,
+    "y": 929,
+    "width": 144,
+    "height": 21
+  },
+  "mob_match_threshold": 0.75,
+  "mob_match_margin": 0.05,
+  "mob_templates": [
+    {
+      "id": "60ddce9a",
+      "name": "Monster 1",
+      "file": "mob_60ddce9a.png"
+    },
+    {
+      "id": "0da2b9cf",
+      "name": "Monster 2",
+      "file": "mob_0da2b9cf.png"
+    }
+  ]
+}

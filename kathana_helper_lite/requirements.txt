@@ -1,0 +1,8 @@
+customtkinter>=5.2.0
+pywin32>=306
+pywinauto>=0.6.9
+pydirectinput>=1.0.4
+pyautogui>=0.9.54
+opencv-python>=4.8.0
+numpy>=1.24.0
+Pillow>=10.0.0

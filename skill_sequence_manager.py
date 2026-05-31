@@ -5,6 +5,7 @@ import time
 import os
 import config
 import input_handler
+import template_cache
 try:
     import cv2
     CV2_AVAILABLE = True
@@ -22,6 +23,9 @@ class SkillSequenceManager:
         self.ultimo_tiempo_skill = 0
         self.ui_reference = None
         self.enemy_found_previous = False
+        # Cache last seen icon positions in the skills area to avoid full-bar scans.
+        # key: resolved template path -> (x, y) in cropped `area` coordinates (top-left match)
+        self._skills_loc_cache = {}
     
     def set_skill(self, idx, image_path):
         """Set a skill image path for a specific index (should be relative path)"""
@@ -144,18 +148,52 @@ class SkillSequenceManager:
             return
         
         # Load template (skill_path is already resolved)
-        template = cv2.imread(skill_path, cv2.IMREAD_COLOR)
+        template = template_cache.get_template(skill_path, cv2.IMREAD_COLOR)
         if template is None:
             print(f'[SKILL-SEQUENCE] Could not load template from: {skill_path}')
             return
+
+        def match_with_hint(area_img, template_img, cache_key, threshold=0.7):
+            """Match in small ROI around cached loc, then fall back to full scan."""
+            if area_img is None or template_img is None or area_img.size == 0:
+                return False, None, 0.0
+            if area_img.shape[0] < template_img.shape[0] or area_img.shape[1] < template_img.shape[1]:
+                return False, None, 0.0
+
+            hint = self._skills_loc_cache.get(cache_key)
+            if hint is not None:
+                hx, hy = hint
+                pad = 30
+                x0 = max(0, hx - pad)
+                y0 = max(0, hy - pad)
+                x1r = min(area_img.shape[1], hx + template_img.shape[1] + pad)
+                y1r = min(area_img.shape[0], hy + template_img.shape[0] + pad)
+                roi = area_img[y0:y1r, x0:x1r]
+                if roi.shape[0] >= template_img.shape[0] and roi.shape[1] >= template_img.shape[1]:
+                    res = cv2.matchTemplate(roi, template_img, cv2.TM_CCOEFF_NORMED)
+                    _, max_val, _, max_loc = cv2.minMaxLoc(res)
+                    if max_val >= threshold:
+                        loc = (x0 + max_loc[0], y0 + max_loc[1])
+                        self._skills_loc_cache[cache_key] = loc
+                        return True, loc, float(max_val)
+
+            res = cv2.matchTemplate(area_img, template_img, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+            if max_val >= threshold:
+                self._skills_loc_cache[cache_key] = max_loc
+                return True, max_loc, float(max_val)
+            return False, None, float(max_val)
         
         # Check if area is large enough
         if area.shape[0] >= template.shape[0] and area.shape[1] >= template.shape[1]:
-            # Template matching
-            res = cv2.matchTemplate(area, template, cv2.TM_CCOEFF_NORMED)
-            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
-            
-            if max_val > 0.7:
+            found, max_loc, max_val = match_with_hint(
+                area_img=area,
+                template_img=template,
+                cache_key=skill_path,
+                threshold=0.7,
+            )
+
+            if found:
                 # Skill found
                 current_time = time.time()
                 if current_time - self.ultimo_tiempo_skill >= 0.1:

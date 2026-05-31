@@ -6,6 +6,7 @@ import config
 import input_handler
 from gui import BotGUI
 from license_manager import get_license_manager
+import logger
 
 
 def main():
@@ -22,18 +23,18 @@ def main():
     
     if not is_valid:
         # License is invalid or missing - show only license dialog, hide main window
-        print(f"License check failed: {message}")
+        logger.warn(f"License check failed: {message}", "License")
         gui.root.withdraw()  # Hide main window
         gui.show_license_dialog_blocking()  # Show blocking license dialog (waits until closed)
         
         # After dialog closes, re-check license
-        print("License dialog closed, re-checking license...")
+        logger.info("License dialog closed, re-checking license...", "License")
         import time
         time.sleep(0.5)  # Small delay to ensure file is fully written
         is_valid, message, license_data = license_manager.validate_license()
         if is_valid:
             # License is now valid - show main app
-            print("License is now valid, showing main window...")
+            logger.info("License is now valid, showing main window...", "License")
             gui.root.deiconify()
             gui.root.update_idletasks()
             gui.root.lift()
@@ -42,11 +43,11 @@ def main():
             gui.run()
         else:
             # Still invalid - exit app
-            print(f"License still invalid after activation: {message}")
+            logger.warn(f"License still invalid after activation: {message}", "License")
             gui.root.quit()
     else:
         # License is valid - show main app directly
-        print("License is valid, showing main window...")
+        logger.info("License is valid, showing main window...", "License")
         gui.run()
 
 

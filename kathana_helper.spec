@@ -56,9 +56,14 @@ datas = [
     ("calibration.py", "."),
     ("bot_logic.py", "."),
     ("settings_manager.py", "."),
+    ("logger.py", "."),
+    ("state.py", "."),
+    ("template_cache.py", "."),
+    ("loot_helpers.py", "."),
     ("buffs_manager.py", "."),
     ("skill_sequence_manager.py", "."),
     ("gui.py", "."),
+    ("ui", "ui"),
     ("license_manager.py", "."),
     ("icon.ico", "."),  # Application icon
     ("jobs", "jobs"),  # Skill images folder for buffs and skill sequence (all job folders and images)

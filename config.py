@@ -39,6 +39,27 @@ BAR_DETECTION_DEBUG = False
 SAVE_DEBUG_IMAGES = False
 low_cpu_mode = True
 
+# Idle + focus optimizations
+pause_when_unfocused = False  # If True, pauses vision when game isn't focused (off for multitasking/alt-tab)
+unfocused_sleep_seconds = 0.6
+idle_mode_enabled = True
+idle_after_seconds = 5.0  # Enter idle mode after this many seconds without an enemy
+idle_bot_loop_sleep_seconds = 0.45
+idle_enemy_hp_capture_interval = 0.75
+last_enemy_seen_time = 0.0
+
+
+def is_idle(now=None) -> bool:
+    if not idle_mode_enabled:
+        return False
+    if now is None:
+        import time
+        now = time.time()
+    # On startup (or after reset), treat unknown as "not idle" so intervals stay stable.
+    if last_enemy_seen_time <= 0:
+        return False
+    return (now - last_enemy_seen_time) >= idle_after_seconds
+
 # Base intervals (normal mode) — use getters for effective values
 _BASE_ENEMY_HP_CAPTURE_INTERVAL = 0.2
 _BASE_HP_CAPTURE_INTERVAL = 0.3
@@ -226,6 +247,8 @@ _assist_only_previous_auto_change_target = None
 
 
 def get_enemy_hp_capture_interval():
+    if is_idle():
+        return idle_enemy_hp_capture_interval
     return 0.35 if low_cpu_mode else _BASE_ENEMY_HP_CAPTURE_INTERVAL
 
 
@@ -238,10 +261,13 @@ def get_mp_capture_interval():
 
 
 def get_buff_check_interval():
-    return 0.65 if low_cpu_mode else _BASE_BUFF_CHECK_INTERVAL
+    # Buff icon checks rely on template matching; keep this a bit slower in Low CPU mode.
+    return 0.80 if low_cpu_mode else _BASE_BUFF_CHECK_INTERVAL
 
 
 def get_bot_loop_sleep():
+    if is_idle():
+        return idle_bot_loop_sleep_seconds
     return 0.20 if low_cpu_mode else _BASE_BOT_LOOP_SLEEP
 
 
@@ -277,36 +303,29 @@ def safe_update_gui(update_func):
         pass  # Skip update if queue is full to prevent blocking
 
 
+def apply_resource_path(relative_path):
+    """Resolve a relative resource path for dev and PyInstaller (may not exist yet)."""
+    if not relative_path:
+        return None
+
+    import os
+    import sys
+
+    relative_path = os.path.normpath(relative_path)
+    if getattr(sys, 'frozen', False):
+        base_path = sys._MEIPASS
+    else:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    return os.path.normpath(os.path.join(base_path, relative_path))
+
+
 def resolve_resource_path(relative_path):
     """
     Resolve a relative resource path that works in both development and PyInstaller builds.
-    
-    Args:
-        relative_path: Relative path string (e.g., "jobs/Nakayuda/1.BMP")
-        
+
     Returns:
         Resolved absolute path, or None if path doesn't exist
     """
-    if not relative_path:
-        return None
-    
     import os
-    import sys
-    
-    # Normalize the path
-    relative_path = os.path.normpath(relative_path)
-    
-    # Determine base path based on execution environment
-    if getattr(sys, 'frozen', False):
-        # Running as compiled executable (PyInstaller)
-        base_path = sys._MEIPASS
-    else:
-        # Running as script
-        base_path = os.path.dirname(os.path.abspath(__file__))
-    
-    # Join base path with relative path
-    resolved_path = os.path.join(base_path, relative_path)
-    resolved_path = os.path.normpath(resolved_path)
-    
-    # Return path if it exists, otherwise None
-    return resolved_path if os.path.exists(resolved_path) else None
+    resolved_path = apply_resource_path(relative_path)
+    return resolved_path if resolved_path and os.path.exists(resolved_path) else None

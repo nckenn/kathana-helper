@@ -53,6 +53,10 @@ RED_UPPER_2 = np.array([180, 255, 255])
 TARGET_SIMILARITY_THRESHOLD = 0.7
 MOB_VERIFICATION_INTERVAL = 2.0  # Seconds between mob verifications during combat
 
+# Name stability (anti-OCR-fluke): require the same name twice quickly before trusting it
+NAME_STABLE_REQUIRED_READS = 2
+NAME_STABLE_MAX_GAP_SECONDS = 0.8
+
 # HP detection thresholds
 HP_JUMP_THRESHOLD_LOW = 50   # If last avg < this and new >= 95, enemy died
 HP_JUMP_THRESHOLD_HIGH = 95
@@ -76,6 +80,11 @@ def normalize_text(text):
     if not text:
         return ''
     return re.sub('[^a-zA-Z\\s]', '', text.lower())
+
+
+def _collapse_spaces(text: str) -> str:
+    """Collapse repeated whitespace to single spaces and trim."""
+    return re.sub(r'\s+', ' ', (text or '')).strip()
 
 
 def contains_complete_word(target, detected):
@@ -353,14 +362,47 @@ def detect_and_verify_mob_after_target(delay=0.05, retry_delay=0.08):
     hwnd = config.connected_window.handle
     detected_mob = None
     
-    # Try to detect mob name using calibration-based detection
-    result = detect_enemy_for_auto_attack(hwnd, targets=None)
+    mob_filter_enabled = config.mob_detection_enabled and bool(config.mob_target_list)
+
+    # If filtering is enabled, validate using stable OCR + target matching to avoid jitter retarget loops.
+    if mob_filter_enabled:
+        targets = config.mob_target_list
+        result = detect_enemy_for_auto_attack(hwnd, targets=targets, read_name=True)
+        detected_mob = result.get('name')
+
+        if (not result.get('name_stable')) and retry_delay > 0:
+            time.sleep(retry_delay)
+            result = detect_enemy_for_auto_attack(hwnd, targets=targets, read_name=True)
+            detected_mob = result.get('name')
+
+        # Only decide retarget when we have a stable name and an explicit non-match.
+        stable = bool(result.get('name_stable'))
+        matches_target = result.get('matches_target')
+        should_target = bool(matches_target) if (stable and matches_target is not None) else False
+        needs_retarget = stable and (matches_target is False)
+
+        if stable and detected_mob:
+            config.current_target_mob = detected_mob
+            config.current_enemy_name = detected_mob
+            config.last_mob_detection_time = time.time()
+        elif not stable:
+            # Don't update mob name on unstable reads.
+            detected_mob = None
+
+        return {
+            'detected': bool(detected_mob),
+            'name': detected_mob,
+            'should_target': should_target,
+            'needs_retarget': needs_retarget
+        }
+
+    # No filtering: just detect mob name using calibration-based detection
+    result = detect_enemy_for_auto_attack(hwnd, targets=None, read_name=True)
     detected_mob = result.get('name')
-    
-    # If not detected and mob detection is enabled, retry once (optimized delay)
+
     if not detected_mob and config.mob_detection_enabled and retry_delay > 0:
         time.sleep(retry_delay)
-        result = detect_enemy_for_auto_attack(hwnd, targets=None)
+        result = detect_enemy_for_auto_attack(hwnd, targets=None, read_name=True)
         detected_mob = result.get('name')
     
     # Update config with detected mob name
@@ -390,7 +432,8 @@ def detect_and_verify_mob_after_target(delay=0.05, retry_delay=0.08):
 class EnemyDetectionResult:
     """Container for enemy detection results"""
     def __init__(self, found=False, hp=0.0, position=None, name=None,
-                 ocr_text=None, avara_detected=False, screen=None):
+                 ocr_text=None, avara_detected=False, screen=None,
+                 name_stable=None, matches_target=None, name_checked=None):
         self.found = found
         self.hp = hp
         self.position = position
@@ -398,6 +441,9 @@ class EnemyDetectionResult:
         self.ocr_text = ocr_text
         self.avara_detected = avara_detected
         self.screen = screen
+        self.name_stable = name_stable
+        self.matches_target = matches_target
+        self.name_checked = name_checked
 
     def to_dict(self):
         """Convert to dictionary for backward compatibility"""
@@ -409,13 +455,20 @@ class EnemyDetectionResult:
             'ocr_text': self.ocr_text,
             'avara_detected': self.avara_detected,
         }
+        if self.name_stable is not None:
+            result['name_stable'] = self.name_stable
+        if self.matches_target is not None:
+            result['matches_target'] = self.matches_target
+        if self.name_checked is not None:
+            result['name_checked'] = self.name_checked
         if self.screen is not None:
             result['screen'] = self.screen
         return result
 
 
 def _enemy_detection_needs_early_ocr(targets):
-    """Mob filter or avoid list requires OCR before HP bar acceptance."""
+    """Legacy: whether we must OCR even without a confirmed HP bar."""
+    # Keeping for compatibility; we now prefer HP-first in Low CPU mode whenever possible.
     if targets:
         return True
     if getattr(config, 'mob_avoid_list', None):
@@ -425,7 +478,9 @@ def _enemy_detection_needs_early_ocr(targets):
 
 def _use_hp_first_detection_order(targets):
     """Low CPU: detect HP bar first; OCR only when a bar is found."""
-    return config.low_cpu_mode and not _enemy_detection_needs_early_ocr(targets)
+    # Even when filtering is enabled, OCR-without-bar is wasted work. In Low CPU mode,
+    # only OCR after we've confirmed an HP bar is present.
+    return bool(config.low_cpu_mode)
 
 
 class EnemyStateManager:
@@ -593,6 +648,37 @@ class EnemyHpBarDetector:
 
 class EnemyNameValidator:
     """Handles enemy name validation and target matching"""
+
+    _stable_last_name = ''
+    _stable_last_time = 0.0
+    _stable_count = 0
+
+    @staticmethod
+    def update_stability(detected_name: str, now: float) -> bool:
+        """
+        Track recent detected names and return True when the same normalized name
+        has been seen `NAME_STABLE_REQUIRED_READS` times within `NAME_STABLE_MAX_GAP_SECONDS`.
+        """
+        name_norm = _collapse_spaces(normalize_text(detected_name))
+        if not name_norm:
+            EnemyNameValidator._stable_last_name = ''
+            EnemyNameValidator._stable_last_time = now
+            EnemyNameValidator._stable_count = 0
+            return False
+
+        if name_norm != EnemyNameValidator._stable_last_name or (now - EnemyNameValidator._stable_last_time) > NAME_STABLE_MAX_GAP_SECONDS:
+            EnemyNameValidator._stable_last_name = name_norm
+            EnemyNameValidator._stable_count = 1
+        else:
+            EnemyNameValidator._stable_count += 1
+
+        EnemyNameValidator._stable_last_time = now
+        return EnemyNameValidator._stable_count >= NAME_STABLE_REQUIRED_READS
+
+    @staticmethod
+    def is_name_stable(detected_name: str, now: float) -> bool:
+        """Convenience wrapper to check stability without exposing internals."""
+        return EnemyNameValidator.update_stability(detected_name, now)
     
     @staticmethod
     def check_avoid_mob_detection(detected_name):
@@ -715,7 +801,7 @@ class EnemyHpProcessor:
 # Main Detection Function
 # ============================================================================
 
-def detect_enemy_for_auto_attack(hwnd, targets=None, screen=None):
+def detect_enemy_for_auto_attack(hwnd, targets=None, screen=None, read_name: bool = True):
     """
     Detect enemy HP percentage and name for auto-attack using calibration-based method
     Uses MP position as reference to find enemy HP bar
@@ -782,40 +868,47 @@ def detect_enemy_for_auto_attack(hwnd, targets=None, screen=None):
         detected_name = ''
         ocr_text = ''
 
-        if hp_first:
-            if bar_found:
+        if read_name:
+            if hp_first:
+                if bar_found:
+                    detected_name, ocr_text = extract_enemy_name_easyocr(name_area)
+            else:
                 detected_name, ocr_text = extract_enemy_name_easyocr(name_area)
-        else:
-            detected_name, ocr_text = extract_enemy_name_easyocr(name_area)
 
-        if EnemyNameValidator.check_avoid_mob_detection(detected_name):
-            print(f'[TARGET] Enemy detected \'{detected_name}\' is in avoid list. Skipping attack.')
-            return EnemyDetectionResult(
-                found=False,
-                name=detected_name,
-                ocr_text=ocr_text,
-                avara_detected=True,
-                screen=screen,
-            ).to_dict()
+        now = time.time()
+        matches_target = None
+        name_is_stable = None
+        name_checked = False
 
-        if targets and detected_name:
-            matches, similarities = EnemyNameValidator.match_targets(detected_name, targets)
-            detector.save_target_comparison_debug(
-                search_area, detected_name, targets, similarities)
-            if not matches:
-                max_similarity = max(similarities) if similarities else 0
-                detected_name_normalized = normalize_text(detected_name)
-                print(
-                    f'[TARGET] Detected name \'{detected_name_normalized}\' '
-                    f'does not match (similarity {max_similarity:.2f}) with '
-                    f'targets {targets}. Ignoring enemy.'
-                )
-                return EnemyDetectionResult(
-                    found=False,
-                    name=detected_name,
-                    ocr_text=ocr_text,
-                    screen=screen,
-                ).to_dict()
+        # Only apply stability + filtering when we actually read a name this tick.
+        if read_name:
+            name_checked = True
+            name_is_stable = EnemyNameValidator.update_stability(detected_name, now)
+
+            # Avoid-list acts like "never attack/keep" for these names.
+            if EnemyNameValidator.check_avoid_mob_detection(detected_name):
+                print(f'[TARGET] Enemy detected \'{detected_name}\' is in avoid list. Skipping attack.')
+                matches_target = False
+
+            # If target filtering is enabled, only decide match/non-match once the name is stable.
+            # While unstable, keep matches_target as None to avoid retarget loops.
+            # (We still return found=True when bar_found so combat logic continues.)
+            if targets:
+                if not name_is_stable:
+                    matches_target = None
+                elif detected_name:
+                    matches, similarities = EnemyNameValidator.match_targets(detected_name, targets)
+                    detector.save_target_comparison_debug(
+                        search_area, detected_name, targets, similarities)
+                    matches_target = bool(matches)
+                    if not matches_target:
+                        max_similarity = max(similarities) if similarities else 0
+                        detected_name_normalized = normalize_text(detected_name)
+                        print(
+                            f'[TARGET] Detected name \'{detected_name_normalized}\' '
+                            f'does not match (similarity {max_similarity:.2f}) with '
+                            f'targets {targets}. Ignoring enemy.'
+                        )
 
         if bar_found:
             enemy_x = mp_x - 1 + best_first
@@ -839,6 +932,9 @@ def detect_enemy_for_auto_attack(hwnd, targets=None, screen=None):
                 name=detected_name,
                 ocr_text=ocr_text,
                 screen=screen,
+                name_stable=name_is_stable,
+                matches_target=matches_target,
+                name_checked=name_checked,
             ).to_dict()
 
         if detected_name:
@@ -1174,18 +1270,34 @@ def check_auto_attack():
         hwnd = config.connected_window.handle
         enemy_hp_percentage = 0.0
         
-        # Use calibration-based detection (includes enemy name extraction)
-        targets = (config.mob_target_list 
-                   if (config.mob_detection_enabled and config.mob_target_list) 
-                   else None)
-        result = detect_enemy_for_auto_attack(hwnd, targets=targets)
+        # Use calibration-based detection. OCR is expensive — only do it when needed.
+        mob_filter_enabled = config.mob_detection_enabled and bool(config.mob_target_list)
+        targets = config.mob_target_list if mob_filter_enabled else None
+
+        # Only OCR name when:
+        # - mob filtering is enabled AND
+        #   - we don't have a recent stable name, or
+        #   - it's time for periodic verification
+        read_name = True
+        if mob_filter_enabled:
+            if not hasattr(check_auto_attack, "_last_name_ocr_time"):
+                check_auto_attack._last_name_ocr_time = 0.0
+            last_ocr = check_auto_attack._last_name_ocr_time
+            have_recent_name = bool(config.current_target_mob) and (current_time - config.last_mob_detection_time) < 1.2
+            needs_periodic = (config.enemy_target_time > 0) and (current_time - last_ocr) >= MOB_VERIFICATION_INTERVAL
+            read_name = (not have_recent_name) or needs_periodic
+
+        result = detect_enemy_for_auto_attack(hwnd, targets=targets, read_name=read_name)
+        if read_name:
+            check_auto_attack._last_name_ocr_time = current_time
         
         if result['found']:
             raw_enemy_hp_percentage = result['hp']
             has_red_bar = True
+            config.last_enemy_seen_time = current_time
             
             # Update current target mob with detected name
-            if result.get('name'):
+            if result.get('name') and result.get('name_stable', True):
                 config.current_target_mob = result['name']
                 config.last_mob_detection_time = current_time
         else:
@@ -1248,6 +1360,21 @@ def check_auto_attack():
                     _auto_target_manager.try_auto_target("no enemy detected")
                     _auto_target_manager.update_search_timer(current_time)
         else:
+            # If mob filter is enabled and the detected mob does not match the list, retarget without
+            # treating this as "enemy disappeared" (prevents loot/stop-fighting behavior).
+            mob_filter_enabled = config.mob_detection_enabled and bool(config.mob_target_list)
+            if mob_filter_enabled and result.get('name_checked') and result.get('matches_target') is False:
+                detected_mob = result.get('name')
+                if detected_mob:
+                    print(f"[Mob Filter] Non-target mob detected: {detected_mob} (retargeting)")
+                EnemyStateManager.reset_enemy_state()
+                if config.skill_sequence_manager:
+                    config.skill_sequence_manager.reset_sequence()
+                if MOB_VERIFICATION_DELAY > 0:
+                    time.sleep(MOB_VERIFICATION_DELAY)
+                _auto_target_manager.try_auto_target("non-target mob detected")
+                return
+
             # Process enemy HP percentage
             if config.enemy_hp_readings:
                 # Check for enemy death

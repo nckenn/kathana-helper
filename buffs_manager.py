@@ -7,6 +7,7 @@ import config
 import input_handler
 import debug_io
 import debug_utils
+import template_cache
 try:
     import cv2
     CV2_AVAILABLE = True
@@ -22,6 +23,9 @@ class BuffsManager:
         self.buffs = [None] * num_buffs
         self.last_click_times = [0.0] * num_buffs
         self.ui_reference = None
+        # Cache last seen icon positions in the skills area to avoid full-bar scans.
+        # key: resolved template path -> (x, y) in area_skills coordinates (top-left match)
+        self._skills_loc_cache = {}
     
     def set_buff(self, idx, image_path):
         """Set a buff image path for a specific index (should be relative path)"""
@@ -50,6 +54,44 @@ class BuffsManager:
         res = cv2.matchTemplate(area_buffs_activos, template, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, _ = cv2.minMaxLoc(res)
         return max_val > 0.7
+
+    def _match_in_skills_with_hint(self, area_skills, template, resolved_path, threshold=0.7):
+        """
+        Try to match template in a small ROI around the cached position first,
+        then fall back to full-area template matching.
+        Returns (found: bool, loc: (x,y) top-left in area_skills coords, confidence: float).
+        """
+        if area_skills is None or template is None or area_skills.size == 0:
+            return False, None, 0.0
+        if area_skills.shape[0] < template.shape[0] or area_skills.shape[1] < template.shape[1]:
+            return False, None, 0.0
+
+        # 1) Fast path: cached location ROI
+        hint = self._skills_loc_cache.get(resolved_path)
+        if hint is not None:
+            hx, hy = hint
+            pad = 30  # pixels around the last known position
+            x0 = max(0, hx - pad)
+            y0 = max(0, hy - pad)
+            x1 = min(area_skills.shape[1], hx + template.shape[1] + pad)
+            y1 = min(area_skills.shape[0], hy + template.shape[0] + pad)
+
+            roi = area_skills[y0:y1, x0:x1]
+            if roi.shape[0] >= template.shape[0] and roi.shape[1] >= template.shape[1]:
+                res = cv2.matchTemplate(roi, template, cv2.TM_CCOEFF_NORMED)
+                _, max_val, _, max_loc = cv2.minMaxLoc(res)
+                if max_val >= threshold:
+                    loc = (x0 + max_loc[0], y0 + max_loc[1])
+                    self._skills_loc_cache[resolved_path] = loc
+                    return True, loc, float(max_val)
+
+        # 2) Slow path: full scan
+        res = cv2.matchTemplate(area_skills, template, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+        if max_val >= threshold:
+            self._skills_loc_cache[resolved_path] = max_loc
+            return True, max_loc, float(max_val)
+        return False, None, float(max_val)
 
     def update_and_activate_buffs(self, hwnd, screen, area_skills, area_buffs_activos, x1, y1, run_active=True):
         """
@@ -92,7 +134,7 @@ class BuffsManager:
                 debug_utils.debug_print(f'Could not resolve path for buff {idx + 1}: {image_path}', 'BuffsManager')
                 continue
             
-            template = cv2.imread(resolved_path, cv2.IMREAD_COLOR)
+            template = template_cache.get_template(resolved_path, cv2.IMREAD_COLOR)
             if template is None:
                 debug_utils.debug_print(f'Could not load template for buff {idx + 1}', 'BuffsManager')
                 continue
@@ -119,13 +161,21 @@ class BuffsManager:
                         found_in_skills = False
                         skill_loc = None
                         if area_skills.shape[0] >= template.shape[0] and area_skills.shape[1] >= template.shape[1]:
-                            res = cv2.matchTemplate(area_skills, template, cv2.TM_CCOEFF_NORMED)
-                            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
-                            debug_utils.debug_print(f'Buff {idx + 1} in skills - confidence: {max_val:.3f}', 'BuffsManager')
-                            if max_val > 0.7:
-                                found_in_skills = True
-                                skill_loc = max_loc
-                                debug_utils.debug_print(f'Buff {idx + 1} found in skills at {skill_loc}', 'BuffsManager')
+                            found_in_skills, skill_loc, max_val = self._match_in_skills_with_hint(
+                                area_skills=area_skills,
+                                template=template,
+                                resolved_path=resolved_path,
+                                threshold=0.7,
+                            )
+                            debug_utils.debug_print(
+                                f'Buff {idx + 1} in skills - confidence: {max_val:.3f}',
+                                'BuffsManager',
+                            )
+                            if found_in_skills:
+                                debug_utils.debug_print(
+                                    f'Buff {idx + 1} found in skills at {skill_loc}',
+                                    'BuffsManager',
+                                )
                                 
                                 # Calculate click position in "window image" coordinates
                                 # (same coordinate system as Calibrator.capture_window())

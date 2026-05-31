@@ -8,6 +8,8 @@ import auto_attack
 import auto_repair
 import auto_unstuck
 import auto_pots
+import logger
+import state
 
 def check_skill_slots():
     """Check and trigger skill slots based on their intervals"""
@@ -49,57 +51,29 @@ def smart_loot():
     Smart loot function - triggers looting when enemy is killed with multiple attempts.
     Improved version with better timing, more attempts, and delayed start to ensure loot appears.
     """
+    import loot_helpers
+
     try:
         current_time = time.time()
-        
-        # Check if already looting to prevent duplicate calls
-        # Only skip if we're still actively looting (not just based on time)
-        if config.is_looting and (current_time - config.looting_start_time) < config.LOOTING_DURATION:
-            print(f"[Smart Loot] Skipped - already looting (started {current_time - config.looting_start_time:.2f}s ago)")
+        if loot_helpers.should_skip_loot(current_time):
             return
-        
-        # Check if pick action is enabled
-        if not config.action_slots['pick']['enabled']:
-            print("[Smart Loot] Skipped - pick action not enabled")
+        if not loot_helpers.can_start_loot():
             return
-        
-        action_key = config.action_slots['pick']['key']
-        if not action_key:
-            print("[Smart Loot] Skipped - no pick key configured")
-            return
-        
-        # Update last loot time immediately to prevent duplicate calls
-        config.last_smart_loot_time = current_time
-        
-        # Set looting flag to prevent auto-targeting during looting
-        config.is_looting = True
-        config.looting_start_time = current_time
-        
-        print(f"[Smart Loot] Starting loot sequence (key: {action_key})")
-        
-        # No initial delay - loot immediately after kill detection
-        # Multiple loot attempts with minimal delays to ensure items are picked up
+
+        action_key = loot_helpers.begin_loot(current_time)
         num_attempts = 4
-        attempt_delay = 0.1  # Reduced delay between attempts for faster looting
-        
+        attempt_delay = 0.1
+
         for attempt in range(num_attempts):
             input_handler.send_input(action_key)
-            if attempt < num_attempts - 1:  # Don't sleep after last attempt
+            if attempt < num_attempts - 1:
                 time.sleep(attempt_delay)
-        
-        print(f"[Smart Loot] Completed ({num_attempts} attempts)")
 
-        # Loot sequence is done; allow auto-targeting again immediately.
-        # (Auto-attack callers often retarget right after smart_loot() returns.)
-        config.is_looting = False
+        loot_helpers.end_loot()
 
     except Exception as e:
-        print(f"[Smart Loot] Error: {e}")
-        import traceback
-        traceback.print_exc()
-        # Reset flags on error
-        config.is_looting = False
-        # Note: is_looting flag will be cleared by check_auto_attack after LOOTING_DURATION
+        logger.error(f"Smart loot error: {e}", "Loot")
+        loot_helpers.end_loot()
 
 
 def _extract_buff_active_area(screen, origin):
@@ -258,7 +232,7 @@ def reset_bot_state():
     # Set flag to force initial auto-target on bot start (if auto attack enabled)
     config.force_initial_target = config.auto_attack_enabled
     
-    print("[BOT STATE] All timers and smoothing buffers reset")
+    logger.info("All timers and smoothing buffers reset", "BotState")
 
 
 def bot_loop():
@@ -271,18 +245,34 @@ def bot_loop():
     initial_target_done = False
     
     while config.bot_running:
-        if config.connected_window:
-            if config.calibrator and config.calibrator.hp_position is not None and config.calibrator.mp_position is not None:
+        bs = state.BotState(running=config.bot_running, is_looting=config.is_looting)
+        vs = state.VisionState(connected_window=config.connected_window, calibrator=config.calibrator)
+        cs = state.CombatState(auto_attack_enabled=config.auto_attack_enabled, assist_only_enabled=config.assist_only_enabled)
+
+        if vs.connected_window:
+            # Optional: pause vision when game isn't focused (disabled by default for alt-tab multitasking).
+            if getattr(config, "pause_when_unfocused", False):
+                try:
+                    import win32gui
+                    hwnd = vs.connected_window.handle
+                    if win32gui.IsIconic(hwnd) or win32gui.GetForegroundWindow() != hwnd:
+                        time.sleep(getattr(config, "unfocused_sleep_seconds", 0.6))
+                        continue
+                except Exception:
+                    # If focus checks fail, continue normally.
+                    pass
+
+            if vs.calibrator and vs.calibrator.hp_position is not None and vs.calibrator.mp_position is not None:
                 # Force initial auto-target on bot start if auto attack is enabled
-                if (config.force_initial_target and config.auto_attack_enabled and 
-                    not initial_target_done and not config.is_looting):
+                if (config.force_initial_target and cs.auto_attack_enabled and
+                    not initial_target_done and not bs.is_looting):
                     # Small delay to ensure everything is initialized
                     time.sleep(0.2)
                     auto_attack._auto_target_manager.reset_search_timer()
                     auto_attack._auto_target_manager.try_auto_target("bot started")
                     initial_target_done = True
                     config.force_initial_target = False
-                    print("[Bot Start] Forced initial auto-targeting")
+                    logger.info("Forced initial auto-targeting", "BotStart")
                 
                 # High priority: Auto pots and buffs (buffs should be checked early for combat effectiveness)
                 # Only check if features are enabled to avoid unnecessary work
@@ -293,11 +283,11 @@ def bot_loop():
                     any(config.buffs_config[i]['image_path'] and config.buffs_config[i]['enabled'] 
                         for i in range(8))):
                     check_buffs()  # High priority - check buffs early (has internal throttling)
-                if config.auto_attack_enabled or config.assist_only_enabled:
+                if cs.auto_attack_enabled or cs.assist_only_enabled:
                     auto_attack.check_auto_attack()
                 
                 # Check and click assist button if assist_only is enabled (spam assist button)
-                if config.assist_only_enabled:
+                if cs.assist_only_enabled:
                     auto_attack.check_assist_key()
                 
                 if config.auto_change_target_enabled:
@@ -311,4 +301,4 @@ def bot_loop():
         time.sleep(config.get_bot_loop_sleep())
     
     # Clean up when bot stops
-    print("Bot loop stopped")
+    logger.info("Bot loop stopped", "Bot")

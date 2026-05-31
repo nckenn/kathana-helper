@@ -122,29 +122,11 @@ def connect_to_window(window_title=None):
 
 
 def connect_attacker(window_title=None):
-    """Connect to a game window and update global config (legacy compatibility)"""
+    """Connect to a game window and update global config (legacy compatibility)."""
     import config
-    import pywinauto
-    
-    app = pywinauto.application.Application()
-    try:
-        if window_title:
-            app.connect(title=window_title)
-            window = app.window(title=window_title)
-            config.selected_window = window_title
-        else:
-            app.connect(title="0")
-            window = app.window(title="0")
-            config.selected_window = "0"
-        
-        config.connected_window = window
-        
-        if window is not None:
-            print(f"✅ Successfully connected to window: {config.selected_window}")
-        else:
-            config.connected_window = None
-            print("Failed to connect to window")
-    except Exception as e:
+
+    window = connect_to_window(window_title)
+    config.selected_window = window_title if window_title else "0"
+    config.connected_window = window
+    if window is None:
         config.connected_window = None
-        print(f"Error connecting to window: {e}")
-        return

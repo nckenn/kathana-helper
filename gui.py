@@ -21,6 +21,9 @@ import ocr_utils
 import calibration
 from license_manager import get_license_manager
 import debug_utils
+import logger
+from ui.keybind_dialogs import open_keybind_dialog
+from ui.settings_overlays import collect_gui_overlay
 
 
 class ToolTip:
@@ -91,7 +94,7 @@ class BotGUI:
         """Check OCR availability on startup in background thread (non-blocking)"""
         def check_thread():
             """Background thread to check OCR availability"""
-            print("Checking OCR availability...")
+            logger.info("Checking OCR availability...", "OCR")
             is_available, error_msg, mode, troubleshooting = ocr_utils.check_ocr_availability()
             
             # Store OCR availability in config
@@ -116,9 +119,9 @@ class BotGUI:
                         "You can re-check OCR availability from the Settings tab after fixing the issue."
                     )
                     messagebox.showwarning("OCR Not Available", warning_message)
-                    print("WARNING: OCR is not available - OCR features will be disabled")
+                    logger.warn("OCR is not available - OCR features will be disabled", "OCR")
                 else:
-                    print(f"OCR check passed - Available in {mode.upper()} mode")
+                    logger.info(f"OCR check passed - Available in {mode.upper()} mode", "OCR")
             
             # Schedule GUI update in main thread
             self.root.after(0, update_gui)
@@ -741,22 +744,22 @@ class BotGUI:
     def save_settings_gui(self):
         """Save settings from GUI"""
         if settings_manager.save_settings():
-            print("Settings saved successfully!")
+            logger.info("Settings saved successfully!", "Settings")
             messagebox.showinfo("Save Settings", "Settings saved successfully!")
         else:
-            print("Failed to save settings!")
+            logger.warn("Failed to save settings!", "Settings")
             messagebox.showerror("Save Settings", "Failed to save settings!")
     
     def load_settings_gui(self):
         """Load settings to GUI"""
-        print("Loading settings...")
+        logger.info("Loading settings...", "Settings")
         if settings_manager.load_settings():
-            print("Settings loaded from file, applying to GUI...")
+            logger.info("Settings loaded from file, applying to GUI...", "Settings")
             self.apply_settings_to_gui()
-            print("Settings loaded and applied successfully!")
+            logger.info("Settings loaded and applied successfully!", "Settings")
             messagebox.showinfo("Load Settings", "Settings loaded successfully!")
         else:
-            print("Failed to load settings!")
+            logger.warn("Failed to load settings!", "Settings")
             messagebox.showwarning("Load Settings", "No saved settings found or failed to load settings!")
     
     def apply_settings_to_gui(self):
@@ -1590,15 +1593,12 @@ class BotGUI:
         update_btn = ctk.CTkButton(mob_btn_frame, text="Update List", command=self.update_target_list, width=100, corner_radius=6)
         update_btn.grid(row=0, column=0, padx=(0, 10))
         
-        test_btn = ctk.CTkButton(mob_btn_frame, text="Test", command=self.test_mob_detection, width=100, corner_radius=6)
-        test_btn.grid(row=0, column=1, padx=(0, 10))
-        
-        # Record button - captures current enemy name automatically
+        # Capture button - captures current enemy name automatically
         is_calibrated = config.calibrator is not None and config.calibrator.mp_position is not None and config.connected_window is not None
-        self.record_target_btn = ctk.CTkButton(mob_btn_frame, text="Record", command=self.record_target_mob, width=100, corner_radius=6, 
+        self.record_target_btn = ctk.CTkButton(mob_btn_frame, text="Capture", command=self.record_target_mob, width=100, corner_radius=6, 
                                   state="normal" if is_calibrated else "disabled")
-        self.record_target_btn.grid(row=0, column=2)
-        create_tooltip(self.record_target_btn, "Records the currently targeted enemy name and adds it to the mob target list. Requires calibration and an active target.")
+        self.record_target_btn.grid(row=0, column=1)
+        create_tooltip(self.record_target_btn, "Captures the currently targeted enemy name and adds it to the mob target list. Requires calibration and an active target.")
         
         settings_frame.rowconfigure(13, weight=0)
         
@@ -1967,6 +1967,9 @@ class BotGUI:
         
         # Load initial window list
         self.refresh_windows()
+
+        # Provide GUI overlay snapshot to settings_manager (no GUI import in settings_manager).
+        settings_manager.register_gui_overlay_provider(lambda: collect_gui_overlay(self))
         
         # Load settings on startup
         if settings_manager.load_settings():
@@ -3096,107 +3099,17 @@ class BotGUI:
     
     def register_mp_key(self):
         """Register a key for MP potion by capturing keyboard input"""
-        popup = ctk.CTkToplevel(self.root)
-        popup.title("Press a key")
-        popup.geometry("300x150")
-        popup.transient(self.root)
-        popup.grab_set()
-        
-        root_x = self.root.winfo_x()
-        root_y = self.root.winfo_y()
-        popup.geometry(f'+{root_x + 50}+{root_y + 50}')
-        
-        label = ctk.CTkLabel(popup, text="Press any key to register...", 
-                            font=ctk.CTkFont(size=12))
-        label.pack(pady=30)
-        
-        def on_key_press(event):
-            key = event.keysym.upper()
-            
-            # Check for modifier keys
-            modifiers = []
-            state = event.state
-            keysym = event.keysym.upper()
-            
-            # Check state bits for modifiers
-            if state & 0x0004:  # Control key
-                modifiers.append('Ctrl')
-            if state & 0x0001:  # Shift key
-                modifiers.append('Shift')
-            # Check for Alt key - can be in state or keysym
-            if state & 0x20000 or keysym in ['ALT_L', 'ALT_R', 'META']:  # Alt key
-                if 'Alt' not in modifiers:
-                    modifiers.append('Alt')
-            
-            # Check if it's a number key (0-9)
-            if key in ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']:
-                if modifiers:
-                    # Combine modifier with number (e.g., "Ctrl+1", "Shift+2")
-                    combined_key = '+'.join(modifiers) + '+' + key
-                    self.mp_key_var.set(combined_key)
-                    config.mp_key = combined_key.lower()
-                    print(f"MP key registered: {combined_key}")
-                    popup.destroy()
-                    return
-                else:
-                    # Just the number key
-                    self.mp_key_var.set(key)
-                    config.mp_key = key.lower()
-                    print(f"MP key registered: {key}")
-                    popup.destroy()
-                    return
-            
-            # Handle single character keys (letters, etc.)
-            if len(key) == 1:
-                if modifiers:
-                    # Combine modifier with key
-                    combined_key = '+'.join(modifiers) + '+' + key
-                    self.mp_key_var.set(combined_key)
-                    config.mp_key = combined_key.lower()
-                    print(f"MP key registered: {combined_key}")
-                    popup.destroy()
-                else:
-                    self.mp_key_var.set(key)
-                    config.mp_key = key.lower()
-                    print(f"MP key registered: {key}")
-                    popup.destroy()
-            elif key in ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12']:
-                if modifiers:
-                    combined_key = '+'.join(modifiers) + '+' + key
-                    self.mp_key_var.set(combined_key)
-                    config.mp_key = combined_key.lower()
-                    print(f"MP key registered: {combined_key}")
-                    popup.destroy()
-                else:
-                    self.mp_key_var.set(key)
-                    config.mp_key = key.lower()
-                    print(f"MP key registered: {key}")
-                    popup.destroy()
-            elif key in ['SPACE', 'TAB', 'RETURN', 'ESCAPE']:
-                key_map = {
-                    'SPACE': 'SPACE',
-                    'TAB': 'TAB',
-                    'RETURN': 'ENTER',
-                    'ESCAPE': 'ESC'
-                }
-                mapped_key = key_map.get(key, key)
-                if modifiers:
-                    combined_key = '+'.join(modifiers) + '+' + mapped_key
-                    self.mp_key_var.set(combined_key)
-                    config.mp_key = combined_key.lower()
-                    print(f"MP key registered: {combined_key}")
-                    popup.destroy()
-                else:
-                    self.mp_key_var.set(mapped_key)
-                    config.mp_key = mapped_key.lower()
-                    print(f"MP key registered: {mapped_key}")
-                    popup.destroy()
-        
-        popup.bind('<Key>', on_key_press)
-        popup.focus_set()
-        
-        cancel_btn = ctk.CTkButton(popup, text="Cancel", command=popup.destroy, width=100)
-        cancel_btn.pack(pady=10)
+        def set_value(value: str):
+            self.mp_key_var.set(value)
+            config.mp_key = value.lower()
+            logger.info(f"MP key registered: {value}", "Keybind")
+
+        open_keybind_dialog(
+            self.root,
+            title="Press a key",
+            prompt="Press any key to register...",
+            on_value=set_value,
+        )
     
     def clear_mp_key(self):
         """Clear MP key"""
@@ -3206,48 +3119,17 @@ class BotGUI:
 
     def register_repair_key(self):
         """Register a key for auto repair by capturing keyboard input"""
-        popup = ctk.CTkToplevel(self.root)
-        popup.title("Press a key")
-        popup.geometry("300x150")
-        popup.transient(self.root)
-        popup.grab_set()
-        root_x = self.root.winfo_x()
-        root_y = self.root.winfo_y()
-        popup.geometry(f'+{root_x + 50}+{root_y + 50}')
-        label = ctk.CTkLabel(popup, text="Press repair hotkey...", font=ctk.CTkFont(size=12))
-        label.pack(pady=30)
+        def set_value(value: str):
+            self.repair_key_var.set(value)
+            config.repair_key = value.lower()
+            logger.info(f"Repair key registered: {value}", "Keybind")
 
-        def on_key_press(event):
-            key = event.keysym.upper()
-            modifiers = []
-            state = event.state
-            keysym = event.keysym.upper()
-            if state & 0x0004:
-                modifiers.append('Ctrl')
-            if state & 0x0001:
-                modifiers.append('Shift')
-            if state & 0x20000 or keysym in ['ALT_L', 'ALT_R', 'META']:
-                if 'Alt' not in modifiers:
-                    modifiers.append('Alt')
-
-            def set_key(value):
-                self.repair_key_var.set(value)
-                config.repair_key = value.lower()
-                print(f"Repair key registered: {value}")
-                popup.destroy()
-
-            if key in [str(i) for i in range(10)] or len(key) == 1:
-                set_key('+'.join(modifiers + [key]) if modifiers else key)
-            elif key in [f'F{i}' for i in range(1, 13)]:
-                set_key('+'.join(modifiers + [key]) if modifiers else key)
-            elif key in ['SPACE', 'TAB', 'RETURN', 'ESCAPE']:
-                key_map = {'SPACE': 'SPACE', 'TAB': 'TAB', 'RETURN': 'ENTER', 'ESCAPE': 'ESC'}
-                mapped = key_map.get(key, key)
-                set_key('+'.join(modifiers + [mapped]) if modifiers else mapped)
-
-        popup.bind('<Key>', on_key_press)
-        popup.focus_set()
-        ctk.CTkButton(popup, text="Cancel", command=popup.destroy, width=100).pack(pady=10)
+        open_keybind_dialog(
+            self.root,
+            title="Press a key",
+            prompt="Press repair hotkey...",
+            on_value=set_value,
+        )
 
     def clear_repair_key(self):
         """Clear repair key"""
@@ -3257,48 +3139,17 @@ class BotGUI:
 
     def register_assist_key(self):
         """Register hotkey for party assist (assist mode)."""
-        popup = ctk.CTkToplevel(self.root)
-        popup.title("Press a key")
-        popup.geometry("300x150")
-        popup.transient(self.root)
-        popup.grab_set()
-        root_x = self.root.winfo_x()
-        root_y = self.root.winfo_y()
-        popup.geometry(f'+{root_x + 50}+{root_y + 50}')
-        label = ctk.CTkLabel(popup, text="Press assist hotkey...", font=ctk.CTkFont(size=12))
-        label.pack(pady=30)
+        def set_value(value: str):
+            self.assist_key_var.set(value)
+            config.assist_key = value.lower()
+            logger.info(f"Assist key registered: {value}", "Keybind")
 
-        def on_key_press(event):
-            key = event.keysym.upper()
-            modifiers = []
-            state = event.state
-            keysym = event.keysym.upper()
-            if state & 0x0004:
-                modifiers.append('Ctrl')
-            if state & 0x0001:
-                modifiers.append('Shift')
-            if state & 0x20000 or keysym in ['ALT_L', 'ALT_R', 'META']:
-                if 'Alt' not in modifiers:
-                    modifiers.append('Alt')
-
-            def set_key(value):
-                self.assist_key_var.set(value)
-                config.assist_key = value.lower()
-                print(f"Assist key registered: {value}")
-                popup.destroy()
-
-            if key in [str(i) for i in range(10)] or len(key) == 1:
-                set_key('+'.join(modifiers + [key]) if modifiers else key)
-            elif key in [f'F{i}' for i in range(1, 13)]:
-                set_key('+'.join(modifiers + [key]) if modifiers else key)
-            elif key in ['SPACE', 'TAB', 'RETURN', 'ESCAPE']:
-                key_map = {'SPACE': 'SPACE', 'TAB': 'TAB', 'RETURN': 'ENTER', 'ESCAPE': 'ESC'}
-                mapped = key_map.get(key, key)
-                set_key('+'.join(modifiers + [mapped]) if modifiers else mapped)
-
-        popup.bind('<Key>', on_key_press)
-        popup.focus_set()
-        ctk.CTkButton(popup, text="Cancel", command=popup.destroy, width=100).pack(pady=10)
+        open_keybind_dialog(
+            self.root,
+            title="Press a key",
+            prompt="Press assist hotkey...",
+            on_value=set_value,
+        )
 
     def clear_assist_key(self):
         """Clear assist key"""
@@ -4657,44 +4508,61 @@ class BotGUI:
             print("TEST: No mob detected")
     
     def record_target_mob(self):
-        """Record current enemy name automatically and add to target list"""
+        """Capture current enemy name and add to target list"""
         if not config.connected_window:
-            print("[Record] No window connected")
+            print("[Capture] No window connected")
             return
         
         if not config.calibrator or config.calibrator.mp_position is None:
-            print("[Record] Calibration required. Please calibrate first.")
+            print("[Capture] Calibration required. Please calibrate first.")
             return
         
         try:
             hwnd = config.connected_window.handle
-            
-            # Detect enemy using calibration-based method (without target filtering)
-            result = auto_attack.detect_enemy_for_auto_attack(hwnd, targets=None)
-            
-            if result.get('found') and result.get('name'):
-                detected_name = result.get('name', '').strip()
-                if detected_name:
-                    detected_name_lower = detected_name.lower()
-                    # Check if already in target list
-                    if not any(t.lower() == detected_name_lower for t in config.mob_target_list):
-                        config.mob_target_list.append(detected_name)
-                        # Update GUI textbox - ensure it exists and update it
-                        if hasattr(self, 'target_list_text'):
-                            target_text = '\n'.join(config.mob_target_list)
-                            self.target_list_text.delete("1.0", tk.END)
-                            self.target_list_text.insert("1.0", target_text)
-                            # Force GUI update to show the change
-                            self.target_list_text.update_idletasks()
-                        print(f"[Record] Added target: {detected_name}")
-                    else:
-                        print(f"[Record] Target '{detected_name}' already in list")
-                else:
-                    print("[Record] Enemy name detected but empty")
-            else:
-                print("[Record] No enemy detected. Make sure you have a target selected.")
+
+            # Take a short burst of reads and pick the most consistent stable name.
+            samples = []
+            stable_samples = []
+            for i in range(4):
+                result = auto_attack.detect_enemy_for_auto_attack(hwnd, targets=None)
+                name = (result.get('name') or '').strip()
+                if name:
+                    samples.append(name)
+                    if result.get('name_stable', False):
+                        stable_samples.append(name)
+                if i < 3:
+                    time.sleep(0.12)
+
+            # Prefer stable samples; otherwise fall back to all samples.
+            candidates = stable_samples if stable_samples else samples
+            detected_name = ''
+            if candidates:
+                # Choose the most frequent (case-insensitive); tie-breaker: longest string.
+                from collections import Counter
+                lowered = [c.lower() for c in candidates]
+                counts = Counter(lowered)
+                best_lower, _ = max(counts.items(), key=lambda kv: (kv[1], len(kv[0])))
+                best_originals = [c for c in candidates if c.lower() == best_lower]
+                detected_name = max(best_originals, key=len).strip()
+
+            if not detected_name:
+                print("[Capture] No enemy name detected. Make sure you have a target selected.")
+                return
+
+            detected_name_lower = detected_name.lower()
+            if any(t.lower() == detected_name_lower for t in config.mob_target_list):
+                print(f"[Capture] Target '{detected_name}' already in list")
+                return
+
+            config.mob_target_list.append(detected_name)
+            if hasattr(self, 'target_list_text'):
+                target_text = '\n'.join(config.mob_target_list)
+                self.target_list_text.delete("1.0", tk.END)
+                self.target_list_text.insert("1.0", target_text)
+                self.target_list_text.update_idletasks()
+            print(f"[Capture] Added target: {detected_name}")
         except Exception as e:
-            print(f"[Record] Error recording target: {str(e)}")
+            print(f"[Capture] Error capturing target: {str(e)}")
             import traceback
             traceback.print_exc()
     
