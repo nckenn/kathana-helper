@@ -75,6 +75,7 @@ def build_settings_snapshot(gui_overlay=None):
         'mob_scan_area': dict(config.mob_scan_area),
         'mob_match_threshold': config.mob_match_threshold,
         'mob_match_margin': config.mob_match_margin,
+        'mob_elite_skip_enabled': config.mob_elite_skip_enabled,
         'mob_templates': [dict(entry) for entry in config.mob_templates],
         'auto_attack_enabled': config.auto_attack_enabled,
         'auto_hp_enabled': config.auto_hp_enabled,
@@ -183,6 +184,8 @@ def load_settings():
             config.mob_match_threshold = float(settings['mob_match_threshold'])
         if 'mob_match_margin' in settings:
             config.mob_match_margin = float(settings['mob_match_margin'])
+        if 'mob_elite_skip_enabled' in settings:
+            config.mob_elite_skip_enabled = bool(settings['mob_elite_skip_enabled'])
         if 'mob_templates' in settings:
             config.mob_templates = [dict(entry) for entry in settings['mob_templates']]
 

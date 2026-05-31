@@ -2,7 +2,6 @@
 Auto repair — detects light-green 'is about to break' warning text in the
 calibrated system message region (CV color + line shape, no OCR) and presses repair.
 """
-import hashlib
 import os
 import time
 
@@ -156,8 +155,8 @@ class WarningTextDetector:
     """Region capture + CV detection for break-warning text."""
 
     def __init__(self):
-        self.last_image_hash = None
         self.last_message_area = None
+        self._warning_visible = False
 
     def _region_bounds(self):
         x = config.system_message_area['x']
@@ -179,34 +178,29 @@ class WarningTextDetector:
         left, top, width, height = bounds
         return window_utils.capture_window_region_bgr(hwnd, left, top, width, height)
 
-    def calculate_image_hash(self, img_array):
-        if img_array is None or img_array.size == 0:
-            return None
-        try:
-            sampled = img_array[::4, ::4]
-            return hashlib.md5(sampled.tobytes()).hexdigest()
-        except Exception:
-            return None
-
-    def detect_break_warning(self, hwnd, current_time):
-        """Return True when light-green break-warning text is visible (CV only)."""
+    def detect_break_warning(self, hwnd):
+        """
+        Return True only when the break-warning newly appears (not visible -> visible).
+        While the same message stays on screen, returns False so we count appearances,
+        not poll ticks. Counter is not reset when the message scrolls away.
+        """
         if not CV2_AVAILABLE:
             return False
 
         region = self.capture_warning_region(hwnd)
         if region is None:
+            self._warning_visible = False
             return False
 
         detected, info = analyze_break_warning(region)
         if not detected:
-            self.last_image_hash = self.calculate_image_hash(region)
+            self._warning_visible = False
             return False
 
-        current_hash = self.calculate_image_hash(region)
-        if current_hash is None or current_hash == self.last_image_hash:
+        if self._warning_visible:
             return False
 
-        self.last_image_hash = current_hash
+        self._warning_visible = True
         self.last_message_area = region.copy()
 
         if debug_io.should_save_debug_images():
@@ -233,6 +227,13 @@ def get_repair_count():
 
 def get_repair_trigger_count():
     return config.BREAK_WARNING_TRIGGER_COUNT
+
+
+def reset_repair_count():
+    """Clear accumulated break-warning appearances and detection state."""
+    _break_warning_tracker.clear()
+    _warning_detector._warning_visible = False
+    update_repair_count_display()
 
 
 def update_repair_count_display():
@@ -291,7 +292,7 @@ def check_auto_repair():
         hwnd = (config.connected_window.handle
                 if hasattr(config.connected_window, 'handle')
                 else config.connected_window)
-        detected = _warning_detector.detect_break_warning(hwnd, current_time)
+        detected = _warning_detector.detect_break_warning(hwnd)
     except Exception as e:
         print(f"[Auto Repair] Error in check: {e}")
         return
@@ -319,5 +320,4 @@ def check_auto_repair():
         return
 
     if RepairExecutor.execute_repair(current_time, hwnd):
-        _break_warning_tracker.clear()
-        update_repair_count_display()
+        reset_repair_count()

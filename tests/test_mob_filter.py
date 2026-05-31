@@ -3,6 +3,7 @@ import numpy as np
 import config
 import mob_filter
 import mob_template_store
+import hp_number_reader
 
 
 def _make_entry(entry_id='t1'):
@@ -81,3 +82,70 @@ def test_get_scan_area_from_calibration():
     area = mob_filter.get_scan_area()
     assert area == {'x': 0, 'y': 0, 'width': 210, 'height': 18}
     config.calibrator = None
+
+
+def test_is_elite_variant_signature_mismatch(monkeypatch):
+    import cv2
+    config.mob_elite_skip_enabled = True
+    config.mob_elite_sig_threshold = 0.82
+    entry = {
+        'id': 't1',
+        'name': 'Goblin',
+        'file': 'mob_t1.png',
+        'hp_max_file': 'hpmax_t1.png',
+    }
+    ref = hp_number_reader.build_max_hp_signature(
+        cv2.imread('tests/fixtures/buchin_normal.png')[17:, :]
+    )
+    elite = hp_number_reader.build_max_hp_signature(
+        cv2.imread('tests/fixtures/buchin_elite.png')[18:, :]
+    )
+
+    monkeypatch.setattr(mob_filter.mob_template_store, 'load_hp_max_sig', lambda _e: ref)
+    monkeypatch.setattr(
+        mob_filter.hp_number_reader,
+        'capture_enemy_hp_text_area',
+        lambda _hwnd, screen=None: np.zeros((14, 80, 3), dtype=np.uint8),
+    )
+    monkeypatch.setattr(
+        mob_filter.hp_number_reader,
+        'build_max_hp_signature',
+        lambda _strip: elite,
+    )
+    assert mob_filter.is_elite_variant(1, entry) is True
+
+    monkeypatch.setattr(
+        mob_filter.hp_number_reader,
+        'build_max_hp_signature',
+        lambda _strip: ref.copy(),
+    )
+    assert mob_filter.is_elite_variant(1, entry) is False
+    config.mob_elite_skip_enabled = False
+
+
+def test_apply_elite_filter_drops_elite_match(monkeypatch):
+    config.mob_elite_skip_enabled = True
+    config.mob_templates = [{
+        'id': 't1',
+        'name': 'Goblin',
+        'file': 'mob_t1.png',
+        'hp_digit_count': 4,
+        'hp_text_span': 28,
+    }]
+    match = {'id': 't1', 'name': 'Goblin', 'confidence': 0.95}
+
+    monkeypatch.setattr(
+        mob_filter,
+        'is_elite_variant',
+        lambda _hwnd, _entry, screen=None: True,
+    )
+    assert mob_filter.apply_elite_filter(1, match) is None
+
+    monkeypatch.setattr(
+        mob_filter,
+        'is_elite_variant',
+        lambda _hwnd, _entry, screen=None: False,
+    )
+    assert mob_filter.apply_elite_filter(1, match) == match
+    config.mob_elite_skip_enabled = False
+    config.mob_templates = []

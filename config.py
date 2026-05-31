@@ -116,6 +116,11 @@ mob_match_threshold = 0.80
 mob_match_margin = 0.03
 mob_templates = []
 current_mob_match = None
+# Skip elite variants: same name template but higher max HP than learned normal mob
+mob_elite_skip_enabled = True
+mob_elite_hp_tolerance = 1.15      # legacy numeric fallback
+mob_elite_span_tolerance = 1.12    # legacy span fallback
+mob_elite_sig_threshold = 0.82     # max-HP digit signature match (lower = elite)
 MOB_TEMPLATES_DIR = os.path.join(app_dir(), 'mob_templates')
 target_name_area = {'x': 381, 'y': 161, 'width': 0, 'height': 0}
 target_hp_bar_area = {'x': 381, 'y': 183, 'width': 0, 'height': 0}

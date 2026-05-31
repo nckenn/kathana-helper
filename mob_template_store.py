@@ -24,7 +24,40 @@ def next_monster_name():
     return f'Monster {len(config.mob_templates) + 1}'
 
 
-def add_template(bgr_image):
+def find_by_id(entry_id):
+    for entry in config.mob_templates:
+        if entry.get('id') == entry_id:
+            return entry
+    return None
+
+
+def hp_max_filename(entry_id):
+    return f'hpmax_{entry_id}.png'
+
+
+def save_hp_max_sig(entry_id, sig_gray):
+    """Save normalized max-HP signature grayscale image."""
+    if sig_gray is None or sig_gray.size == 0:
+        return None
+    ensure_dir()
+    filename = hp_max_filename(entry_id)
+    path = resolve_path(filename)
+    if not cv2.imwrite(path, sig_gray):
+        print(f'[mob_templates] Failed to write HP signature: {path}')
+        return None
+    return filename
+
+
+def load_hp_max_sig(entry):
+    """Load max-HP signature grayscale for a template entry."""
+    filename = entry.get('hp_max_file') or hp_max_filename(entry.get('id', ''))
+    path = resolve_path(filename)
+    if not os.path.isfile(path):
+        return None
+    return cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+
+
+def add_template(bgr_image, hp_profile=None):
     """Add a new template from a BGR capture. Returns the new entry dict, or None on failure."""
     ensure_dir()
     entry_id = uuid.uuid4().hex[:8]
@@ -37,6 +70,15 @@ def add_template(bgr_image):
         print(f'[mob_templates] Template image missing after write: {path}')
         return None
     entry = {'id': entry_id, 'name': next_monster_name(), 'file': filename}
+    if hp_profile:
+        sig = hp_profile.get('max_hp_sig')
+        if sig is not None and sig.size > 0:
+            hp_file = save_hp_max_sig(entry_id, sig)
+            if hp_file:
+                entry['hp_max_file'] = hp_file
+        for key in ('max_hp', 'hp_digit_count', 'hp_text_span'):
+            if key in hp_profile and hp_profile[key]:
+                entry[key] = int(hp_profile[key])
     config.mob_templates.append(entry)
     renumber_templates()
     return config.mob_templates[-1]
@@ -47,12 +89,15 @@ def remove_template(entry_id):
     remaining = []
     for entry in config.mob_templates:
         if entry.get('id') == entry_id:
-            path = resolve_path(entry.get('file', ''))
-            if os.path.isfile(path):
-                try:
-                    os.remove(path)
-                except OSError as exc:
-                    print(f'[mob_templates] delete failed: {exc}')
+            for fname in (entry.get('file', ''), entry.get('hp_max_file', ''), hp_max_filename(entry_id)):
+                if not fname:
+                    continue
+                path = resolve_path(fname)
+                if os.path.isfile(path):
+                    try:
+                        os.remove(path)
+                    except OSError as exc:
+                        print(f'[mob_templates] delete failed: {exc}')
         else:
             remaining.append(entry)
     config.mob_templates = remaining

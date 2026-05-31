@@ -700,6 +700,8 @@ class BotGUI:
             
             # Apply mob detection settings
             self.mob_detection_var.set(config.mob_detection_enabled)
+            if hasattr(self, 'mob_elite_skip_var'):
+                self.mob_elite_skip_var.set(config.mob_elite_skip_enabled)
             self.mob_coords_var.set(f"{config.target_name_area['x']},{config.target_name_area['y']}")
             print(f"  Applied mob detection: enabled={config.mob_detection_enabled}, coords={config.target_name_area['x']},{config.target_name_area['y']}")
             
@@ -895,7 +897,7 @@ class BotGUI:
         
         # Initialize root window with customtkinter
         self.root = ctk.CTk()
-        self.root.title("Kathana Helper v2.2.1")
+        self.root.title("Kathana Helper v3.0.0")
         self.root.geometry("655x800")
         self.root.resizable(True, True)
         
@@ -1286,7 +1288,7 @@ class BotGUI:
         auto_repair_checkbox.grid(row=0, column=0, sticky="w", pady=5)
         create_tooltip(
             auto_repair_checkbox,
-            "Clicks the repair skill when the break warning is detected 10 times in the system message area.",
+            "Clicks the repair skill after the break warning appears 10 times (each time the message shows up in chat).",
         )
         counter_frame = ctk.CTkFrame(auto_repair_frame, fg_color="transparent")
         counter_frame.grid(row=0, column=1, sticky="w", padx=(10, 0), pady=5)
@@ -1300,9 +1302,20 @@ class BotGUI:
             font=ctk.CTkFont(size=11), text_color="gray",
         )
         self.auto_repair_count_label.pack(side="left")
+        self.auto_repair_reset_btn = ctk.CTkButton(
+            counter_frame, text="↺", width=28, height=22, corner_radius=6,
+            command=self.reset_auto_repair_count,
+            fg_color=("gray75", "gray30"), hover_color=("gray65", "gray40"),
+            font=ctk.CTkFont(size=13),
+        )
+        self.auto_repair_reset_btn.pack(side="left", padx=(6, 0))
         create_tooltip(
             counter_frame,
             "Break warnings detected. Repair runs when this reaches 10.",
+        )
+        create_tooltip(
+            self.auto_repair_reset_btn,
+            "Reset break warning count to 0.",
         )
         self._update_auto_repair_count_display()
         
@@ -1478,8 +1491,23 @@ class BotGUI:
             "Only attack mobs that match learned templates. Calibrate first, then learn templates.",
         )
 
+        self.mob_elite_skip_var = tk.BooleanVar(value=config.mob_elite_skip_enabled)
+        self.mob_elite_skip_checkbox = ctk.CTkCheckBox(
+            settings_frame,
+            text="Skip elite mobs (higher max HP, same name)",
+            variable=self.mob_elite_skip_var,
+            command=self.update_mob_elite_skip,
+            font=ctk.CTkFont(size=11),
+            state="disabled",
+        )
+        self.mob_elite_skip_checkbox.grid(row=9, column=0, columnspan=2, sticky="w", padx=15, pady=(0, 6))
+        create_tooltip(
+            self.mob_elite_skip_checkbox,
+            "Learn templates from normal mobs only. Elites with the same name but larger HP numbers are skipped.",
+        )
+
         mob_btn_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        mob_btn_row.grid(row=9, column=0, columnspan=2, sticky="ew", padx=15, pady=(0, 8))
+        mob_btn_row.grid(row=10, column=0, columnspan=2, sticky="ew", padx=15, pady=(0, 8))
         self.mob_scan_label = ctk.CTkLabel(
             mob_btn_row, text=self._mob_scan_status_text(),
             font=ctk.CTkFont(size=10), text_color=("gray40", "gray60"), anchor='w',
@@ -1508,7 +1536,7 @@ class BotGUI:
         mob_body = ctk.CTkFrame(
             settings_frame, fg_color=("gray92", "gray20"), corner_radius=8,
         )
-        mob_body.grid(row=10, column=0, columnspan=2, sticky="ew", padx=15, pady=(0, 6))
+        mob_body.grid(row=11, column=0, columnspan=2, sticky="ew", padx=15, pady=(0, 6))
         mob_body.columnconfigure(1, weight=1)
         mob_body.rowconfigure(0, weight=1)
 
@@ -1557,12 +1585,12 @@ class BotGUI:
 
         self.mob_filter_help = ctk.CTkLabel(
             settings_frame,
-            text='Calibrate to auto-detect the enemy name area. Target a mob, then Learn. '
-                 'Attack and skills only run when a template matches.',
+            text='Calibrate to auto-detect the enemy name area. Target a normal mob at full HP, then Learn. '
+                 'Elite skip compares max HP digits (e.g. 18000 vs 54000). Re-learn templates after updating.',
             font=ctk.CTkFont(size=10), text_color=("gray40", "gray60"), anchor='w',
             justify='left',
         )
-        self.mob_filter_help.grid(row=11, column=0, columnspan=2, sticky='ew', padx=15, pady=(0, 15))
+        self.mob_filter_help.grid(row=12, column=0, columnspan=2, sticky='ew', padx=15, pady=(0, 15))
 
         def _sync_mob_help_wrap(_event=None):
             if not hasattr(self, 'mob_filter_help'):
@@ -3188,6 +3216,12 @@ class BotGUI:
             print(f"Invalid looting duration value")
             self.looting_duration_var.set(str(config.LOOTING_DURATION))
     
+    def update_mob_elite_skip(self):
+        """Update elite mob skip setting."""
+        config.mob_elite_skip_enabled = self.mob_elite_skip_var.get()
+        status = "enabled" if config.mob_elite_skip_enabled else "disabled"
+        print(f"Elite mob skip {status}")
+
     def update_mob_detection(self):
         """Update mob filter enabled status"""
         config.mob_detection_enabled = self.mob_detection_var.get()
@@ -3203,10 +3237,19 @@ class BotGUI:
         status = "enabled" if config.auto_attack_enabled else "disabled"
         print(f"Auto Attack {status}")
     
+    def reset_auto_repair_count(self):
+        """Reset break warning counter to 0."""
+        import auto_repair
+        auto_repair.reset_repair_count()
+        print("Auto Repair count reset")
+
     def update_auto_repair(self):
         """Update auto repair enabled status"""
-
-        config.auto_repair_enabled = self.auto_repair_var.get()
+        enabled = self.auto_repair_var.get()
+        if not enabled and config.auto_repair_enabled:
+            import auto_repair
+            auto_repair.reset_repair_count()
+        config.auto_repair_enabled = enabled
         status = "enabled" if config.auto_repair_enabled else "disabled"
         print(f"Auto Repair {status}")
         self._update_auto_repair_count_display()
@@ -4465,6 +4508,8 @@ class BotGUI:
         state = 'normal' if ready else 'disabled'
         try:
             self.mob_checkbox.configure(state=state)
+            if hasattr(self, 'mob_elite_skip_checkbox'):
+                self.mob_elite_skip_checkbox.configure(state=state)
             self.mob_learn_btn.configure(state=state)
             self.mob_remove_btn.configure(state=state)
             self.mob_test_btn.configure(state=state)
@@ -4533,6 +4578,17 @@ class BotGUI:
         self.mob_preview_label.config(image='', text='')
         self.mob_preview_caption.configure(text='Select a template')
 
+    def _mob_hp_profile_caption(self, entry):
+        if entry.get('hp_max_file') or mob_template_store.load_hp_max_sig(entry) is not None:
+            return " — max HP signature saved"
+        max_hp = int(entry.get('max_hp') or 0)
+        digits = int(entry.get('hp_digit_count') or 0)
+        if max_hp > 0:
+            return f" — max HP ~{max_hp:,}"
+        if digits > 0:
+            return f" — {digits}-digit max HP"
+        return ""
+
     def _show_mob_preview_bgr(self, bgr, caption=None):
         self._mob_preview_photo = self._bgr_to_preview_photo(bgr)
         self.mob_preview_label.config(image=self._mob_preview_photo, text='')
@@ -4553,7 +4609,10 @@ class BotGUI:
             )
             return
         h, w = bgr.shape[:2]
-        self._show_mob_preview_bgr(bgr, f"{entry.get('name', '?')} — {w}×{h} px")
+        self._show_mob_preview_bgr(
+            bgr,
+            f"{entry.get('name', '?')} — {w}×{h} px{self._mob_hp_profile_caption(entry)}",
+        )
 
     def _learn_mob_template(self):
         if not self._mob_filter_ready():
@@ -4579,15 +4638,20 @@ class BotGUI:
             print('Learn failed — could not capture scan region')
             return
         h, w = bgr.shape[:2]
-        entry = mob_template_store.add_template(bgr)
+        hp_profile = mob_filter.build_hp_profile(hwnd)
+        entry = mob_template_store.add_template(bgr, hp_profile=hp_profile)
         if entry is None:
             messagebox.showerror('Learn', 'Could not save template image to disk.')
             return
         mob_filter.invalidate_cache()
         new_idx = len(config.mob_templates) - 1
         self._refresh_mob_list(select_index=new_idx)
-        self._show_mob_preview_bgr(bgr, f"Captured {entry['name']} — {w}×{h} px")
-        print(f"Learned {entry['name']} ({w}×{h})")
+        caption = f"Captured {entry['name']} — {w}×{h} px{self._mob_hp_profile_caption(entry)}"
+        if not hp_profile:
+            caption += " — no HP numbers detected"
+        self._show_mob_preview_bgr(bgr, caption)
+        hp_note = self._mob_hp_profile_caption(entry).strip(' —') or "no HP profile"
+        print(f"Learned {entry['name']} ({w}×{h}), {hp_note}")
         self._autosave_settings_silent()
 
     def _remove_mob_template(self):
@@ -4638,6 +4702,16 @@ class BotGUI:
             messagebox.showinfo('Test match', msg)
             if hasattr(self, 'current_mob_label'):
                 self.current_mob_label.configure(text=match['name'], text_color="green")
+        elif result.get('elite_skipped'):
+            name = result.get('best_name', '?')
+            msg = (
+                f"Name matched {name}, but skipped as elite (higher max HP than learned normal mob).\n\n"
+                "Learn templates from normal mobs at full HP, or disable elite skip."
+            )
+            print(f"TEST: {msg}")
+            messagebox.showwarning('Test match', msg)
+            if hasattr(self, 'current_mob_label'):
+                self.current_mob_label.configure(text=f"{name} (elite)", text_color="orange")
         else:
             best = result.get('best_score', 0)
             name = result.get('best_name', '?')
@@ -4807,7 +4881,7 @@ class BotGUI:
         
         # Create new window for minimized view
         self.minimized_window = ctk.CTkToplevel(self.root)
-        self.minimized_window.title("Kathana Helper v2.2.1")
+        self.minimized_window.title("Kathana Helper v3.0.0")
         
         # Position minimized window at the same location as main window
         if self.saved_window_position:

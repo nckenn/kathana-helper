@@ -11,6 +11,7 @@ import auto_pots
 import logger
 import state
 import mob_filter
+import loot_helpers
 
 def check_skill_slots():
     """Check and trigger skill slots based on their intervals"""
@@ -51,13 +52,19 @@ def smart_loot():
     Smart loot function - triggers looting when enemy is killed with multiple attempts.
     Improved version with better timing, more attempts, and delayed start to ensure loot appears.
     """
-    import loot_helpers
-
     try:
         current_time = time.time()
         if loot_helpers.should_skip_loot(current_time):
             return
         if not loot_helpers.can_start_loot():
+            current_time = time.time()
+            if (current_time - config.last_enemy_hp_log_time >=
+                    config.HP_MP_LOG_INTERVAL):
+                print(
+                    "[Auto Attack] Smart loot skipped — enable Pick action "
+                    "and assign a key in Action Slots"
+                )
+                config.last_enemy_hp_log_time = current_time
             return
 
         action_key = loot_helpers.begin_loot(current_time)
@@ -69,11 +76,11 @@ def smart_loot():
             if attempt < num_attempts - 1:
                 time.sleep(attempt_delay)
 
-        loot_helpers.end_loot()
+        # Keep is_looting True until LOOTING_DURATION expires in check_auto_attack.
 
     except Exception as e:
         logger.error(f"Smart loot error: {e}", "Loot")
-        loot_helpers.end_loot()
+        config.is_looting = False
 
 
 def _extract_buff_active_area(screen, origin):
@@ -263,7 +270,7 @@ def bot_loop():
                     pass
 
             if vs.calibrator and vs.calibrator.hp_position is not None and vs.calibrator.mp_position is not None:
-                if mob_filter.is_active() and vs.connected_window:
+                if mob_filter.is_active() and vs.connected_window and not config.is_looting:
                     mob_filter.refresh_scan(vs.connected_window.handle)
 
                 # Force initial auto-target on bot start if auto attack is enabled

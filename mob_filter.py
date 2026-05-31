@@ -3,6 +3,7 @@ import cv2
 import config
 import window_utils
 import mob_template_store
+import hp_number_reader
 
 _template_cache = {}
 
@@ -149,6 +150,102 @@ def match_in_image(scan_bgr, templates=None):
     }
 
 
+def _template_hp_profile(entry):
+    """Return stored HP reference values for elite detection."""
+    if not entry:
+        return {'max_hp': 0, 'hp_digit_count': 0, 'hp_text_span': 0, 'has_sig': False}
+    return {
+        'max_hp': int(entry.get('max_hp') or 0),
+        'hp_digit_count': int(entry.get('hp_digit_count') or 0),
+        'hp_text_span': int(entry.get('hp_text_span') or 0),
+        'has_sig': bool(entry.get('hp_max_file')) or bool(
+            mob_template_store.load_hp_max_sig(entry) is not None
+        ),
+    }
+
+
+def template_has_hp_profile(entry):
+    profile = _template_hp_profile(entry)
+    return profile['has_sig'] or any(
+        profile[k] > 0 for k in ('max_hp', 'hp_digit_count', 'hp_text_span')
+    )
+
+
+def build_hp_profile(hwnd, screen=None):
+    """Capture HP number strip and build reference profile for a learned normal mob."""
+    analysis = hp_number_reader.capture_and_analyze(hwnd, screen=screen)
+    if not analysis or not analysis.get('has_text'):
+        return {}
+    profile = {
+        'hp_digit_count': int(analysis.get('digit_count') or 0),
+        'hp_text_span': int(analysis.get('text_span') or 0),
+    }
+    sig = analysis.get('max_hp_sig')
+    if sig is not None and sig.size > 0:
+        profile['max_hp_sig'] = sig
+    return profile
+
+
+def is_elite_variant(hwnd, entry, screen=None):
+    """
+    True when the target looks like an elite: same name template but different max HP digits.
+    Uses a saved max-HP signature from Learn (normal mob) compared to the live target bar.
+    """
+    if not config.mob_elite_skip_enabled:
+        return False
+    if not entry:
+        return False
+
+    ref_sig = mob_template_store.load_hp_max_sig(entry)
+    if ref_sig is not None:
+        strip = hp_number_reader.capture_enemy_hp_text_area(hwnd, screen=screen)
+        sample_sig = hp_number_reader.build_max_hp_signature(strip)
+        if sample_sig is None:
+            return False
+        matched, score = hp_number_reader.signatures_match(
+            ref_sig, sample_sig, threshold=config.mob_elite_sig_threshold,
+        )
+        if not matched:
+            print(
+                f"[Mob Filter] Elite skip: max HP signature mismatch "
+                f"({score:.0%} < {config.mob_elite_sig_threshold:.0%})"
+            )
+            return True
+        return False
+
+    profile = _template_hp_profile(entry)
+    if not any(profile[k] > 0 for k in ('max_hp', 'hp_digit_count', 'hp_text_span')):
+        return False
+
+    analysis = hp_number_reader.capture_and_analyze(hwnd, screen=screen)
+    if not analysis or not analysis.get('has_text'):
+        return False
+
+    cur_digits = int(analysis.get('digit_count') or 0)
+    cur_span = int(analysis.get('text_span') or 0)
+    cur_hp = analysis.get('max_hp_estimate')
+
+    if profile['hp_digit_count'] > 0 and cur_digits > profile['hp_digit_count']:
+        return True
+    if profile['hp_text_span'] > 0 and cur_span > int(
+            profile['hp_text_span'] * config.mob_elite_span_tolerance):
+        return True
+    if (profile['max_hp'] > 0 and cur_hp is not None and
+            cur_hp > profile['max_hp'] * config.mob_elite_hp_tolerance):
+        return True
+    return False
+
+
+def apply_elite_filter(hwnd, match, screen=None):
+    """Drop a name match when the target is an elite variant (higher max HP)."""
+    if not match:
+        return None
+    entry = mob_template_store.find_by_id(match.get('id'))
+    if entry and is_elite_variant(hwnd, entry, screen=screen):
+        return None
+    return match
+
+
 def probe(hwnd):
     """
     Test scan without requiring mob filter to be enabled.
@@ -171,7 +268,8 @@ def probe(hwnd):
         }
 
     scores = _collect_scores(scan_bgr)
-    match = match_in_image(scan_bgr)
+    raw_match = match_in_image(scan_bgr)
+    match = apply_elite_filter(hwnd, raw_match)
     best_conf = scores[0][0] if scores else 0.0
     best_name = scores[0][1].get('name', '?') if scores else '?'
     return {
@@ -180,6 +278,7 @@ def probe(hwnd):
         'best_name': best_name,
         'threshold': config.mob_match_threshold,
         'scan_size': (scan_bgr.shape[1], scan_bgr.shape[0]),
+        'elite_skipped': bool(raw_match and not match),
     }
 
 
@@ -192,7 +291,10 @@ def refresh_scan(hwnd):
         config.current_mob_match = None
         return None
     scan_bgr = capture_scan_area(int(hwnd))
-    match = match_in_image(scan_bgr)
+    raw_match = match_in_image(scan_bgr)
+    match = apply_elite_filter(int(hwnd), raw_match)
+    if raw_match and not match:
+        print("[Mob Filter] Elite mob skipped (higher max HP than learned normal)")
     config.current_mob_match = match
     if match:
         config.current_target_mob = match['name']

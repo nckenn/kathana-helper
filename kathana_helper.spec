@@ -42,6 +42,10 @@ hiddenimports = [
     "cryptography.hazmat.primitives.serialization",
     "cryptography.hazmat.backends",
     "cryptography.hazmat.backends.openssl",
+
+    # Dynamically imported at runtime (must be explicit for onefile builds)
+    "loot_helpers",
+    "hp_number_reader",
 ]
 
 datas = [
@@ -60,11 +64,13 @@ datas = [
     ("bot_logic.py", "."),
     ("settings_manager.py", "."),
     ("logger.py", "."),
+    ("loot_helpers.py", "."),
     ("state.py", "."),
     ("template_cache.py", "."),
     ("skill_bar_actions.py", "."),
     ("mob_filter.py", "."),
     ("mob_template_store.py", "."),
+    ("hp_number_reader.py", "."),
     ("region_picker.py", "."),
     ("buffs_manager.py", "."),
     ("skill_sequence_manager.py", "."),
@@ -108,7 +114,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name="Kathana Helper v2.2.1",
+    name="Kathana Helper v3.0.0",
     debug=False,
     strip=False,
     upx=True,
