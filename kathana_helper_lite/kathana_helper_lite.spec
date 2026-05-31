@@ -5,6 +5,7 @@ block_cipher = None
 hiddenimports = [
     'queue',
     'threading',
+    'uuid',
     'win32gui',
     'win32con',
     'win32api',

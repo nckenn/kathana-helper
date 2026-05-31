@@ -121,6 +121,37 @@ def connect_to_window(window_title=None):
         return None
 
 
+def resolve_hwnd():
+    """Return the connected game window handle, with title fallback."""
+    import config
+
+    if config.connected_window:
+        try:
+            handle = config.connected_window.handle
+            if handle:
+                return int(handle)
+        except Exception:
+            pass
+    if config.selected_window:
+        hwnd = win32gui.FindWindow(None, config.selected_window)
+        if hwnd:
+            return int(hwnd)
+    return None
+
+
+def focus_game_window(hwnd):
+    """Bring the game window to the foreground before capture (best-effort)."""
+    if not hwnd:
+        return False
+    try:
+        if win32gui.IsIconic(hwnd):
+            win32gui.ShowWindow(hwnd, 9)  # SW_RESTORE
+        win32gui.SetForegroundWindow(hwnd)
+        return True
+    except Exception:
+        return False
+
+
 def connect_attacker(window_title=None):
     """Connect to a game window and update global config (legacy compatibility)."""
     import config

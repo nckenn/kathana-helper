@@ -9,6 +9,7 @@ hiddenimports = [
     "multiprocessing",
     "asyncio",
     "concurrent.futures",
+    "uuid",
 
     # Windows / pywin32
     "win32gui",
@@ -27,17 +28,20 @@ hiddenimports = [
     "tkinter",
     "customtkinter",
 
-    # OCR / Imaging stack
-    "easyocr",
-    "easyocr.reader",
-    "easyocr.utils",
-    "easyocr.model",
-    "easyocr.character",
-    "easyocr.detection",
-    "easyocr.recognition",
+    # Imaging stack
     "cv2",
     "numpy",
     "PIL",
+
+    # License validation
+    "cryptography",
+    "cryptography.hazmat.primitives",
+    "cryptography.hazmat.primitives.asymmetric",
+    "cryptography.hazmat.primitives.asymmetric.padding",
+    "cryptography.hazmat.primitives.hashes",
+    "cryptography.hazmat.primitives.serialization",
+    "cryptography.hazmat.backends",
+    "cryptography.hazmat.backends.openssl",
 ]
 
 datas = [
@@ -49,7 +53,6 @@ datas = [
     ("capture_regions.py", "."),
     ("input_handler.py", "."),
     ("auto_attack.py", "."),
-    ("ocr_utils.py", "."),
     ("auto_repair.py", "."),
     ("auto_unstuck.py", "."),
     ("auto_pots.py", "."),
@@ -59,7 +62,10 @@ datas = [
     ("logger.py", "."),
     ("state.py", "."),
     ("template_cache.py", "."),
-    ("loot_helpers.py", "."),
+    ("skill_bar_actions.py", "."),
+    ("mob_filter.py", "."),
+    ("mob_template_store.py", "."),
+    ("region_picker.py", "."),
     ("buffs_manager.py", "."),
     ("skill_sequence_manager.py", "."),
     ("gui.py", "."),
@@ -75,7 +81,6 @@ datas = [
     ("hammer.bmp", "."),
     ("chat_bar_1.png", "."),  # Chat scrollbar template for system message area calibration
     ("chat_bar_2.png", "."),  # Chat anchor template for system message area calibration
-    ("easyocr_models", "easyocr_models"),  # Bundled EasyOCR model weights (offline OCR)
 ]
 
 a = Analysis(

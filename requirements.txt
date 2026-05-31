@@ -9,13 +9,10 @@ pywinauto>=0.6.9
 pydirectinput>=1.0.4
 pyautogui>=0.9.54
 
-# Image Processing
+# Image Processing / CV
+opencv-python>=4.8.0
 Pillow>=10.0.0
 numpy>=1.24.0
-
-# OCR
-easyocr>=1.7.0
-certifi>=2024.2.2
 
 # Cryptography for license system
 cryptography>=41.0.0

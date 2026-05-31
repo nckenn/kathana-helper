@@ -17,7 +17,10 @@ import settings_manager
 import bot_logic
 import input_handler
 import auto_attack
-import ocr_utils
+import cv2
+import mob_filter
+import mob_template_store
+from PIL import Image, ImageTk
 import calibration
 from license_manager import get_license_manager
 import debug_utils
@@ -89,45 +92,6 @@ class BotGUI:
         if cls._instance is None:
             cls._instance = super(BotGUI, cls).__new__(cls)
         return cls._instance
-    
-    def check_ocr_on_startup(self):
-        """Check OCR availability on startup in background thread (non-blocking)"""
-        def check_thread():
-            """Background thread to check OCR availability"""
-            logger.info("Checking OCR availability...", "OCR")
-            is_available, error_msg, mode, troubleshooting = ocr_utils.check_ocr_availability()
-            
-            # Store OCR availability in config
-            config.ocr_available = is_available
-            config.ocr_mode = mode
-            
-            # Update GUI in main thread
-            def update_gui():
-                # Update OCR status display if it exists
-                if hasattr(self, 'ocr_status_text'):
-                    self.update_ocr_status_display()
-                
-                if not is_available:
-                    error_details = f"\n\nError: {error_msg}" if error_msg else ""
-                    troubleshooting_text = f"\n\n{troubleshooting}" if troubleshooting else ""
-                    warning_message = (
-                        "OCR (Optical Character Recognition) is not available on this system.\n\n"
-                        "Features that require OCR (such as auto-repair, damage detection, etc.) "
-                        "will not work."
-                        f"{error_details}"
-                        f"{troubleshooting_text}\n\n"
-                        "You can re-check OCR availability from the Settings tab after fixing the issue."
-                    )
-                    messagebox.showwarning("OCR Not Available", warning_message)
-                    logger.warn("OCR is not available - OCR features will be disabled", "OCR")
-                else:
-                    logger.info(f"OCR check passed - Available in {mode.upper()} mode", "OCR")
-            
-            # Schedule GUI update in main thread
-            self.root.after(0, update_gui)
-        
-        # Start background thread
-        threading.Thread(target=check_thread, daemon=True).start()
     
     def _on_license_activated(self, license_dialog):
         """Called when license is successfully activated"""
@@ -561,22 +525,6 @@ class BotGUI:
         # Make dialog close on Escape
         license_dialog.bind("<Escape>", lambda e: license_dialog.destroy())
     
-    def update_ocr_status_display(self):
-        """Update the OCR status display in the Settings tab"""
-        if not hasattr(self, 'ocr_status_text'):
-            return  # GUI elements not created yet
-        
-        # Check if OCR hasn't been checked yet (ocr_mode is None means not checked)
-        if config.ocr_mode is None:
-            status_text = "Checking..."
-            self.ocr_status_text.configure(text=status_text, text_color="gray")
-        elif config.ocr_available:
-            status_text = f"✓ Available ({config.ocr_mode.upper()} mode)"
-            self.ocr_status_text.configure(text=status_text, text_color="green")
-        else:
-            status_text = "✗ Not Available"
-            self.ocr_status_text.configure(text=status_text, text_color="red")
-    
     def update_license_status_info(self):
         """Update license status info in Status tab (now uses refresh_license_status_display)"""
         self.refresh_license_status_display()
@@ -703,44 +651,10 @@ class BotGUI:
             binding_color = "orange" if machine_bound else "gray"
             self.license_binding_value.configure(text=binding_text, text_color=binding_color)
     
-    def recheck_ocr_availability(self):
-        """Re-check OCR availability (called from GUI button)"""
-        # Disable button during check
-        self.recheck_ocr_button.configure(state="disabled", text="Checking...")
-        self.ocr_status_text.configure(text="Checking...", text_color="gray")
-        
-        # Run in a separate thread to avoid blocking GUI
-        def check_thread():
-            try:
-                is_available, error_msg, mode, troubleshooting = ocr_utils.recheck_ocr_availability()
-                
-                # Update status display in GUI thread
-                def update_gui():
-                    self.update_ocr_status_display()
-                    self.recheck_ocr_button.configure(state="normal", text="Re-check OCR")
-                    
-                    if is_available:
-                        messagebox.showinfo("OCR Status", 
-                            f"OCR is now available in {config.ocr_mode.upper()} mode!\n\n"
-                            "OCR features are now enabled.")
-                    else:
-                        error_details = f"\n\nError: {error_msg}" if error_msg else ""
-                        troubleshooting_text = f"\n\n{troubleshooting}" if troubleshooting else ""
-                        messagebox.showwarning("OCR Status", 
-                            "OCR is still not available."
-                            f"{error_details}"
-                            f"{troubleshooting_text}")
-                
-                # Schedule GUI update in main thread
-                self.root.after(0, update_gui)
-            except Exception as e:
-                def show_error():
-                    self.recheck_ocr_button.configure(state="normal", text="Re-check OCR")
-                    messagebox.showerror("OCR Check Error", f"Error checking OCR: {e}")
-                self.root.after(0, show_error)
-        
-        threading.Thread(target=check_thread, daemon=True).start()
-    
+    def _autosave_settings_silent(self):
+        """Persist config changes without a dialog (mob templates, toggles, etc.)."""
+        settings_manager.save_settings()
+
     def save_settings_gui(self):
         """Save settings from GUI"""
         if settings_manager.save_settings():
@@ -811,8 +725,7 @@ class BotGUI:
             if hasattr(self, 'auto_repair_var'):
                 self.auto_repair_var.set(config.auto_repair_enabled)
                 print(f"  Applied auto repair: enabled={config.auto_repair_enabled}")
-            if hasattr(self, 'repair_key_var'):
-                self.repair_key_var.set(config.repair_key)
+            self._update_auto_repair_count_display()
             # Apply Auto Change Target settings
             if hasattr(self, 'auto_change_target_var'):
                 self.auto_change_target_var.set(config.auto_change_target_enabled)
@@ -832,8 +745,6 @@ class BotGUI:
                 print(f"  Applied assist only: enabled={config.assist_only_enabled}")
                 if config.assist_only_enabled:
                     self._set_assist_only_dependent_widgets_state('disabled')
-            if hasattr(self, 'assist_key_var'):
-                self.assist_key_var.set(config.assist_key)
             # Low CPU mode is always enabled (no UI var)
             
             # Apply HP settings
@@ -952,11 +863,9 @@ class BotGUI:
                         import traceback
                         traceback.print_exc()
             
-            # Apply target list
-            target_text = '\n'.join(config.mob_target_list)
-            self.target_list_text.delete("1.0", tk.END)
-            self.target_list_text.insert("1.0", target_text)
-            
+            if hasattr(self, 'mob_listbox'):
+                self._refresh_mob_list()
+            self.update_mob_filter_ui_state()
             # Apply selected window
             if config.selected_window:
                 self.window_var.set(config.selected_window)
@@ -969,6 +878,11 @@ class BotGUI:
             print("Settings applied to GUI")
         except Exception as e:
             print(f"Error applying settings to GUI: {e}")
+        finally:
+            if hasattr(self, 'mob_listbox'):
+                self._refresh_mob_list()
+            if hasattr(self, 'update_mob_filter_ui_state'):
+                self.update_mob_filter_ui_state()
     
     def __init__(self):
         if hasattr(self, '_initialized'):
@@ -1021,9 +935,6 @@ class BotGUI:
         
         # Preload skill images cache
         self.skill_images_cache = {}  # {job_key: [(image_path, image_obj, img_file), ...]}
-        
-        # Check OCR availability on startup
-        self.check_ocr_on_startup()
         
         # Preload all skill images in background (non-blocking)
         self.root.after(100, self._preload_skill_images)
@@ -1375,28 +1286,25 @@ class BotGUI:
         auto_repair_checkbox.grid(row=0, column=0, sticky="w", pady=5)
         create_tooltip(
             auto_repair_checkbox,
-            "Detects light-green 'is about to break' warning text in the calibrated system message "
-            "region (checked every 300ms) and presses the repair hotkey.",
+            "Clicks the repair skill when the break warning is detected 10 times in the system message area.",
         )
-
-        # (No label) Repair key button
-        self.repair_key_var = tk.StringVar(value=config.repair_key)
-        def update_repair_key_button_text(var=self.repair_key_var, btn=None):
-            key = var.get().upper() if var.get() else "Set"
-            if btn:
-                btn.configure(text=key)
-        repair_key_button = ctk.CTkButton(
-            auto_repair_frame, width=60, height=28,
-            command=self.register_repair_key,
-            font=ctk.CTkFont(size=11))
-        repair_key_button.grid(row=0, column=2, padx=(0, 0), pady=5)
-        update_repair_key_button_text(btn=repair_key_button)
-        self.repair_key_var.trace_add('write', lambda *args: update_repair_key_button_text(btn=repair_key_button))
-        repair_key_button.bind('<Button-3>', lambda e: self.clear_repair_key())
+        counter_frame = ctk.CTkFrame(auto_repair_frame, fg_color="transparent")
+        counter_frame.grid(row=0, column=1, sticky="w", padx=(10, 0), pady=5)
+        self.auto_repair_progress = ctk.CTkProgressBar(
+            counter_frame, width=64, height=8, corner_radius=4,
+        )
+        self.auto_repair_progress.pack(side="left", padx=(0, 8))
+        self.auto_repair_progress.set(0)
+        self.auto_repair_count_label = ctk.CTkLabel(
+            counter_frame, text="0/10", anchor='w',
+            font=ctk.CTkFont(size=11), text_color="gray",
+        )
+        self.auto_repair_count_label.pack(side="left")
         create_tooltip(
-            repair_key_button,
-            "Hotkey bound to Nakudo Hammer of Zosimo (or repair skill). Click to register, right-click to clear.",
+            counter_frame,
+            "Break warnings detected. Repair runs when this reaches 10.",
         )
+        self._update_auto_repair_count_display()
         
         # Mage frame
         mage_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
@@ -1424,25 +1332,8 @@ class BotGUI:
         self.assist_only_checkbox.grid(row=0, column=0, sticky="w", pady=5)
         create_tooltip(
             self.assist_only_checkbox,
-            "Assist mode: party leader picks targets. Only the assist button uses a hotkey "
-            "instead of searching assist.bmp on the skill bar. Buffs and skills still use images.",
+            "Party assist mode: clicks the assist button in your skill bar on an interval.",
         )
-
-        # (No label) Assist key button
-        self.assist_key_var = tk.StringVar(value=config.assist_key)
-        def update_assist_key_button_text(var=self.assist_key_var, btn=None):
-            key = var.get().upper() if var.get() else "Set"
-            if btn:
-                btn.configure(text=key)
-        assist_key_button = ctk.CTkButton(
-            assist_only_frame, width=60, height=28,
-            command=self.register_assist_key,
-            font=ctk.CTkFont(size=11))
-        assist_key_button.grid(row=0, column=2, padx=(0, 0), pady=5)
-        update_assist_key_button_text(btn=assist_key_button)
-        self.assist_key_var.trace_add('write', lambda *args: update_assist_key_button_text(btn=assist_key_button))
-        assist_key_button.bind('<Button-3>', lambda e: self.clear_assist_key())
-        create_tooltip(assist_key_button, "Hotkey for party assist. Click to register, right-click to clear.")
         
         # If assist_only is enabled on startup, disable dependent features
         if config.assist_only_enabled:
@@ -1568,37 +1459,123 @@ class BotGUI:
         
         mob_separator = ctk.CTkFrame(settings_frame, height=1, fg_color="gray50")
         mob_separator.grid(row=6, column=0, columnspan=2, sticky="ew", padx=15, pady=(4, 0))
-        
-        mob_label = ctk.CTkLabel(settings_frame, text="Mob Filter", font=ctk.CTkFont(size=12, weight="bold"))
-        mob_label.grid(row=7, column=0, columnspan=2, sticky="w", padx=15, pady=(10, 5))
-        
-        # Mob detection checkbox
+
+        ctk.CTkLabel(
+            settings_frame, text="Mob Filter", font=ctk.CTkFont(size=12, weight="bold"),
+        ).grid(row=7, column=0, columnspan=2, sticky="w", padx=15, pady=(10, 4))
+
         self.mob_detection_var = tk.BooleanVar()
-        self.mob_checkbox = ctk.CTkCheckBox(settings_frame, text="Enable", 
-                                     variable=self.mob_detection_var,
-                                     command=self.update_mob_detection,
-                                     font=ctk.CTkFont(size=11))
-        self.mob_checkbox.grid(row=8, column=0, columnspan=2, sticky="w", padx=15, pady=(0, 5))
-        create_tooltip(self.mob_checkbox, "Enable mob filtering. Bot will only attack mobs in the target list. Uses OCR to read enemy names. Requires calibration.")
-        
-        # Target list
-        ctk.CTkLabel(settings_frame, text="Target List (one per line, only attack mobs in this list):", font=ctk.CTkFont(size=11)).grid(row=9, column=0, columnspan=2, sticky="w", padx=15, pady=(5, 5))
-        self.target_list_text = ctk.CTkTextbox(settings_frame, height=150, width=400, font=ctk.CTkFont(size=11))
-        self.target_list_text.grid(row=10, column=0, columnspan=2, sticky="ew", padx=15, pady=(0, 5))
-        
-        # Mob filter buttons
-        mob_btn_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        mob_btn_frame.grid(row=11, column=0, columnspan=2, sticky="ew", padx=15, pady=(10, 15))
-        
-        update_btn = ctk.CTkButton(mob_btn_frame, text="Update List", command=self.update_target_list, width=100, corner_radius=6)
-        update_btn.grid(row=0, column=0, padx=(0, 10))
-        
-        # Capture button - captures current enemy name automatically
-        is_calibrated = config.calibrator is not None and config.calibrator.mp_position is not None and config.connected_window is not None
-        self.record_target_btn = ctk.CTkButton(mob_btn_frame, text="Capture", command=self.record_target_mob, width=100, corner_radius=6, 
-                                  state="normal" if is_calibrated else "disabled")
-        self.record_target_btn.grid(row=0, column=1)
-        create_tooltip(self.record_target_btn, "Captures the currently targeted enemy name and adds it to the mob target list. Requires calibration and an active target.")
+        self.mob_checkbox = ctk.CTkCheckBox(
+            settings_frame, text="Enable mob filter",
+            variable=self.mob_detection_var,
+            command=self.update_mob_detection,
+            font=ctk.CTkFont(size=11),
+            state="disabled",
+        )
+        self.mob_checkbox.grid(row=8, column=0, columnspan=2, sticky="w", padx=15, pady=(0, 6))
+        create_tooltip(
+            self.mob_checkbox,
+            "Only attack mobs that match learned templates. Calibrate first, then learn templates.",
+        )
+
+        mob_btn_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
+        mob_btn_row.grid(row=9, column=0, columnspan=2, sticky="ew", padx=15, pady=(0, 8))
+        self.mob_scan_label = ctk.CTkLabel(
+            mob_btn_row, text=self._mob_scan_status_text(),
+            font=ctk.CTkFont(size=10), text_color=("gray40", "gray60"), anchor='w',
+        )
+        self.mob_scan_label.pack(side="left", padx=(0, 12))
+        self.mob_learn_btn = ctk.CTkButton(
+            mob_btn_row, text="Learn", command=self._learn_mob_template,
+            width=68, height=28, corner_radius=6, state="disabled",
+        )
+        self.mob_learn_btn.pack(side="left", padx=(0, 6))
+        self.mob_remove_btn = ctk.CTkButton(
+            mob_btn_row, text="Remove", command=self._remove_mob_template,
+            width=76, height=28, corner_radius=6,
+            fg_color=("gray75", "gray30"), hover_color=("gray65", "gray40"),
+            state="disabled",
+        )
+        self.mob_remove_btn.pack(side="left", padx=(0, 6))
+        self.mob_test_btn = ctk.CTkButton(
+            mob_btn_row, text="Test match", command=self._test_mob_match,
+            width=96, height=28, corner_radius=6,
+            fg_color=("gray75", "gray30"), hover_color=("gray65", "gray40"),
+            state="disabled",
+        )
+        self.mob_test_btn.pack(side="left")
+
+        mob_body = ctk.CTkFrame(
+            settings_frame, fg_color=("gray92", "gray20"), corner_radius=8,
+        )
+        mob_body.grid(row=10, column=0, columnspan=2, sticky="ew", padx=15, pady=(0, 6))
+        mob_body.columnconfigure(1, weight=1)
+        mob_body.rowconfigure(0, weight=1)
+
+        list_col = ctk.CTkFrame(mob_body, fg_color="transparent")
+        list_col.grid(row=0, column=0, sticky="ns", padx=(10, 6), pady=10)
+        ctk.CTkLabel(
+            list_col, text="Templates", font=ctk.CTkFont(size=10, weight="bold"),
+            text_color=("gray30", "gray70"),
+        ).pack(anchor="w", pady=(0, 4))
+        self.mob_listbox = tk.Listbox(
+            list_col, width=12, height=6, exportselection=False,
+            bg='#2b2b2b', fg='white', selectbackground='#1f538d',
+            selectforeground='white', highlightthickness=0, bd=0,
+            font=('Segoe UI', 10),
+        )
+        self.mob_listbox.pack(fill="y")
+        self.mob_listbox.bind('<<ListboxSelect>>', lambda _e: self._update_mob_preview())
+
+        preview_col = ctk.CTkFrame(mob_body, fg_color="transparent")
+        preview_col.grid(row=0, column=1, sticky="nsew", padx=(0, 10), pady=10)
+        preview_col.columnconfigure(0, weight=1)
+        preview_col.rowconfigure(0, weight=1)
+        ctk.CTkLabel(
+            preview_col, text="Preview", font=ctk.CTkFont(size=10, weight="bold"),
+            text_color=("gray30", "gray70"),
+        ).grid(row=0, column=0, sticky="w", pady=(0, 4))
+        preview_box = ctk.CTkFrame(
+            preview_col, height=72, corner_radius=6,
+            border_width=1, border_color=("gray70", "gray35"),
+            fg_color=("gray88", "gray14"),
+        )
+        preview_box.grid(row=1, column=0, sticky="nsew")
+        preview_box.grid_propagate(False)
+        preview_box.columnconfigure(0, weight=1)
+        preview_box.rowconfigure(0, weight=1)
+        self._mob_preview_photo = None
+        self.mob_preview_label = tk.Label(
+            preview_box, bg='#242424', bd=0, highlightthickness=0,
+        )
+        self.mob_preview_label.grid(row=0, column=0, sticky="nsew", padx=6, pady=4)
+        self.mob_preview_caption = ctk.CTkLabel(
+            preview_col, text='Select a template', font=ctk.CTkFont(size=10),
+            text_color=("gray40", "gray60"), anchor='w',
+        )
+        self.mob_preview_caption.grid(row=2, column=0, sticky="ew", pady=(4, 0))
+
+        self.mob_filter_help = ctk.CTkLabel(
+            settings_frame,
+            text='Calibrate to auto-detect the enemy name area. Target a mob, then Learn. '
+                 'Attack and skills only run when a template matches.',
+            font=ctk.CTkFont(size=10), text_color=("gray40", "gray60"), anchor='w',
+            justify='left',
+        )
+        self.mob_filter_help.grid(row=11, column=0, columnspan=2, sticky='ew', padx=15, pady=(0, 15))
+
+        def _sync_mob_help_wrap(_event=None):
+            if not hasattr(self, 'mob_filter_help'):
+                return
+            w = settings_frame.winfo_width()
+            if w > 60:
+                self.mob_filter_help.configure(wraplength=max(200, w - 30))
+
+        settings_frame.bind('<Configure>', _sync_mob_help_wrap, add='+')
+        self.root.after(100, _sync_mob_help_wrap)
+
+        self._refresh_mob_list()
+        self.update_mob_filter_ui_state()
         
         settings_frame.rowconfigure(13, weight=0)
         
@@ -1975,9 +1952,16 @@ class BotGUI:
         if settings_manager.load_settings():
             self.apply_settings_to_gui()
             print("Settings loaded on startup")
+        else:
+            import mob_template_store
+            mob_template_store.sync_templates_after_load()
+            if hasattr(self, 'mob_listbox'):
+                self._refresh_mob_list()
         
         # Update Start/Stop button state based on calibration
         self.update_toggle_bot_button_state()
+        # Refresh mob list once the window is mapped (listbox updates can be dropped during __init__).
+        self.root.after(0, self._refresh_mob_list)
         
     def refresh_windows(self):
         """Refresh the list of open windows"""
@@ -2065,6 +2049,7 @@ class BotGUI:
         """Called when window selection changes - reset connection"""
         import frame_cache
         frame_cache.invalidate()
+        config.calibrator = None
         if config.connected_window:
             config.connected_window = None
             self.connect_button.configure(text="Connect", state="normal")
@@ -2072,6 +2057,7 @@ class BotGUI:
             self.connection_label.configure(text="Window: Not Connected")
             self.status_label.configure(text="Status: Disconnected")
             print("Window changed - connection reset")
+            self.update_mob_filter_ui_state()
 
     def connect_window(self):
         """Connect to the selected window"""
@@ -2083,6 +2069,7 @@ class BotGUI:
         
         import frame_cache
         frame_cache.invalidate()
+        config.calibrator = None
         # Disconnect if already connected
         if config.connected_window:
             config.connected_window = None
@@ -2098,6 +2085,7 @@ class BotGUI:
             self.connection_label.configure(text=f"Window: {selected_window_title}")
             self.status_label.configure(text="Status: Connected")
             print(f"Successfully connected to: {selected_window_title}")
+            self.update_mob_filter_ui_state()
         else:
             self.connect_button.configure(text="Connect")
             self.calibrate_button.configure(state="disabled")
@@ -2105,6 +2093,7 @@ class BotGUI:
             self.connection_label.configure(text="Window: Connection Failed")
             self.status_label.configure(text="Status: Connection Failed")
             print(f"Failed to connect to: {selected_window_title}")
+            self.update_mob_filter_ui_state()
 
     def calibrate_bars(self):
         """Perform auto-calibration to detect HP/MP bar positions"""
@@ -2143,6 +2132,7 @@ class BotGUI:
                     
                     # Store calibrator instance in config for later use
                     config.calibrator = calibrator
+                    mob_filter.sync_scan_area_from_calibration()
                     
                     # Store area_skills from calibrator (calculated in calibration.py)
                     if calibrator.area_skills:
@@ -2182,11 +2172,8 @@ class BotGUI:
                             self.mp_coords_var.set(f"{config.mp_bar_area['x']},{config.mp_bar_area['y']}")
                             
                             self.calibrate_button.configure(state="normal", text="Calibrate")
-                            # Enable record button if calibration successful
-                            if hasattr(self, 'record_target_btn'):
-                                self.record_target_btn.configure(state="normal")
-                            # Update toggle bot button state to enable Start button
                             self.update_toggle_bot_button_state()
+                            self.update_mob_filter_ui_state()
                             # Get calibration summary from calibrator (stored in config)
                             if config.calibrator:
                                 summary = config.calibrator.get_calibration_summary()
@@ -3117,46 +3104,37 @@ class BotGUI:
         config.mp_key = '9'  # Reset to default
         print("MP key cleared, reset to default: 9")
 
-    def register_repair_key(self):
-        """Register a key for auto repair by capturing keyboard input"""
-        def set_value(value: str):
-            self.repair_key_var.set(value)
-            config.repair_key = value.lower()
-            logger.info(f"Repair key registered: {value}", "Keybind")
+    def _update_auto_repair_count_display(self):
+        if not hasattr(self, 'auto_repair_count_label'):
+            return
+        import auto_repair
+        needed = auto_repair.get_repair_trigger_count()
+        count = auto_repair.get_repair_count()
+        if not config.auto_repair_enabled:
+            text = f"—/{needed}"
+            color = "gray"
+            progress = 0.0
+        else:
+            text = f"{count}/{needed}"
+            if count >= needed:
+                color = "green"
+            elif count > 0:
+                color = "orange"
+            else:
+                color = "gray"
+            progress = min(1.0, count / needed) if needed > 0 else 0.0
+        self.auto_repair_count_label.configure(text=text, text_color=color)
+        if hasattr(self, 'auto_repair_progress'):
+            self.auto_repair_progress.set(progress)
+            if not config.auto_repair_enabled:
+                self.auto_repair_progress.configure(progress_color=("gray60", "gray45"))
+            elif count >= needed:
+                self.auto_repair_progress.configure(progress_color=("green", "green"))
+            elif count > 0:
+                self.auto_repair_progress.configure(progress_color=("orange", "orange"))
+            else:
+                self.auto_repair_progress.configure(progress_color=("#1f538d", "#1f538d"))
 
-        open_keybind_dialog(
-            self.root,
-            title="Press a key",
-            prompt="Press repair hotkey...",
-            on_value=set_value,
-        )
-
-    def clear_repair_key(self):
-        """Clear repair key"""
-        self.repair_key_var.set('F10')
-        config.repair_key = 'f10'
-        print("Repair key reset to default: F10")
-
-    def register_assist_key(self):
-        """Register hotkey for party assist (assist mode)."""
-        def set_value(value: str):
-            self.assist_key_var.set(value)
-            config.assist_key = value.lower()
-            logger.info(f"Assist key registered: {value}", "Keybind")
-
-        open_keybind_dialog(
-            self.root,
-            title="Press a key",
-            prompt="Press assist hotkey...",
-            on_value=set_value,
-        )
-
-    def clear_assist_key(self):
-        """Clear assist key"""
-        self.assist_key_var.set('')
-        config.assist_key = ''
-        print("Assist key cleared")
-    
     def send_key(self, key_input):
         """Send a key input (used by BuffsManager)"""
         try:
@@ -3211,13 +3189,12 @@ class BotGUI:
             self.looting_duration_var.set(str(config.LOOTING_DURATION))
     
     def update_mob_detection(self):
-        """Update mob detection enabled status"""
-
+        """Update mob filter enabled status"""
         config.mob_detection_enabled = self.mob_detection_var.get()
         status = "enabled" if config.mob_detection_enabled else "disabled"
-        print(f"Mob detection (OCR) {status}")
-        if config.mob_detection_enabled:
-            print("Note: OCR will initialize on first use (may take a moment)")
+        print(f"Mob filter {status}")
+        if config.mob_detection_enabled and not mob_filter.is_active():
+            print("Note: Select scan region and learn at least one template for filtering to take effect")
     
     def update_auto_attack(self):
         """Update auto attack enabled status"""
@@ -3232,6 +3209,7 @@ class BotGUI:
         config.auto_repair_enabled = self.auto_repair_var.get()
         status = "enabled" if config.auto_repair_enabled else "disabled"
         print(f"Auto Repair {status}")
+        self._update_auto_repair_count_display()
     
     def update_is_mage(self):
         """Update mage setting"""
@@ -3243,10 +3221,9 @@ class BotGUI:
         """Enable or disable widgets that depend on assist_only mode"""
         if hasattr(self, 'auto_attack_checkbox'):
             self.auto_attack_checkbox.configure(state=state)
-        if hasattr(self, 'mob_checkbox'):
-            self.mob_checkbox.configure(state=state)
         if hasattr(self, 'auto_change_target_checkbox'):
             self.auto_change_target_checkbox.configure(state=state)
+        self.update_mob_filter_ui_state()
     
     def update_assist_only(self):
         """Update assist only setting"""
@@ -4459,7 +4436,45 @@ class BotGUI:
         else:
             self.toggle_bot_button.configure(state="disabled")
             cfg_min(minib, state="disabled", text="Start", fg_color="green", hover_color="darkgreen", command=self.toggle_bot)
+        self.update_mob_filter_ui_state()
     
+    def _mob_filter_ready(self):
+        """Mob filter controls require connect + calibration with enemy name area."""
+        return (
+            config.connected_window is not None
+            and config.calibrator is not None
+            and config.calibrator.mp_position is not None
+            and mob_filter.scan_area_available()
+        )
+
+    def _mob_scan_status_text(self):
+        if not config.connected_window:
+            return 'Scan area: connect to game first'
+        if not config.calibrator or config.calibrator.mp_position is None:
+            return 'Scan area: calibrate to auto-detect enemy name'
+        if not mob_filter.scan_area_available():
+            return 'Scan area: enemy name area not found — recalibrate'
+        area = mob_filter.get_scan_area()
+        return f"Scan area: auto ({area['width']}×{area['height']})"
+
+    def update_mob_filter_ui_state(self):
+        """Enable mob filter controls only after successful calibration."""
+        if not hasattr(self, 'mob_checkbox'):
+            return
+        ready = self._mob_filter_ready() and not config.assist_only_enabled
+        state = 'normal' if ready else 'disabled'
+        try:
+            self.mob_checkbox.configure(state=state)
+            self.mob_learn_btn.configure(state=state)
+            self.mob_remove_btn.configure(state=state)
+            self.mob_test_btn.configure(state=state)
+            # Keep list readable even before connect/calibrate (disabled listboxes hide inserts).
+            self.mob_listbox.configure(state='normal')
+        except (tk.TclError, AttributeError):
+            pass
+        if hasattr(self, 'mob_scan_label'):
+            self.mob_scan_label.configure(text=self._mob_scan_status_text())
+
     def update_mob_coordinates(self):
         """Update mob name detection coordinates"""
 
@@ -4477,94 +4492,172 @@ class BotGUI:
         except (ValueError, AttributeError) as e:
             print(f"Invalid coordinates - please enter numbers only: {e}")
     
-    def update_target_list(self):
-        """Update mob target list"""
-
-        target_text = self.target_list_text.get("1.0", tk.END).strip()
-        config.mob_target_list = [line.strip() for line in target_text.split('\n') if line.strip()]
-        print(f"Updated target list: {config.mob_target_list}")
-    
-    def test_mob_detection(self):
-        """Test mob detection and display result"""
-        if not config.connected_window or not config.calibrator or config.calibrator.mp_position is None:
-            print("TEST: Calibration required for mob detection")
-            self.current_mob_label.configure(text="Calibration Required", text_color="red")
+    def _refresh_mob_list(self, select_index=None):
+        if not hasattr(self, 'mob_listbox'):
             return
-        
-        hwnd = config.connected_window.handle
-        result = auto_attack.detect_enemy_for_auto_attack(hwnd, targets=None)
-        mob_name = result.get('name')
-        
-        if mob_name:
-            self.current_mob_label.configure(text=mob_name, text_color="green")
-            config.current_target_mob = mob_name
-            if not auto_attack.should_target_current_mob():
-                self.current_mob_label.configure(text_color="orange")
-                print(f"TEST: Mob '{mob_name}' would be SKIPPED (not in target list)")
-            else:
-                print(f"TEST: Mob '{mob_name}' would be ATTACKED (in target list)")
-        else:
-            self.current_mob_label.configure(text="None", text_color="red")
-            print("TEST: No mob detected")
-    
-    def record_target_mob(self):
-        """Capture current enemy name and add to target list"""
-        if not config.connected_window:
-            print("[Capture] No window connected")
-            return
-        
-        if not config.calibrator or config.calibrator.mp_position is None:
-            print("[Capture] Calibration required. Please calibrate first.")
-            return
-        
+        lb = self.mob_listbox
+        prev_state = str(lb.cget('state'))
         try:
-            hwnd = config.connected_window.handle
-
-            # Take a short burst of reads and pick the most consistent stable name.
-            samples = []
-            stable_samples = []
-            for i in range(4):
-                result = auto_attack.detect_enemy_for_auto_attack(hwnd, targets=None)
-                name = (result.get('name') or '').strip()
-                if name:
-                    samples.append(name)
-                    if result.get('name_stable', False):
-                        stable_samples.append(name)
-                if i < 3:
-                    time.sleep(0.12)
-
-            # Prefer stable samples; otherwise fall back to all samples.
-            candidates = stable_samples if stable_samples else samples
-            detected_name = ''
-            if candidates:
-                # Choose the most frequent (case-insensitive); tie-breaker: longest string.
-                from collections import Counter
-                lowered = [c.lower() for c in candidates]
-                counts = Counter(lowered)
-                best_lower, _ = max(counts.items(), key=lambda kv: (kv[1], len(kv[0])))
-                best_originals = [c for c in candidates if c.lower() == best_lower]
-                detected_name = max(best_originals, key=len).strip()
-
-            if not detected_name:
-                print("[Capture] No enemy name detected. Make sure you have a target selected.")
+            if prev_state == 'disabled':
+                lb.configure(state='normal')
+            lb.delete(0, tk.END)
+            for entry in config.mob_templates:
+                lb.insert(tk.END, entry.get('name', entry.get('id', '?')))
+            if not config.mob_templates:
+                self._clear_mob_preview()
                 return
+            idx = select_index if select_index is not None else 0
+            idx = min(max(idx, 0), len(config.mob_templates) - 1)
+            lb.selection_clear(0, tk.END)
+            lb.selection_set(idx)
+            lb.activate(idx)
+            self._update_mob_preview()
+        finally:
+            if prev_state == 'disabled':
+                lb.configure(state='disabled')
 
-            detected_name_lower = detected_name.lower()
-            if any(t.lower() == detected_name_lower for t in config.mob_target_list):
-                print(f"[Capture] Target '{detected_name}' already in list")
-                return
+    def _bgr_to_preview_photo(self, bgr):
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        pil = Image.fromarray(rgb)
+        pil.thumbnail((320, 52), Image.Resampling.LANCZOS)
+        if pil.height < 36:
+            scale = 36 / pil.height
+            pil = pil.resize(
+                (max(1, int(pil.width * scale)), 36),
+                Image.Resampling.NEAREST,
+            )
+        return ImageTk.PhotoImage(pil)
 
-            config.mob_target_list.append(detected_name)
-            if hasattr(self, 'target_list_text'):
-                target_text = '\n'.join(config.mob_target_list)
-                self.target_list_text.delete("1.0", tk.END)
-                self.target_list_text.insert("1.0", target_text)
-                self.target_list_text.update_idletasks()
-            print(f"[Capture] Added target: {detected_name}")
-        except Exception as e:
-            print(f"[Capture] Error capturing target: {str(e)}")
-            import traceback
-            traceback.print_exc()
+    def _clear_mob_preview(self):
+        self._mob_preview_photo = None
+        self.mob_preview_label.config(image='', text='')
+        self.mob_preview_caption.configure(text='Select a template')
+
+    def _show_mob_preview_bgr(self, bgr, caption=None):
+        self._mob_preview_photo = self._bgr_to_preview_photo(bgr)
+        self.mob_preview_label.config(image=self._mob_preview_photo, text='')
+        if caption:
+            self.mob_preview_caption.configure(text=caption)
+
+    def _update_mob_preview(self):
+        sel = self.mob_listbox.curselection()
+        if not sel or sel[0] >= len(config.mob_templates):
+            self._clear_mob_preview()
+            return
+        entry = config.mob_templates[sel[0]]
+        bgr = mob_template_store.load_template_bgr(entry)
+        if bgr is None:
+            self._clear_mob_preview()
+            self.mob_preview_caption.configure(
+                text=f"{entry.get('name', '?')} — image missing, use Learn again",
+            )
+            return
+        h, w = bgr.shape[:2]
+        self._show_mob_preview_bgr(bgr, f"{entry.get('name', '?')} — {w}×{h} px")
+
+    def _learn_mob_template(self):
+        if not self._mob_filter_ready():
+            messagebox.showwarning(
+                'Learn',
+                'Connect and calibrate first. The enemy name scan area is set automatically during calibration.',
+            )
+            return
+        print('Switch to game, target mob — capturing in 2s…')
+        self.root.after(2000, self._capture_mob_template)
+
+    def _capture_mob_template(self):
+        if not config.connected_window:
+            messagebox.showerror('Learn', 'No window connected.')
+            return
+        hwnd = window_utils.resolve_hwnd()
+        if not hwnd:
+            messagebox.showerror('Learn', 'Could not get game window handle.')
+            return
+        window_utils.focus_game_window(hwnd)
+        bgr = mob_filter.capture_scan_area(hwnd)
+        if bgr is None or bgr.size == 0:
+            print('Learn failed — could not capture scan region')
+            return
+        h, w = bgr.shape[:2]
+        entry = mob_template_store.add_template(bgr)
+        if entry is None:
+            messagebox.showerror('Learn', 'Could not save template image to disk.')
+            return
+        mob_filter.invalidate_cache()
+        new_idx = len(config.mob_templates) - 1
+        self._refresh_mob_list(select_index=new_idx)
+        self._show_mob_preview_bgr(bgr, f"Captured {entry['name']} — {w}×{h} px")
+        print(f"Learned {entry['name']} ({w}×{h})")
+        self._autosave_settings_silent()
+
+    def _remove_mob_template(self):
+        sel = self.mob_listbox.curselection()
+        if not sel:
+            messagebox.showinfo('Remove', 'Select a monster from the list first.')
+            return
+        entry = config.mob_templates[sel[0]]
+        sel_idx = sel[0]
+        mob_template_store.remove_template(entry.get('id'))
+        mob_filter.invalidate_cache()
+        if config.mob_templates:
+            self._refresh_mob_list(select_index=min(sel_idx, len(config.mob_templates) - 1))
+        else:
+            self._refresh_mob_list()
+        self._autosave_settings_silent()
+
+    def _test_mob_match(self):
+        if not self._mob_filter_ready():
+            messagebox.showwarning(
+                'Test match',
+                'Connect and calibrate first. The enemy name scan area is set automatically during calibration.',
+            )
+            return
+        if not config.mob_templates:
+            messagebox.showwarning('Test match', 'Learn at least one mob template first.')
+            return
+        self.root.after(150, self._run_mob_match_test)
+
+    def _run_mob_match_test(self):
+        hwnd = window_utils.resolve_hwnd()
+        if not hwnd:
+            messagebox.showerror('Test match', 'Could not get game window handle.')
+            return
+        window_utils.focus_game_window(hwnd)
+        time.sleep(0.15)
+        result = mob_filter.probe(hwnd)
+        if result.get('error'):
+            print(f"TEST: {result['error']}")
+            messagebox.showerror('Test match', result['error'])
+            if hasattr(self, 'current_mob_label'):
+                self.current_mob_label.configure(text=result['error'], text_color="red")
+            return
+        match = result.get('match')
+        if match:
+            msg = f"Match: {match['name']} ({match['confidence']:.0%})"
+            print(f"TEST: {msg}")
+            messagebox.showinfo('Test match', msg)
+            if hasattr(self, 'current_mob_label'):
+                self.current_mob_label.configure(text=match['name'], text_color="green")
+        else:
+            best = result.get('best_score', 0)
+            name = result.get('best_name', '?')
+            thresh = result.get('threshold', config.mob_match_threshold)
+            size = result.get('scan_size')
+            size_txt = f' Capture size: {size[0]}×{size[1]}.' if size else ''
+            msg = (
+                f"No match.\n\n"
+                f"Best: {name} at {best:.0%}\n"
+                f"Need: {thresh:.0%} (threshold in settings){size_txt}\n\n"
+                f"Tip: Re-learn the template with the same scan region while this mob is targeted."
+            )
+            print(f"TEST: {msg}")
+            messagebox.showwarning('Test match', msg)
+            if hasattr(self, 'current_mob_label'):
+                self.current_mob_label.configure(text="No match", text_color="orange")
+
+    def test_mob_detection(self):
+        """Test mob filter match (alias for status bar testing)."""
+        self._test_mob_match()
     
     def update_status(self):
         """Update HP/MP/Enemy HP status display (reads from config, updated by bot_logic/auto_attack)"""
@@ -4593,14 +4686,15 @@ class BotGUI:
             if hasattr(self, 'enemy_hp_percent_label'):
                 self.enemy_hp_percent_label.configure(text=f"{int(enemy_hp_percent)}%" if enemy_hp_percent > 0 else "---%")
             
-            # Read enemy name from config (updated by auto_attack/bot_logic in separate thread)
             if hasattr(self, 'current_mob_label'):
-                if enemy_name:
-                    # Check if mob should be targeted (for color coding)
-                    if config.mob_detection_enabled and not auto_attack.should_target_current_mob():
-                        self.current_mob_label.configure(text=enemy_name, text_color="orange")
+                display_name = enemy_name
+                if mob_filter.is_active() and config.current_mob_match:
+                    display_name = config.current_mob_match.get('name', enemy_name)
+                if display_name:
+                    if mob_filter.is_active() and not auto_attack.should_target_current_mob():
+                        self.current_mob_label.configure(text=display_name, text_color="orange")
                     else:
-                        self.current_mob_label.configure(text=enemy_name, text_color="green")
+                        self.current_mob_label.configure(text=display_name, text_color="green")
                 else:
                     self.current_mob_label.configure(text="None", text_color="red")
             
@@ -4608,6 +4702,8 @@ class BotGUI:
             if hasattr(self, 'unstuck_countdown_label'):
                 import auto_unstuck
                 auto_unstuck.update_unstuck_countdown_display(time.time())
+
+            self._update_auto_repair_count_display()
             
             # Update minimized window if it exists
             if self.is_minimized and self.minimized_window:
@@ -4626,8 +4722,10 @@ class BotGUI:
                     # Update minimized enemy name
                     if hasattr(self, 'minimized_current_mob_label'):
                         enemy_name = config.current_enemy_name
+                        if mob_filter.is_active() and config.current_mob_match:
+                            enemy_name = config.current_mob_match.get('name', enemy_name)
                         if enemy_name:
-                            if config.mob_detection_enabled and not auto_attack.should_target_current_mob():
+                            if mob_filter.is_active() and not auto_attack.should_target_current_mob():
                                 self.minimized_current_mob_label.configure(text=enemy_name, text_color="orange")
                             else:
                                 self.minimized_current_mob_label.configure(text=enemy_name, text_color="green")
@@ -4841,4 +4939,11 @@ class BotGUI:
         
         # Start processing GUI updates from background threads
         self.process_gui_updates()
+        self.root.after(0, self._refresh_mob_list)
+        self.root.protocol('WM_DELETE_WINDOW', self._on_app_close)
         self.root.mainloop()
+
+    def _on_app_close(self):
+        """Save settings when the app closes."""
+        self._autosave_settings_silent()
+        self.root.destroy()

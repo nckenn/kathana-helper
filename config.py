@@ -2,6 +2,16 @@
 Configuration file for Kathana Bot
 Contains all global variables, constants, and default settings
 """
+import os
+import sys
+
+
+def app_dir():
+    """Directory for settings and mob templates (next to exe when frozen)."""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
 
 # Bot state
 bot_running = False
@@ -99,10 +109,14 @@ action_slots = {
     'pick': {'enabled': False, 'interval': 1, 'last_used': 0, 'key': 'f'}
 }
 
-# Mob detection system
-mob_target_list = []  # List of mob names to target (only attack mobs in this list)
-mob_avoid_list = ["Avara Kara", "Dadati", "Patura", "Kamisya", "Kudd"]  # List of mob names to avoid/skip (will not attack these mobs)
+# Mob detection system (CV template matching — no OCR for filter)
 mob_detection_enabled = False
+mob_scan_area = {'x': 0, 'y': 0, 'width': 0, 'height': 0}
+mob_match_threshold = 0.80
+mob_match_margin = 0.03
+mob_templates = []
+current_mob_match = None
+MOB_TEMPLATES_DIR = os.path.join(app_dir(), 'mob_templates')
 target_name_area = {'x': 381, 'y': 161, 'width': 0, 'height': 0}
 target_hp_bar_area = {'x': 381, 'y': 183, 'width': 0, 'height': 0}
 current_target_mob = None
@@ -110,14 +124,18 @@ mob_images = {}
 MOB_LIST_FILE = "saved_mobs.json"
 MOB_IMAGES_FOLDER = "mob_images"
 
+
+def bar_area_configured(area):
+    return area.get('width', 0) > 0 and area.get('height', 0) > 0
+
 # Auto repair system
 system_message_area = {'x': 0, 'y': 0, 'width': 0, 'height': 0}
-SYSTEM_MESSAGE_HEIGHT_REDUCTION = 100  # Reduce height by this many pixels (0 = no reduction, useful for smaller OCR area)
+SYSTEM_MESSAGE_HEIGHT_REDUCTION = 100  # Reduce height by this many pixels (0 = no reduction)
 last_repair_time = 0
 REPAIR_COOLDOWN = 5.0
 AUTO_REPAIR_CHECK_INTERVAL = 3.0  # Legacy default; use get_auto_repair_check_interval()
 REPAIR_WARNING_CHECK_INTERVAL = 0.3  # Light-green warning text poll (300ms)
-BREAK_WARNING_TRIGGER_COUNT = 1  # Number of detections required to trigger repair
+BREAK_WARNING_TRIGGER_COUNT = 10  # Detections required before repair triggers
 last_auto_repair_check_time = 0
 
 # Mob detection optimization
@@ -125,17 +143,8 @@ mob_detection_lock = None  # Will be initialized in mob_detection module
 last_mob_detection_time = 0
 MOB_DETECTION_INTERVAL = 1.0
 
-# OCR settings
-ocr_reader = None  # EasyOCR reader instance (lazy loaded)
-ocr_use_gpu = True  # Try to use GPU if available, fallback to CPU if not
-ocr_available = False  # Set to True if OCR check passes on startup
-ocr_mode = None  # 'gpu', 'cpu', or None - indicates which mode OCR is using
-
-# OCR settings
-ocr_batch_size = 1  # EasyOCR readtext batch size (1 is safest for memory)
-
-# Settings file
-SETTINGS_FILE = "bot_settings.json"
+# Settings file (next to exe / project root via app_dir())
+SETTINGS_FILE = os.path.join(app_dir(), "bot_settings.json")
 
 # HP/MP check optimization
 last_hp_log_time = 0
@@ -236,7 +245,7 @@ current_enemy_name = None
 
 # Assist Only mode (party leader determines target, only attack when enemy HP decreases)
 assist_only_enabled = False
-assist_key = ''  # Hotkey for party assist (assist mode uses key instead of assist.bmp)
+assist_key = ''  # Legacy; assist mode uses assist.bmp in the calibrated skill bar
 assist_click_interval_seconds = 1.0  # Min delay between assist presses
 enemy_initial_hp = None  # Track initial HP when enemy is first detected (for assist_only mode)
 enemy_detected = False  # Track if enemy has been detected (for assist_only mode)
@@ -286,13 +295,6 @@ def get_gui_updates_interval_ms():
 def get_auto_repair_check_interval():
     """Poll warning region every 300ms; slightly relaxed in Low CPU mode."""
     return 0.45 if low_cpu_mode else REPAIR_WARNING_CHECK_INTERVAL
-
-
-def get_effective_ocr_use_gpu():
-    """Low CPU mode prefers CPU OCR to avoid weak iGPU overhead."""
-    if low_cpu_mode:
-        return False
-    return ocr_use_gpu
 
 
 def safe_update_gui(update_func):

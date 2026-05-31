@@ -71,9 +71,11 @@ def build_settings_snapshot(gui_overlay=None):
     settings = {
         'skill_slots': clean_skill_slots,
         'action_slots': clean_action_slots,
-        'mob_target_list': config.mob_target_list.copy(),
-        'mob_avoid_list': config.mob_avoid_list.copy(),
         'mob_detection_enabled': config.mob_detection_enabled,
+        'mob_scan_area': dict(config.mob_scan_area),
+        'mob_match_threshold': config.mob_match_threshold,
+        'mob_match_margin': config.mob_match_margin,
+        'mob_templates': [dict(entry) for entry in config.mob_templates],
         'auto_attack_enabled': config.auto_attack_enabled,
         'auto_hp_enabled': config.auto_hp_enabled,
         'hp_thresholds': config.hp_thresholds,
@@ -173,16 +175,19 @@ def load_settings():
         if 'action_slots' in settings and 'pick' in settings['action_slots']:
             config.action_slots['pick'] = settings['action_slots']['pick']
 
-        if 'mob_target_list' in settings:
-            config.mob_target_list = settings['mob_target_list']
-        elif 'mob_skip_list' in settings:
-            config.mob_target_list = settings['mob_skip_list']
-            logger.info("Migrated mob_skip_list to mob_target_list", "Settings")
-
-        if 'mob_avoid_list' in settings:
-            config.mob_avoid_list = settings['mob_avoid_list']
         if 'mob_detection_enabled' in settings:
             config.mob_detection_enabled = settings['mob_detection_enabled']
+        if 'mob_scan_area' in settings:
+            config.mob_scan_area.update(settings['mob_scan_area'])
+        if 'mob_match_threshold' in settings:
+            config.mob_match_threshold = float(settings['mob_match_threshold'])
+        if 'mob_match_margin' in settings:
+            config.mob_match_margin = float(settings['mob_match_margin'])
+        if 'mob_templates' in settings:
+            config.mob_templates = [dict(entry) for entry in settings['mob_templates']]
+
+        import mob_template_store
+        mob_template_store.sync_templates_after_load()
 
         if 'auto_attack_enabled' in settings:
             config.auto_attack_enabled = settings['auto_attack_enabled']
@@ -192,8 +197,7 @@ def load_settings():
             config.auto_repair_enabled = settings['auto_repair_enabled']
         if 'repair_key' in settings:
             config.repair_key = settings['repair_key']
-        if 'break_warning_trigger_count' in settings:
-            config.BREAK_WARNING_TRIGGER_COUNT = settings['break_warning_trigger_count']
+        # break_warning_trigger_count is fixed at 10 (not loaded from legacy saves)
         if 'auto_change_target_enabled' in settings:
             config.auto_change_target_enabled = settings['auto_change_target_enabled']
         if 'unstuck_timeout' in settings:

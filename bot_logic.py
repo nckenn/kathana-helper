@@ -10,6 +10,7 @@ import auto_unstuck
 import auto_pots
 import logger
 import state
+import mob_filter
 
 def check_skill_slots():
     """Check and trigger skill slots based on their intervals"""
@@ -26,10 +27,9 @@ def check_skill_slots():
 def trigger_skill(slot_num):
     """Trigger a skill for the specified slot number or function key"""
     try:
-        # Always check mob filter before attacking - verify current mob is up to date
-        if config.mob_detection_enabled:
-            # Use current enemy name from config (updated by auto_attack via calibration)
-            if not auto_attack.should_target_current_mob():
+        if mob_filter.is_active():
+            hwnd = config.connected_window.handle if config.connected_window else None
+            if not hwnd or not mob_filter.should_allow_combat(hwnd):
                 return
         
         if isinstance(slot_num, int):
@@ -263,6 +263,9 @@ def bot_loop():
                     pass
 
             if vs.calibrator and vs.calibrator.hp_position is not None and vs.calibrator.mp_position is not None:
+                if mob_filter.is_active() and vs.connected_window:
+                    mob_filter.refresh_scan(vs.connected_window.handle)
+
                 # Force initial auto-target on bot start if auto attack is enabled
                 if (config.force_initial_target and cs.auto_attack_enabled and
                     not initial_target_done and not bs.is_looting):

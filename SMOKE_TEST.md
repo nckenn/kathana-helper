@@ -17,7 +17,7 @@ Run this checklist after significant refactors.
 ## Combat
 
 - **Auto Attack enabled**: Targets mobs, attacks, loots after kill, retargets.
-- **Mob filter**: When enabled + target list set, only attacks matching mobs; avoid list is honored.
+- **Mob filter (CV)**: When enabled with scan region + templates, only attacks matching mobs.
 - **Skill sequence**: Skills fire in order when enemy found; sequence resets on enemy lost/death.
 
 ## Assist Mode
