@@ -25,9 +25,13 @@ class FrameCache:
         self._timestamp = 0.0
         self._origin = (0, 0)
 
-    def get_frame(self, hwnd, calibrator):
+    def get_frame(self, hwnd, calibrator=None):
         """Return a cached BGR frame (full window or union region)."""
-        if hwnd is None or calibrator is None:
+        if hwnd is None:
+            return None
+        if calibrator is None:
+            calibrator = config.calibrator
+        if calibrator is None and not config.bot_regions_ready():
             return None
 
         ttl = config.get_frame_cache_ttl()
@@ -53,22 +57,16 @@ class FrameCache:
         rects = capture_regions.compute_capture_rects(calibrator)
         union = capture_regions.union_rect(rects)
         if union is None:
-            try:
-                screen = calibrator.capture_window(hwnd)
-                return screen, (0, 0)
-            except Exception:
-                return None, (0, 0)
+            screen = window_utils.capture_window_bgr(hwnd)[0]
+            return screen, (0, 0)
 
         x, y, w, h = union
         region = window_utils.capture_window_region_bgr(hwnd, x, y, w, h)
         if region is not None:
             return region, (x, y)
 
-        try:
-            screen = calibrator.capture_window(hwnd)
-            return screen, (0, 0)
-        except Exception:
-            return None, (0, 0)
+        screen = window_utils.capture_window_bgr(hwnd)[0]
+        return screen, (0, 0)
 
 
 _frame_cache = FrameCache()

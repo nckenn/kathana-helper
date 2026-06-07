@@ -46,6 +46,13 @@ hiddenimports = [
     # Dynamically imported at runtime (must be explicit for onefile builds)
     "loot_helpers",
     "hp_number_reader",
+    "region_helpers",
+    "bar_reader",
+    "ui_bar_detection",
+    "ui.regions_panel",
+    "ui.keybind_dialogs",
+    "ui.settings_overlays",
+    "ui.window_helpers",
 ]
 
 datas = [
@@ -72,6 +79,9 @@ datas = [
     ("mob_template_store.py", "."),
     ("hp_number_reader.py", "."),
     ("region_picker.py", "."),
+    ("region_helpers.py", "."),
+    ("bar_reader.py", "."),
+    ("ui_bar_detection.py", "."),
     ("buffs_manager.py", "."),
     ("skill_sequence_manager.py", "."),
     ("gui.py", "."),
@@ -79,6 +89,7 @@ datas = [
     ("license_manager.py", "."),
     ("icon.ico", "."),  # Application icon
     ("jobs", "jobs"),  # Skill images folder for buffs and skill sequence (all job folders and images)
+    ("mob_templates", "mob_templates"),  # Learned mob templates (folder)
     ("skill_bar_1.bmp", "."),  # Skill bar template for calibration
     ("skill_bar_2.bmp", "."),  # Skill bar template for calibration
     ("skill_bar_1_vertical.bmp", "."),  # Skill bar template for calibration

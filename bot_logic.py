@@ -84,7 +84,7 @@ def smart_loot():
 
 
 def _extract_buff_active_area(screen, origin):
-    """Crop the active-buffs strip from a cached frame."""
+    """Legacy crop above system message when buff_area is not manually set."""
     import frame_cache
     if screen is None:
         return None
@@ -98,11 +98,10 @@ def _extract_buff_active_area(screen, origin):
     fh, fw = screen.shape[:2]
     full_h = fh + origin[1]
     full_w = fw + origin[0]
-    half_width = sys_msg_width // 2
-    half_height = sys_msg_height // 2
-    sys_msg_left = sys_msg_x - half_width
-    sys_msg_right = sys_msg_x + half_width
-    sys_msg_top = sys_msg_y - half_height
+    # Top-left stored regions (manual pick)
+    sys_msg_left = sys_msg_x
+    sys_msg_right = sys_msg_x + sys_msg_width
+    sys_msg_top = sys_msg_y
     sys_msg_left = max(0, min(full_w, sys_msg_left))
     sys_msg_right = max(0, min(full_w, sys_msg_right))
     sys_msg_top = max(0, min(full_h, sys_msg_top))
@@ -123,21 +122,41 @@ def _extract_buff_active_area(screen, origin):
     )
 
 
+def _crop_buff_active_area(screen, origin):
+    """Crop the active-buffs strip from a cached frame."""
+    if config.bar_area_configured(config.buff_area):
+        import frame_cache
+        a = config.buff_area
+        return frame_cache.crop_rect(
+            screen,
+            a['x'], a['y'],
+            a['x'] + a['width'], a['y'] + a['height'],
+            origin,
+        )
+    return _extract_buff_active_area(screen, origin)
+
+
 def check_buffs():
-    """Check and activate buffs if needed (image recognition — same in all modes)."""
-    if not config.buffs_manager or not config.calibrator:
+    """Check and activate buffs if needed (template match active strip, press hotkey)."""
+    if not config.buffs_manager:
         return
 
     buffs_configured = any(
-        config.buffs_config[i]['image_path'] and config.buffs_config[i]['enabled']
+        config.buffs_config[i]['enabled']
+        and (config.buffs_config[i].get('key') or config.buffs_config[i]['image_path'])
         for i in range(8)
     )
     if not buffs_configured:
         return
 
-    if not config.system_message_area or config.system_message_area.get('width', 0) <= 0:
-        return
-    if not config.area_skills:
+    has_active_area = (
+        config.bar_area_configured(config.buff_area)
+        or (
+            config.system_message_area
+            and config.system_message_area.get('width', 0) > 0
+        )
+    )
+    if not has_active_area:
         return
 
     current_time = time.time()
@@ -159,17 +178,13 @@ def check_buffs():
         if screen is None:
             return
         origin = frame_cache.get_origin()
-        area_buffs_activos = _extract_buff_active_area(screen, origin)
+        area_buffs_activos = _crop_buff_active_area(screen, origin)
         if area_buffs_activos is None:
             return
 
-        x1, y1, x2, y2 = config.area_skills
-        area_skills = frame_cache.crop_rect(screen, x1, y1, x2, y2, origin)
-        if area_skills is None:
-            return
         config.buffs_manager.update_and_activate_buffs(
-            hwnd, screen, area_skills, area_buffs_activos,
-            x1, y1, run_active=config.bot_running)
+            hwnd, screen, None, area_buffs_activos,
+            0, 0, run_active=config.bot_running)
     except Exception as e:
         print(f"[Buffs] Error checking buffs: {e}")
         import traceback
@@ -269,9 +284,20 @@ def bot_loop():
                     # If focus checks fail, continue normally.
                     pass
 
-            if vs.calibrator and vs.calibrator.hp_position is not None and vs.calibrator.mp_position is not None:
+            if config.bot_regions_ready() or (
+                vs.calibrator
+                and vs.calibrator.hp_position is not None
+                and vs.calibrator.mp_position is not None
+            ):
                 if mob_filter.is_active() and vs.connected_window and not config.is_looting:
-                    mob_filter.refresh_scan(vs.connected_window.handle)
+                    hwnd = vs.connected_window.handle
+                    engaged = (
+                        config.enemy_target_time > 0
+                        or len(config.enemy_hp_readings) > 0
+                        or (config.current_enemy_hp_percentage or 0) > 1.0
+                    )
+                    if not engaged:
+                        mob_filter.clear_match()
 
                 # Force initial auto-target on bot start if auto attack is enabled
                 if (config.force_initial_target and cs.auto_attack_enabled and

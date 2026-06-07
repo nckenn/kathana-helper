@@ -57,8 +57,8 @@ def load_hp_max_sig(entry):
     return cv2.imread(path, cv2.IMREAD_GRAYSCALE)
 
 
-def add_template(bgr_image, hp_profile=None):
-    """Add a new template from a BGR capture. Returns the new entry dict, or None on failure."""
+def add_template(bgr_image, hp_profile=None, normalized=False):
+    """Add a new template from a BGR or grayscale capture. Returns the new entry dict, or None on failure."""
     ensure_dir()
     entry_id = uuid.uuid4().hex[:8]
     filename = f'mob_{entry_id}.png'
@@ -70,15 +70,14 @@ def add_template(bgr_image, hp_profile=None):
         print(f'[mob_templates] Template image missing after write: {path}')
         return None
     entry = {'id': entry_id, 'name': next_monster_name(), 'file': filename}
+    if normalized:
+        entry['normalized'] = True
     if hp_profile:
         sig = hp_profile.get('max_hp_sig')
         if sig is not None and sig.size > 0:
             hp_file = save_hp_max_sig(entry_id, sig)
             if hp_file:
                 entry['hp_max_file'] = hp_file
-        for key in ('max_hp', 'hp_digit_count', 'hp_text_span'):
-            if key in hp_profile and hp_profile[key]:
-                entry[key] = int(hp_profile[key])
     config.mob_templates.append(entry)
     renumber_templates()
     return config.mob_templates[-1]

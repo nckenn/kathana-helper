@@ -114,6 +114,14 @@ def build_settings_snapshot(gui_overlay=None):
             }
             for i in range(8)
         },
+        'hp_bar_area': dict(config.hp_bar_area),
+        'mp_bar_area': dict(config.mp_bar_area),
+        'target_name_area': dict(config.target_name_area),
+        'target_hp_bar_area': dict(config.target_hp_bar_area),
+        'mob_scan_area': dict(config.mob_scan_area),
+        'system_message_area': dict(config.system_message_area),
+        'skill_area': dict(config.skill_area),
+        'buff_area': dict(config.buff_area),
     }
 
     if gui_overlay:
@@ -274,6 +282,18 @@ def load_settings():
                         config.skill_sequence_config[idx]['bypass'] = skill_data.get('bypass', False)
                 except (ValueError, KeyError):
                     continue
+
+        for key in (
+            'hp_bar_area', 'mp_bar_area', 'target_name_area', 'target_hp_bar_area',
+            'mob_scan_area', 'system_message_area', 'skill_area', 'buff_area',
+        ):
+            if key in settings and isinstance(settings[key], dict):
+                getattr(config, key).update(settings[key])
+
+        import region_helpers
+        region_helpers.migrate_area_skills_to_dict()
+        region_helpers.sync_skill_area_tuple()
+        region_helpers.sync_mob_scan_from_enemy_name()
 
         logger.info(f"Settings loaded from {config.SETTINGS_FILE}", "Settings")
         return True

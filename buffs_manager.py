@@ -126,6 +126,11 @@ class BuffsManager:
             # Check if buff is enabled (bypass if disabled)
             if not config.buffs_config[idx]['enabled']:
                 continue
+
+            # If no key assigned, do nothing (no matching, no clicking).
+            key = (config.buffs_config[idx].get('key') or '').strip()
+            if not key:
+                continue
             
             debug_utils.debug_print(f'Processing buff {idx + 1}: {image_path}', 'BuffsManager')
             # Resolve relative path before loading template
@@ -153,52 +158,10 @@ class BuffsManager:
             
             # Activate buff if NOT found in active buffs area
             if not found_in_buffs:
-                debug_utils.debug_print(f'Buff {idx + 1} not active, activating...', 'BuffsManager')
+                debug_utils.debug_print(f'Buff {idx + 1} not active, pressing key {key!r}', 'BuffsManager')
                 if now - self.last_click_times[idx] >= 0.3:
-                    # Image-only mode: find skill in area_skills and click it
-                    if area_skills is not None and area_skills.shape[0] > 0 and area_skills.shape[1] > 0:
-                        # Search for skill in area_skills
-                        found_in_skills = False
-                        skill_loc = None
-                        if area_skills.shape[0] >= template.shape[0] and area_skills.shape[1] >= template.shape[1]:
-                            found_in_skills, skill_loc, max_val = self._match_in_skills_with_hint(
-                                area_skills=area_skills,
-                                template=template,
-                                resolved_path=resolved_path,
-                                threshold=0.7,
-                            )
-                            debug_utils.debug_print(
-                                f'Buff {idx + 1} in skills - confidence: {max_val:.3f}',
-                                'BuffsManager',
-                            )
-                            if found_in_skills:
-                                debug_utils.debug_print(
-                                    f'Buff {idx + 1} found in skills at {skill_loc}',
-                                    'BuffsManager',
-                                )
-                                
-                                # Calculate click position in "window image" coordinates
-                                # (same coordinate system as Calibrator.capture_window())
-                                th, tw = template.shape[:2]
-                                click_x = x1 + skill_loc[0] + tw // 2
-                                click_y = y1 + skill_loc[1] + th // 2
-
-                                print(f'[BUFF] Buff {idx + 1} not active, clicking skill at window-image ({click_x}, {click_y})')
-                                if not input_handler.perform_mouse_click_window_image(hwnd, click_x, click_y):
-                                    print(f'[BUFF] Failed to click skill for buff {idx + 1}')
-
-                                if debug_io.should_save_debug_images():
-                                    debug_img = area_skills.copy()
-                                    cv2.circle(debug_img, (skill_loc[0] + tw // 2, skill_loc[1] + th // 2), 20, (0, 0, 255), 3)
-                                    debug_io.save_cv2_image(
-                                        os.path.join(debug_dir, f'buff_click_{idx}.png'), debug_img)
-                            else:
-                                print(f'[BUFF] Buff {idx + 1} not found in skills area (confidence too low: {max_val:.3f})')
-                        else:
-                            print(f'[BUFF] Skills area too small for buff {idx + 1}: {area_skills.shape} vs {template.shape}')
-                    else:
-                        print(f'[BUFF] area_skills not available for buff {idx + 1}')
-                    
+                    print(f'[BUFF] Buff {idx + 1} not active, pressing key {key!r}')
+                    input_handler.send_input(key)
                     self.last_click_times[idx] = now
             else:
                 print(f'[DEBUG] Buff {idx + 1} is already active, no action needed')

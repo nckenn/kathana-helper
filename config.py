@@ -57,6 +57,8 @@ idle_after_seconds = 5.0  # Enter idle mode after this many seconds without an e
 idle_bot_loop_sleep_seconds = 0.45
 idle_enemy_hp_capture_interval = 0.75
 last_enemy_seen_time = 0.0
+last_enemy_name_seen_time = 0.0
+enemy_name_missing_streak = 0
 
 
 def is_idle(now=None) -> bool:
@@ -112,15 +114,29 @@ action_slots = {
 # Mob detection system (CV template matching — no OCR for filter)
 mob_detection_enabled = False
 mob_scan_area = {'x': 0, 'y': 0, 'width': 0, 'height': 0}
-mob_match_threshold = 0.80
-mob_match_margin = 0.03
+mob_match_threshold = 0.87
+mob_match_margin = 0.08
+# Columns at/after this x-ratio are level digits (name identity uses the left portion).
+mob_match_level_start_ratio = 0.68
+mob_match_name_width_ratio = 0.68  # legacy alias; see mob_match_level_start_ratio
+# Min fraction of name columns that must agree (works for any shared-prefix names).
+mob_match_min_column_agreement = 0.70
+mob_match_column_iou_min = 0.62
+# Compare-time tolerance (not letter case — visual shape matching, no OCR)
+mob_match_min_coverage = 0.55
+mob_match_pixel_tolerance = 5
+mob_match_dilate_px = 2
+mob_text_gray_min = 140
+mob_text_sat_max = 90
+# Match on extracted UI text, ignoring terrain behind transparent nameplate
+mob_normalize_match = True
 mob_templates = []
 current_mob_match = None
 # Skip elite variants: same name template but higher max HP than learned normal mob
 mob_elite_skip_enabled = True
-mob_elite_hp_tolerance = 1.15      # legacy numeric fallback
-mob_elite_span_tolerance = 1.12    # legacy span fallback
 mob_elite_sig_threshold = 0.82     # max-HP digit signature match (lower = elite)
+# Pixel shift tolerance when comparing templates (UI sub-pixel drift / window move)
+mob_match_shift_px = 3
 MOB_TEMPLATES_DIR = os.path.join(app_dir(), 'mob_templates')
 target_name_area = {'x': 381, 'y': 161, 'width': 0, 'height': 0}
 target_hp_bar_area = {'x': 381, 'y': 183, 'width': 0, 'height': 0}
@@ -132,6 +148,11 @@ MOB_IMAGES_FOLDER = "mob_images"
 
 def bar_area_configured(area):
     return area.get('width', 0) > 0 and area.get('height', 0) > 0
+
+
+def bot_regions_ready():
+    """HP + MP regions picked — required to start the bot."""
+    return bar_area_configured(hp_bar_area) and bar_area_configured(mp_bar_area)
 
 # Auto repair system
 system_message_area = {'x': 0, 'y': 0, 'width': 0, 'height': 0}
@@ -222,7 +243,11 @@ buffs_config = {
     } for i in range(8)
 }
 
-# Skills area (set during calibration) - (x_min, y_min, x_max, y_max)
+# Manually picked UI regions (window-relative x, y, width, height)
+skill_area = {'x': 0, 'y': 0, 'width': 0, 'height': 0}
+buff_area = {'x': 0, 'y': 0, 'width': 0, 'height': 0}
+
+# Skills area legacy tuple (x_min, y_min, x_max, y_max) — synced from skill_area
 area_skills = None
 
 # Skill Sequence Manager instance
@@ -248,9 +273,20 @@ current_enemy_hp_percentage = 0.0
 # Current enemy name (updated by enemy_bar_detection/bot_logic, read by GUI)
 current_enemy_name = None
 
+# Target UI name presence tracking (for stale HP bar cases)
+# Some kills leave the red bar pixels visible briefly; name disappears sooner.
+enemy_name_missing_streak_threshold = 3
+enemy_name_missing_grace_seconds = 0.6
+
+# Enemy HP bar color guardrails (helps on light backgrounds).
+# Higher saturation threshold rejects pale/pink highlights that can look "red-ish".
+enemy_hp_red_sat_min = 90
+# Keep fairly permissive value: the bar can be dark in some scenes, but should not be near-black.
+enemy_hp_red_val_min = 70
+
 # Assist Only mode (party leader determines target, only attack when enemy HP decreases)
 assist_only_enabled = False
-assist_key = ''  # Legacy; assist mode uses assist.bmp in the calibrated skill bar
+assist_key = 'f9'  # Hotkey for assist mode (no icon clicking)
 assist_click_interval_seconds = 1.0  # Min delay between assist presses
 enemy_initial_hp = None  # Track initial HP when enemy is first detected (for assist_only mode)
 enemy_detected = False  # Track if enemy has been detected (for assist_only mode)

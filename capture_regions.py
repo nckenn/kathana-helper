@@ -2,12 +2,8 @@
 Compute union capture regions for bot vision (Tier 4 — region-only BitBlt).
 """
 import config
-
-# Enemy HP search strip relative to MP bar (matches auto_attack constants)
-ENEMY_SEARCH_OFFSET_Y = 19
-ENEMY_SEARCH_OFFSET_X = -1
-ENEMY_SEARCH_WIDTH = 210
-ENEMY_SEARCH_HEIGHT = 35
+import hp_number_reader
+import region_helpers
 
 
 def _rect(x, y, w, h):
@@ -16,30 +12,32 @@ def _rect(x, y, w, h):
     return (int(x), int(y), int(w), int(h))
 
 
-def _system_message_buff_strip_rect():
-    """Active buff icons strip above the system message area."""
-    sys = config.system_message_area
-    sw = sys.get('width', 0)
-    sh = sys.get('height', 0)
-    if sw <= 0 or sh <= 0:
-        return None
-    cx = sys.get('x', 0)
-    cy = sys.get('y', 0)
-    half_w = sw // 2
-    half_h = sh // 2
-    left = cx - half_w - 14
-    right = cx + half_w + 10
-    top = cy - half_h - 44
-    bottom = cy - half_h - 4
-    return _rect(left, top, right - left, bottom - top)
+def _append_area_dict(rects, area):
+    r = region_helpers.area_to_rect(area)
+    if r:
+        rects.append(r)
+
+
+def compute_capture_rects_from_config():
+    """Return capture rectangles from manually saved config regions."""
+    rects = []
+    _append_area_dict(rects, config.hp_bar_area)
+    _append_area_dict(rects, config.mp_bar_area)
+    _append_area_dict(rects, config.target_name_area)
+    _append_area_dict(rects, config.target_hp_bar_area)
+    _append_area_dict(rects, config.skill_area)
+    _append_area_dict(rects, config.buff_area)
+    _append_area_dict(rects, config.system_message_area)
+    _append_area_dict(rects, config.mob_scan_area)
+    return rects
 
 
 def compute_capture_rects(calibrator):
     """Return capture rectangles for HP/MP, enemy strip, skill bar, and buff strip."""
-    rects = []
     if calibrator is None:
-        return rects
+        return compute_capture_rects_from_config()
 
+    rects = []
     if calibrator.hp_position and calibrator.hp_dimensions:
         x, y = calibrator.hp_position
         w, h = calibrator.hp_dimensions
@@ -55,12 +53,12 @@ def compute_capture_rects(calibrator):
             rects.append(r)
 
     if calibrator.mp_position:
-        mp_x, mp_y = calibrator.mp_position
-        sx = mp_x + ENEMY_SEARCH_OFFSET_X
-        sy = mp_y + ENEMY_SEARCH_OFFSET_Y
-        r = _rect(sx, sy, ENEMY_SEARCH_WIDTH, ENEMY_SEARCH_HEIGHT)
-        if r:
-            rects.append(r)
+        strip = hp_number_reader.get_enemy_target_strip_rect(calibrator)
+        if strip:
+            sx, sy, sw, sh = strip
+            r = _rect(sx, sy, sw, sh)
+            if r:
+                rects.append(r)
 
     if config.area_skills:
         x1, y1, x2, y2 = config.area_skills
@@ -68,10 +66,13 @@ def compute_capture_rects(calibrator):
         if r:
             rects.append(r)
 
-    buff_strip = _system_message_buff_strip_rect()
-    if buff_strip:
-        rects.append(buff_strip)
+    _append_area_dict(rects, config.buff_area)
+    _append_area_dict(rects, config.system_message_area)
 
+    manual = compute_capture_rects_from_config()
+    for r in manual:
+        if r not in rects:
+            rects.append(r)
     return rects
 
 

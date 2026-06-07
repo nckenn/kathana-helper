@@ -38,6 +38,30 @@ def test_black_image_no_detection():
     assert detected is False
 
 
+def test_rejects_short_green_line():
+    img = np.zeros((40, 200, 3), dtype=np.uint8)
+    img[25, 50:130] = (100, 220, 120)
+    detected, info = auto_repair.analyze_break_warning(img)
+    assert detected is False
+    assert info.get('qualifying_rows', 0) < auto_repair.MIN_QUALIFYING_ROWS
+
+
+def test_rejects_sparse_green_scatter():
+    """Wide span with few pixels must not count (old false-positive path)."""
+    mask = np.zeros((40, 200), dtype=np.uint8)
+    mask[25, 40] = 255
+    mask[25, 160] = 255
+    mask[25, 90] = 255
+    mask[25, 100] = 255
+    assert not auto_repair._row_qualifies_break_warning(mask[25])
+
+
+def test_accepts_dense_break_warning_row():
+    fixture = _load_fixture()
+    mask = auto_repair.build_warning_green_mask(fixture)
+    assert auto_repair._row_qualifies_break_warning(mask[24])
+
+
 def test_break_warning_tracker_counts_each_poll():
     tracker = auto_repair.BreakWarningTracker()
     t = 1000.0

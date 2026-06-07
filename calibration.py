@@ -10,6 +10,7 @@ import win32ui
 import win32api
 import config
 import window_utils
+import ui_bar_detection
 
 
 class Calibrator:
@@ -29,6 +30,9 @@ class Calibrator:
         self.system_message_area = None  # (x, y, width, height) for system message region
         self.enemy_hp_area = None  # (x, y, width, height) for enemy HP bar area
         self.enemy_name_area = None  # (x, y, width, height) for enemy name area
+        self.last_capture_path = None
+        self.last_capture_method = None
+        self.last_capture_stats = {}
         self.debug_dir = os.path.join(os.path.dirname(__file__), 'debug')
         
         # Create debug directory if it doesn't exist
@@ -39,10 +43,10 @@ class Calibrator:
             except Exception as e:
                 print(f'[Calibration] Error creating debug directory: {e}')
     
-    def save_debug_image(self, image, name):
-        """Save a debug image (only when debug mode or SAVE_DEBUG_IMAGES is enabled)."""
+    def save_debug_image(self, image, name, force=False):
+        """Save a debug image (debug mode, or force=True on calibration failure)."""
         import debug_io
-        if not debug_io.should_save_debug_images():
+        if not force and not debug_io.should_save_debug_images():
             return None
         try:
             filename = f'calibrate_{name}.png'
@@ -55,247 +59,85 @@ class Calibrator:
             return None
     
     def capture_window(self, hwnd):
-        """
-        Capture the screen of a specific window
-        Args:
-            hwnd: Window handle to capture
-        Returns:
-            numpy.array: Image in BGR format
-        """
-        hwndDC = None
-        mfcDC = None
-        saveDC = None
-        saveBitMap = None
-        
-        try:
-            left, top, right, bottom = win32gui.GetWindowRect(hwnd)
-            width = right - left
-            height = bottom - top
-            
-            hwndDC = win32gui.GetWindowDC(hwnd)
-            mfcDC = win32ui.CreateDCFromHandle(hwndDC)
-            saveDC = mfcDC.CreateCompatibleDC()
-            saveBitMap = win32ui.CreateBitmap()
-            saveBitMap.CreateCompatibleBitmap(mfcDC, width, height)
-            saveDC.SelectObject(saveBitMap)
-            saveDC.BitBlt((0, 0), (width, height), mfcDC, (0, 0), win32con.SRCCOPY)
-            
-            signedIntsArray = saveBitMap.GetBitmapBits(True)
-            img = np.frombuffer(signedIntsArray, dtype='uint8')
-            img.shape = (height, width, 4)
-            result = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-            return result
-        except Exception as e:
-            print(f'[Calibration] Error capturing window: {e}')
-            raise
-        finally:
-            if saveDC is not None:
-                saveDC.DeleteDC()
-            if mfcDC is not None:
-                mfcDC.DeleteDC()
-            if hwndDC is not None:
-                win32gui.ReleaseDC(hwnd, hwndDC)
-            if saveBitMap is not None:
-                win32gui.DeleteObject(saveBitMap.GetHandle())
+        """Capture the game window — delegates to window_utils (PrintWindow / screen grab fallbacks)."""
+        window_utils.focus_game_window(hwnd)
+        screen, method = window_utils.capture_window_bgr(hwnd)
+        self.last_capture_method = method
+        self.last_capture_stats = window_utils.capture_stats(screen)
+        path = self.save_debug_image(screen, 'original', force=True)
+        self.last_capture_path = path
+        if screen is not None:
+            stats = self.last_capture_stats
+            print(
+                f"[Calibration] Capture {stats.get('width', 0)}x{stats.get('height', 0)} "
+                f"via {method} (mean={stats.get('mean', 0):.1f}, std={stats.get('std', 0):.1f})"
+            )
+            if not window_utils.capture_has_content(screen):
+                print(
+                    '[Calibration] WARNING: capture looks empty/black — '
+                    'use windowed mode, keep game visible, and check calibrate_original.png'
+                )
+        return screen
     
     def find_bars(self, screen_img):
         """
-        Find HP and MP bars by color and dimensions
-        Excludes red bars that don't have an associated blue bar (like Kubasang)
-        
-        Args:
-            screen_img: Screen image in BGR format
-        Returns:
-            bool: True if both HP and MP bars were found
+        Find HP and MP bars by color and dimensions.
+        Uses row-merged masks so glossy bars with white number overlays still match.
         """
         self.save_debug_image(screen_img, 'original')
-        
-        # Convert to HSV for better color detection
-        hsv = cv2.cvtColor(screen_img, cv2.COLOR_BGR2HSV)
-        
-        # Define color ranges for red (HP) and blue (MP)
-        # Red can be in two ranges (wrapping around hue)
-        lower_red1 = np.array([0, 120, 120])
-        upper_red1 = np.array([10, 255, 255])
-        lower_red2 = np.array([170, 120, 120])
-        upper_red2 = np.array([180, 255, 255])
-        lower_blue = np.array([100, 120, 120])
-        upper_blue = np.array([140, 255, 255])
-        
-        # Create masks
-        red_mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
-        red_mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
-        red_mask = cv2.bitwise_or(red_mask1, red_mask2)
-        blue_mask = cv2.inRange(hsv, lower_blue, upper_blue)
-        
-        # Apply morphological operations to clean up the masks
-        kernel = np.ones((2, 2), np.uint8)
-        red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel)
-        blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_OPEN, kernel)
-        
-        self.save_debug_image(red_mask, 'red_mask')
-        self.save_debug_image(blue_mask, 'blue_mask')
-        
-        # Find contours
-        red_contours, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        blue_contours, _ = cv2.findContours(blue_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # Draw contours for debugging
+
+        hp_rect, mp_rect, red_merged, blue_merged, red_bands, blue_bands = (
+            ui_bar_detection.find_player_hp_mp(screen_img)
+        )
+
+        self.save_debug_image(red_merged, 'red_mask')
+        self.save_debug_image(blue_merged, 'blue_mask')
+
         debug_img = screen_img.copy()
-        cv2.drawContours(debug_img, red_contours, -1, (0, 0, 255), 1)
-        cv2.drawContours(debug_img, blue_contours, -1, (255, 0, 0), 1)
+        for i, (x, y, w, h) in enumerate(red_bands):
+            cv2.rectangle(debug_img, (x, y), (x + w, y + h), (0, 0, 255), 1)
+            cv2.putText(debug_img, f'R{i}', (x, max(0, y - 2)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1)
+        for j, (x, y, w, h) in enumerate(blue_bands):
+            cv2.rectangle(debug_img, (x, y), (x + w, y + h), (255, 0, 0), 1)
+            cv2.putText(debug_img, f'B{j}', (x, max(0, y - 2)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 0, 0), 1)
         self.save_debug_image(debug_img, 'contours')
-        
-        print(f'[Calibration] Red contours found: {len(red_contours)}')
-        print(f'[Calibration] Blue contours found: {len(blue_contours)}')
-        
-        valid_red_bars = []
-        valid_blue_bars = []
-        red_bars_without_blue = []  # Store red bars without blue for fallback
-        
-        # Look for red bars with expected dimensions
-        for i, red_contour in enumerate(red_contours):
-            red_x, red_y, red_w, red_h = cv2.boundingRect(red_contour)
-            print(f'[Calibration] Analyzing red contour {i}: pos=({red_x},{red_y}), dim={red_w}x{red_h}')
-            
-            # Check if dimensions match expected HP bar (with some tolerance)
-            # New UI dimensions: 210x15
-            if 205 <= red_w <= 215 and 13 <= red_h <= 17:
-                # Look for associated blue bar (MP bar should be below HP bar)
-                has_associated_blue = False
-                associated_blue = None
-                
-                for j, blue_contour in enumerate(blue_contours):
-                    blue_x, blue_y, blue_w, blue_h = cv2.boundingRect(blue_contour)
-                    
-                    # Check if blue bar has similar width and is positioned below red bar
-                    # New UI dimensions: 210x15
-                    if (205 <= blue_w <= 215 and 13 <= blue_h <= 17 and 
-                        abs(blue_y - (red_y + 15)) <= 5):  # MP bar is typically ~15 pixels below HP
-                        has_associated_blue = True
-                        associated_blue = (blue_x, blue_y, blue_w, blue_h, j)
-                        print(f'[Calibration] Found associated blue bar at ({blue_x}, {blue_y})')
-                        break
-                
-                if has_associated_blue:
-                    valid_red_bars.append((red_x, red_y, red_w, red_h, i))
-                    valid_blue_bars.append(associated_blue)
-                    print(f'[Calibration] Valid HP bar found (with associated MP bar)')
-                else:
-                    # Store red bars without blue for potential fallback use
-                    red_bars_without_blue.append((red_x, red_y, red_w, red_h, i))
-                    print(f'[Calibration] Red bar without blue bar - stored for fallback (pos: {red_x},{red_y}, dim: {red_w}x{red_h})')
-            else:
-                print(f'[Calibration] Red contour does not match HP bar dimensions')
-        
-        print(f'[Calibration] Valid blue bars (associated with HP): {len(valid_blue_bars)}')
-        print(f'[Calibration] Red bars without blue (fallback candidates): {len(red_bars_without_blue)}')
-        
-        if valid_red_bars and valid_blue_bars:
-            # Use the first valid pair
-            hp_x, hp_y, hp_w, hp_h, hp_idx = valid_red_bars[0]
-            mp_x, mp_y, mp_w, mp_h, mp_idx = valid_blue_bars[0]
-            
+
+        print(f'[Calibration] Red bar bands found: {len(red_bands)}')
+        print(f'[Calibration] Blue bar bands found: {len(blue_bands)}')
+        for i, (x, y, w, h) in enumerate(red_bands):
+            print(f'[Calibration] Red band {i}: pos=({x},{y}), dim={w}x{h}')
+        for j, (x, y, w, h) in enumerate(blue_bands):
+            print(f'[Calibration] Blue band {j}: pos=({x},{y}), dim={w}x{h}')
+
+        if hp_rect and mp_rect:
+            hp_x, hp_y, hp_w, hp_h = hp_rect
+            mp_x, mp_y, mp_w, mp_h = mp_rect
             self.hp_position = (hp_x, hp_y)
             self.mp_position = (mp_x, mp_y)
-            
+            self.hp_dimensions = (hp_w, hp_h)
+            self.mp_dimensions = (mp_w, mp_h)
             print(f'[Calibration] HP bar selected: ({hp_x}, {hp_y}) with dimensions: {hp_w}x{hp_h}')
             print(f'[Calibration] MP bar selected: ({mp_x}, {mp_y}) with dimensions: {mp_w}x{mp_h}')
-            
-            # Save debug images
             self.save_debug_image(screen_img[hp_y:hp_y + hp_h, hp_x:hp_x + hp_w], 'hp_found')
             self.save_debug_image(screen_img[mp_y:mp_y + mp_h, mp_x:mp_x + mp_w], 'mp_found')
-            
             return True
-        elif red_bars_without_blue:
-            # Fallback: Use red bar even without blue bar if no valid pair was found
-            # This handles cases where MP bar might not be visible or detected
-            hp_x, hp_y, hp_w, hp_h, hp_idx = red_bars_without_blue[0]
-            
-            self.hp_position = (hp_x, hp_y)
-            # Try to find any blue bar nearby as MP (even if not perfectly aligned)
-            mp_position_found = False
-            for j, blue_contour in enumerate(blue_contours):
-                blue_x, blue_y, blue_w, blue_h = cv2.boundingRect(blue_contour)
-                # More lenient check for MP bar when using fallback
-                if (200 <= blue_w <= 220 and 13 <= blue_h <= 17 and 
-                    abs(blue_x - hp_x) <= 10):  # Allow some X offset
-                    self.mp_position = (blue_x, blue_y)
-                    mp_position_found = True
-                    print(f'[Calibration] Fallback: Found nearby MP bar at ({blue_x}, {blue_y})')
-                    break
-            
-            if not mp_position_found:
-                # If no MP bar found, estimate position based on HP bar
-                estimated_mp_y = hp_y + 15
-                self.mp_position = (hp_x, estimated_mp_y)
-                print(f'[Calibration] Fallback: No MP bar found, using estimated position ({hp_x}, {estimated_mp_y})')
-            
-            print(f'[Calibration] Fallback: HP bar selected: ({hp_x}, {hp_y}) with dimensions: {hp_w}x{hp_h}')
-            print(f'[Calibration] Fallback: MP position set to: {self.mp_position}')
-            
-            # Save debug images
-            self.save_debug_image(screen_img[hp_y:hp_y + hp_h, hp_x:hp_x + hp_w], 'hp_found_fallback')
-            if mp_position_found:
-                mp_x, mp_y = self.mp_position
-                mp_w, mp_h = self.mp_dimensions
-                self.save_debug_image(screen_img[mp_y:mp_y + mp_h, mp_x:mp_x + mp_w], 'mp_found_fallback')
-            
-            return True
-        else:
-            # No valid bars found - create comprehensive debug images
-            print('[Calibration] No valid HP/MP bars found (with both bars associated)')
-            
-            # Create debug image showing all detected contours with labels
-            debug_img_all = screen_img.copy()
-            for i, red_contour in enumerate(red_contours):
-                red_x, red_y, red_w, red_h = cv2.boundingRect(red_contour)
-                cv2.rectangle(debug_img_all, (red_x, red_y), (red_x + red_w, red_y + red_h), (0, 0, 255), 2)
-                # Add text label
-                cv2.putText(debug_img_all, f'R{i}: {red_w}x{red_h}', 
-                           (red_x, red_y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
-            
-            for j, blue_contour in enumerate(blue_contours):
-                blue_x, blue_y, blue_w, blue_h = cv2.boundingRect(blue_contour)
-                cv2.rectangle(debug_img_all, (blue_x, blue_y), (blue_x + blue_w, blue_y + blue_h), (255, 0, 0), 2)
-                # Add text label
-                cv2.putText(debug_img_all, f'B{j}: {blue_w}x{blue_h}', 
-                           (blue_x, blue_y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 0), 1)
-            
-            self.save_debug_image(debug_img_all, 'no_bars_found_all_contours')
-            
-            # Create debug image showing only contours that match dimensions but were excluded
-            debug_img_excluded = screen_img.copy()
-            excluded_count = 0
-            for i, red_contour in enumerate(red_contours):
-                red_x, red_y, red_w, red_h = cv2.boundingRect(red_contour)
-                if 205 <= red_w <= 215 and 13 <= red_h <= 17:
-                    cv2.rectangle(debug_img_excluded, (red_x, red_y), (red_x + red_w, red_y + red_h), (0, 255, 255), 3)
-                    cv2.putText(debug_img_excluded, f'EXCLUDED R{i}', 
-                               (red_x, red_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-                    excluded_count += 1
-            
-            if excluded_count > 0:
-                self.save_debug_image(debug_img_excluded, 'no_bars_found_excluded_red_bars')
-            
-            # Save a cropped region around detected red bars for closer inspection
-            if red_contours:
-                # Find bounding box of all red contours
-                all_red_x = [cv2.boundingRect(c)[0] for c in red_contours]
-                all_red_y = [cv2.boundingRect(c)[1] for c in red_contours]
-                all_red_w = [cv2.boundingRect(c)[2] for c in red_contours]
-                all_red_h = [cv2.boundingRect(c)[3] for c in red_contours]
-                
-                min_x = max(0, min(all_red_x) - 50)
-                min_y = max(0, min(all_red_y) - 50)
-                max_x = min(screen_img.shape[1], max(x + w for x, w in zip(all_red_x, all_red_w)) + 50)
-                max_y = min(screen_img.shape[0], max(y + h for y, h in zip(all_red_y, all_red_h)) + 50)
-                
-                cropped_region = screen_img[min_y:max_y, min_x:max_x]
-                if cropped_region.size > 0:
-                    self.save_debug_image(cropped_region, 'no_bars_found_red_region_cropped')
-            
-            return False
+
+        print('[Calibration] No valid HP/MP bars found')
+        debug_img_all = screen_img.copy()
+        for i, (x, y, w, h) in enumerate(red_bands):
+            cv2.rectangle(debug_img_all, (x, y), (x + w, y + h), (0, 0, 255), 2)
+            cv2.putText(debug_img_all, f'R{i}: {w}x{h}', (x, max(0, y - 5)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+        for j, (x, y, w, h) in enumerate(blue_bands):
+            cv2.rectangle(debug_img_all, (x, y), (x + w, y + h), (255, 0, 0), 2)
+            cv2.putText(debug_img_all, f'B{j}: {w}x{h}', (x, max(0, y - 5)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 0), 1)
+        self.save_debug_image(debug_img_all, 'no_bars_found_all_contours', force=True)
+        self.save_debug_image(red_merged, 'no_bars_red_merged', force=True)
+        self.save_debug_image(blue_merged, 'no_bars_blue_merged', force=True)
+        return False
     
     def find_skill_bars(self, screen_img):
         """
@@ -662,136 +504,83 @@ class Calibrator:
     
     def find_enemy_hp_and_name_area(self, screen_img):
         """
-        Find enemy HP bar and name area using MP position as reference
-        
-        Args:
-            screen_img: Screen image in BGR format
-        Returns:
-            tuple: (enemy_hp_area, enemy_name_area) or (None, None) if not found
+        Find enemy HP bar and name area below the player's MP bar.
+
+        Uses dynamic red-bar detection for the stacked UI (player name+HP+MP,
+        then enemy name+HP).
         """
         if self.mp_position is None:
             print('[Calibration] Cannot find enemy HP/name area: MP position not calibrated')
             return (None, None)
-        
+
         try:
+            import hp_number_reader as hr
             mp_x, mp_y = self.mp_position
-            
-            # Constants for enemy detection area (matching auto_attack.py)
-            SEARCH_AREA_OFFSET_Y = 19  # Pixels below MP position
-            SEARCH_AREA_WIDTH = 210    # Width of search area (updated to match new UI)
-            SEARCH_AREA_HEIGHT = 35    # Height of search area
-            SEARCH_AREA_OFFSET_X = -1  # X offset from MP position
-            NAME_AREA_HEIGHT = 18      # Height of name area
-            
-            screen_h, screen_w = screen_img.shape[:2]
-            
-            # Calculate search area bounds
-            search_x = max(0, mp_x + SEARCH_AREA_OFFSET_X)
-            search_y = max(0, mp_y + SEARCH_AREA_OFFSET_Y)
-            search_x2 = min(screen_w, search_x + SEARCH_AREA_WIDTH)
-            search_y2 = min(screen_h, search_y + SEARCH_AREA_HEIGHT)
-            
-            # Ensure valid area
-            if search_x2 <= search_x or search_y2 <= search_y:
-                print('[Calibration] Invalid search area bounds for enemy detection')
+            mp_h = self.mp_dimensions[1] if self.mp_dimensions else hr.PLAYER_MP_BAR_HEIGHT
+            found = hr.locate_enemy_target_strip(screen_img, mp_x, mp_y, mp_bar_h=mp_h)
+            if not found:
+                print('[Calibration] Could not locate enemy target strip')
                 return (None, None)
-            
-            # Extract search area
-            search_area = screen_img[search_y:search_y2, search_x:search_x2]
-            
-            if search_area.size == 0 or search_area.shape[0] < NAME_AREA_HEIGHT:
-                print('[Calibration] Search area too small for enemy detection')
-                return (None, None)
-            
-            # Extract enemy name area (first 18 pixels)
-            name_area = search_area[0:NAME_AREA_HEIGHT, :]
-            
-            # Convert to HSV for red detection (HP bar)
-            hsv = cv2.cvtColor(search_area, cv2.COLOR_BGR2HSV)
-            
-            # Red color ranges for HP bar detection
-            lower_red1 = np.array([0, 100, 100])
-            upper_red1 = np.array([10, 255, 255])
-            lower_red2 = np.array([160, 100, 100])
-            upper_red2 = np.array([180, 255, 255])
-            
-            red_mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
-            red_mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
-            red_mask = cv2.bitwise_or(red_mask1, red_mask2)
-            
-            # Look for HP bar in the area below name (rows 18-35)
-            hp_search_region = red_mask[NAME_AREA_HEIGHT:, :]
-            
-            # Find contours in HP search region
-            hp_contours, _ = cv2.findContours(hp_search_region, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            
-            hp_found = False
-            hp_x, hp_y, hp_w, hp_h = 0, 0, 0, 0
-            
-            # Look for a red bar with reasonable dimensions
-            for contour in hp_contours:
-                x, y, w, h = cv2.boundingRect(contour)
-                # HP bar should be roughly 10-210 pixels wide and 6-18 pixels tall (updated for new UI)
-                if w >= 10 and w <= 210 and h >= 6 and h <= 18:
-                    hp_x = x
-                    hp_y = y + NAME_AREA_HEIGHT  # Adjust Y to absolute position in search area
-                    hp_w = w
-                    hp_h = h
-                    hp_found = True
-                    break
-            
-            # Store areas as (center_x, center_y, width, height)
-            if hp_found:
-                # Enemy HP area: relative to screen
-                enemy_hp_x = search_x + hp_x
-                enemy_hp_y = search_y + hp_y
-                enemy_hp_center_x = enemy_hp_x + hp_w // 2
-                enemy_hp_center_y = enemy_hp_y + hp_h // 2
-                self.enemy_hp_area = (enemy_hp_center_x, enemy_hp_center_y, hp_w, hp_h)
+
+            self.enemy_name_area = found['name_area']
+            hp_area = found.get('hp_area')
+            search_x, search_y = found['search_origin']
+            nw = int(found['name_area'][2])
+
+            if hp_area:
+                self.enemy_hp_area = hp_area
             else:
-                # Still set area even if no HP bar found (for calibration purposes)
-                # Use the expected area location
-                enemy_hp_x = search_x
-                enemy_hp_y = search_y + NAME_AREA_HEIGHT
-                enemy_hp_center_x = enemy_hp_x + SEARCH_AREA_WIDTH // 2
-                enemy_hp_center_y = enemy_hp_y + 9  # Center of HP bar region
-                self.enemy_hp_area = (enemy_hp_center_x, enemy_hp_center_y, SEARCH_AREA_WIDTH, 18)
-            
-            # Enemy name area: relative to screen
-            name_center_x = search_x + SEARCH_AREA_WIDTH // 2
-            name_center_y = search_y + NAME_AREA_HEIGHT // 2
-            self.enemy_name_area = (name_center_x, name_center_y, SEARCH_AREA_WIDTH, NAME_AREA_HEIGHT)
-            
-            # Create debug image
+                self.enemy_hp_area = (
+                    search_x + nw // 2,
+                    search_y + hr.NAME_AREA_HEIGHT + 9,
+                    nw,
+                    13,
+                )
+
             debug_img = screen_img.copy()
-            cv2.rectangle(debug_img, (search_x, search_y), (search_x2, search_y2), (255, 255, 0), 2)
-            if hp_found:
-                cv2.rectangle(debug_img, 
-                             (search_x + hp_x, search_y + hp_y), 
-                             (search_x + hp_x + hp_w, search_y + hp_y + hp_h), 
-                             (0, 255, 0), 2)
-            cv2.rectangle(debug_img, 
-                         (search_x, search_y), 
-                         (search_x2, search_y + NAME_AREA_HEIGHT), 
-                         (0, 255, 255), 2)
+            cv2.rectangle(
+                debug_img,
+                (search_x, search_y),
+                (search_x + nw, search_y + hr.SEARCH_AREA_HEIGHT),
+                (255, 255, 0), 2,
+            )
+            ncx, ncy, _, nh = self.enemy_name_area
+            cv2.rectangle(
+                debug_img,
+                (int(ncx - nw // 2), int(ncy - nh // 2)),
+                (int(ncx + nw // 2), int(ncy + nh // 2)),
+                (0, 255, 255), 2,
+            )
+            if hp_area:
+                hcx, hcy, hw, hh = hp_area
+                cv2.rectangle(
+                    debug_img,
+                    (int(hcx - hw // 2), int(hcy - hh // 2)),
+                    (int(hcx + hw // 2), int(hcy + hh // 2)),
+                    (0, 255, 0), 2,
+                )
             self.save_debug_image(debug_img, 'enemy_hp_name_area')
-            self.save_debug_image(name_area, 'enemy_name_area_extracted')
-            
-            if hp_found:
-                print(f'[Calibration] Enemy HP bar found at search area position ({hp_x}, {hp_y})')
+            name_slice = screen_img[search_y:search_y + hr.NAME_AREA_HEIGHT, search_x:search_x + nw]
+            self.save_debug_image(name_slice, 'enemy_name_area_extracted')
+
+            print(
+                f'[Calibration] Enemy name area calibrated: center=({ncx}, {ncy}), '
+                f'size={nw}x{hr.NAME_AREA_HEIGHT}'
+            )
+            if hp_area:
+                print(f'[Calibration] Enemy HP bar found at center {hp_area[:2]}')
             else:
-                print('[Calibration] Enemy HP bar not found, but area calibrated for detection')
-            print(f'[Calibration] Enemy name area calibrated: center=({name_center_x}, {name_center_y}), size={SEARCH_AREA_WIDTH}x{NAME_AREA_HEIGHT}')
-            
+                print('[Calibration] Enemy HP bar not found; name row still calibrated')
+
             return (self.enemy_hp_area, self.enemy_name_area)
-            
+
         except Exception as e:
             print(f'[Calibration] Error finding enemy HP/name area: {e}')
             import traceback
             traceback.print_exc()
             self.save_debug_image(screen_img, 'enemy_hp_name_error')
             return (None, None)
-    
+
     def find_system_message_area(self, screen_img):
         """
         Find system message area using chat scrollbar as reference

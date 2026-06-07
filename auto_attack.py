@@ -16,6 +16,9 @@ import debug_utils
 import skill_bar_actions
 import debug_io
 import frame_cache
+import hp_number_reader
+import region_helpers
+import ui_bar_detection
 
 
 # Initialize lock for thread-safe mob detection
@@ -41,12 +44,6 @@ HP_BAR_HEIGHT = 18         # Height of HP bar strip to search
 MIN_RED_PIXELS_PER_COLUMN = 6  # Minimum red pixels per column to be valid
 HP_BAR_CENTER_OFFSET = 9   # Y offset to center of HP bar
 MIN_HP_BAR_WIDTH = 10     # Minimum HP bar width to consider valid (avoid false positives from small red artifacts)
-
-# HSV color ranges for red detection
-RED_LOWER_1 = np.array([0, 100, 100])
-RED_UPPER_1 = np.array([10, 255, 255])
-RED_LOWER_2 = np.array([160, 100, 100])
-RED_UPPER_2 = np.array([180, 255, 255])
 
 MOB_VERIFICATION_INTERVAL = 2.0  # Seconds between mob verifications during combat
 
@@ -94,22 +91,18 @@ def detect_and_verify_mob_after_target(delay=0.05, retry_delay=0.08):
     """
     if not config.connected_window:
         return {'detected': False, 'name': None, 'should_target': False, 'needs_retarget': False}
-    
-    if not config.calibrator or config.calibrator.mp_position is None:
-        return {'detected': False, 'name': None, 'should_target': False, 'needs_retarget': False}
-    
-    # Minimal delay to allow mob name to appear after targeting (optimized for speed)
-    if delay > 0:
-        time.sleep(delay)
-    
+
     hwnd = config.connected_window.handle
-    detected_mob = None
 
     if mob_filter.is_active():
-        match = mob_filter.refresh_scan(hwnd)
+        if not mob_filter.scan_area_available():
+            return {'detected': False, 'name': None, 'should_target': False, 'needs_retarget': False}
+        # Slow-but-safe: require stable match across multiple frames.
+        # Transparent UI backgrounds can cause single-frame false positives.
+        match = mob_filter.refresh_scan_stable(hwnd)
         if not match and retry_delay > 0:
             time.sleep(retry_delay)
-            match = mob_filter.refresh_scan(hwnd)
+            match = mob_filter.refresh_scan_stable(hwnd)
         detected_mob = match['name'] if match else None
         should_target = match is not None
         needs_retarget = match is None
@@ -122,12 +115,92 @@ def detect_and_verify_mob_after_target(delay=0.05, retry_delay=0.08):
             'needs_retarget': needs_retarget,
         }
 
+    if not region_helpers.combat_detection_ready():
+        return {'detected': False, 'name': None, 'should_target': False, 'needs_retarget': False}
+
+    # Minimal delay to allow mob name to appear after targeting (optimized for speed)
+    if delay > 0:
+        time.sleep(delay)
+
     return {
         'detected': False,
         'name': None,
         'should_target': True,
         'needs_retarget': False,
     }
+
+
+def _detect_enemy_from_target_strip(hwnd, screen=None):
+    """Detect enemy HP from manual/calibrated target strip (name + HP bar area)."""
+    strip = hp_number_reader.get_enemy_target_strip_rect(config.calibrator)
+    if strip is None:
+        return EnemyDetectionResult().to_dict()
+
+    try:
+        if screen is None:
+            screen = frame_cache.get_frame(hwnd, config.calibrator)
+        if screen is None:
+            return EnemyDetectionResult().to_dict()
+
+        search_x, search_y, strip_w, strip_h = strip
+        search_x2 = search_x + strip_w
+        search_y2 = search_y + strip_h
+        search_area = frame_cache.crop_rect(
+            screen,
+            search_x, search_y,
+            search_x2, search_y2,
+            frame_cache.get_origin(),
+        )
+
+        if search_area.size == 0:
+            return EnemyDetectionResult(screen=screen).to_dict()
+
+        hp_only = (
+            config.bar_area_configured(config.target_hp_bar_area)
+            and search_area.shape[0] < NAME_AREA_HEIGHT
+        )
+        if hp_only:
+            import bar_reader
+            hp_percentage = bar_reader.hp_percent_from_bgr(search_area)
+            found = hp_percentage > 0.5
+            cx = search_x + search_area.shape[1] // 2
+            cy = search_y + search_area.shape[0] // 2
+            return EnemyDetectionResult(
+                found=found,
+                hp=float(hp_percentage),
+                position=(cx, cy),
+                screen=screen,
+            ).to_dict()
+
+        if search_area.shape[0] < NAME_AREA_HEIGHT:
+            return EnemyDetectionResult(screen=screen).to_dict()
+
+        # Prefer band detection (wide horizontal bar) over "red pixels per column".
+        # Light backgrounds can produce false-positive red-ish pixels, but rarely form a valid bar band.
+        mask = _enemy_hp_red_mask(search_area)
+        bands, _ = ui_bar_detection.find_bar_bands(mask)
+        min_y = max(0, NAME_AREA_HEIGHT - 2)
+        hp_bands = [b for b in bands if b[1] >= min_y]
+        if not hp_bands:
+            return EnemyDetectionResult(found=False, screen=screen).to_dict()
+
+        bx, by, bw, bh = max(hp_bands, key=lambda b: b[2])
+        if bw < MIN_HP_BAR_WIDTH:
+            return EnemyDetectionResult(found=False, screen=screen).to_dict()
+
+        enemy_x = search_x + int(bx)
+        enemy_y = search_y + int(by) + int(bh // 2)
+        bar_width = max(strip_w, 1)
+        hp_percentage = float(max(0, min(100, (bw / bar_width) * 100)))
+        return EnemyDetectionResult(
+            found=True,
+            hp=hp_percentage,
+            position=(enemy_x, enemy_y),
+            screen=screen,
+        ).to_dict()
+    except Exception as e:
+        print(f"[Enemy HP Detection] Strip scan error: {e}")
+        return EnemyDetectionResult().to_dict()
 
 
 # ============================================================================
@@ -169,6 +242,8 @@ class EnemyStateManager:
         config.current_enemy_hp_percentage = 0.0
         config.current_target_mob = None
         config.current_enemy_name = None
+        config.last_enemy_name_seen_time = 0.0
+        config.enemy_name_missing_streak = 0
         # Reset assist_only enemy tracking when enemy state is reset
         reset_enemy_tracking()
     
@@ -213,10 +288,8 @@ class EnemyHpBarDetector:
     
     def create_red_mask(self, search_area):
         """Create a mask for red HP bar detection"""
-        hsv = cv2.cvtColor(search_area, cv2.COLOR_BGR2HSV)
-        mask1 = cv2.inRange(hsv, RED_LOWER_1, RED_UPPER_1)
-        mask2 = cv2.inRange(hsv, RED_LOWER_2, RED_UPPER_2)
-        return cv2.bitwise_or(mask1, mask2)
+        # Keep enemy HP detection consistent with `ui_bar_detection` (player bars).
+        return _enemy_hp_red_mask(search_area)
     
     def find_hp_bar(self, mask, search_area):
         """Find the widest HP bar in the mask (vectorized strip scan)."""
@@ -345,86 +418,122 @@ class EnemyHpProcessor:
 
 def detect_enemy_for_auto_attack(hwnd, screen=None):
     """
-    Detect enemy HP percentage for auto-attack using calibration-based method.
-    Uses MP position as reference to find enemy HP bar.
+    Detect enemy HP percentage for auto-attack.
+    Uses manually picked enemy HP region when configured, else calibration fallback.
     """
-    if not config.calibrator or config.calibrator.mp_position is None:
-        print('No MP position memorized')
-        return EnemyDetectionResult().to_dict()
+    if config.bar_area_configured(config.target_hp_bar_area):
+        try:
+            import bar_reader
+            import frame_cache
+            area = config.target_hp_bar_area
+            if screen is None:
+                screen = frame_cache.get_frame(hwnd, config.calibrator)
+            if screen is not None:
+                region = frame_cache.crop_rect(
+                    screen,
+                    area['x'], area['y'],
+                    area['x'] + area['width'], area['y'] + area['height'],
+                    frame_cache.get_origin(),
+                )
+            else:
+                import window_utils
+                region = window_utils.capture_window_region_bgr(
+                    hwnd, area['x'], area['y'], area['width'], area['height'],
+                )
+            if region is not None and region.size > 0:
+                hp_percentage = bar_reader.hp_percent_from_bgr(region)
+                found = hp_percentage > 0.5
+                cx = area['x'] + area['width'] // 2
+                cy = area['y'] + area['height'] // 2
+                out = EnemyDetectionResult(
+                    found=found,
+                    hp=float(hp_percentage),
+                    position=(cx, cy),
+                    screen=screen,
+                ).to_dict()
+                # Even when HP is manually picked, try to detect if the target name row is present.
+                out.update(_detect_enemy_name_presence(hwnd, screen=screen))
+                return out
+        except Exception as e:
+            print(f"[Enemy HP Detection] Manual region error: {e}")
+
+    out = _detect_enemy_from_target_strip(hwnd, screen)
+    out.update(_detect_enemy_name_presence(hwnd, screen=out.get('screen')))
+    return out
+
+
+def _detect_enemy_name_presence(hwnd, screen=None):
+    """
+    Lightweight presence check: does the enemy name/level row contain UI text?
+    Helps retarget when HP bar pixels linger after a kill.
+    """
+    # Prefer manually picked regions when available; fallback to calibrator.
+    rect = hp_number_reader.get_enemy_name_bar_rect(None)
+    if rect is None:
+        return {'name_present': None, 'name_text_pixels': 0}
+    x, y, w, h = rect
+    if w <= 0 or h <= 0:
+        return {'name_present': None, 'name_text_pixels': 0}
+
+    if screen is None:
+        try:
+            screen = frame_cache.get_frame(hwnd, config.calibrator)
+        except Exception:
+            screen = None
+
+    if screen is not None:
+        try:
+            crop = frame_cache.crop_rect(
+                screen, x, y, x + w, y + h, frame_cache.get_origin(),
+            )
+        except Exception:
+            crop = None
+    else:
+        try:
+            import window_utils
+            crop = window_utils.capture_window_region_bgr(hwnd, x, y, w, h)
+        except Exception:
+            crop = None
+
+    if crop is None or crop.size == 0:
+        return {'name_present': None, 'name_text_pixels': 0}
 
     try:
-        mp_x, mp_y = config.calibrator.mp_position
-        debug_utils.debug_print(f'MP position (memorized): ({mp_x}, {mp_y})', 'AutoAttack')
+        # Reuse the mob-filter normalization (bright/low-sat UI text) for robustness.
+        # This avoids tying "name present" to a single exact color profile.
+        import mob_filter
+        norm = mob_filter.normalize_for_match(crop)
+        if norm is None or norm.size == 0:
+            return {'name_present': None, 'name_text_pixels': 0}
+        pixels = int((norm > 0).sum())
+        # Threshold is intentionally small: we only need to know if the row is "alive".
+        min_pixels = int(getattr(config, 'enemy_name_present_min_pixels', 45))
+        return {'name_present': pixels >= min_pixels, 'name_text_pixels': pixels}
+    except Exception:
+        return {'name_present': None, 'name_text_pixels': 0}
 
-        if screen is None:
-            screen = frame_cache.get_frame(hwnd, config.calibrator)
-        if screen is None:
-            return EnemyDetectionResult().to_dict()
 
-        detector = EnemyHpBarDetector()
-        search_y = mp_y + SEARCH_AREA_OFFSET_Y
-        search_x = mp_x + SEARCH_AREA_OFFSET_X
-        search_area = frame_cache.crop_rect(
-            screen,
-            search_x, search_y,
-            search_x + SEARCH_AREA_WIDTH, search_y + SEARCH_AREA_HEIGHT,
-            frame_cache.get_origin(),
-        )
+def _enemy_hp_red_mask(bgr):
+    """
+    Red mask for enemy HP bar detection.
 
-        if search_area.size == 0 or search_area.shape[0] < NAME_AREA_HEIGHT:
-            return EnemyDetectionResult(screen=screen).to_dict()
-
-        name_area = search_area[0:NAME_AREA_HEIGHT, :]
-        if debug_io.should_save_debug_images():
-            debug_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'debug')
-            os.makedirs(debug_dir, exist_ok=True)
-            debug_io.save_cv2_image(os.path.join(debug_dir, 'name_area_debug.png'), name_area)
-
-        hsv = cv2.cvtColor(search_area, cv2.COLOR_BGR2HSV)
-        mask1 = cv2.inRange(hsv, RED_LOWER_1, RED_UPPER_1)
-        mask2 = cv2.inRange(hsv, RED_LOWER_2, RED_UPPER_2)
-        mask = cv2.bitwise_or(mask1, mask2)
-
-        if debug_io.should_save_debug_images():
-            debug_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'debug')
-            os.makedirs(debug_dir, exist_ok=True)
-            debug_io.save_cv2_image(os.path.join(debug_dir, 'mask_red.png'), mask)
-            debug_io.save_cv2_image(os.path.join(debug_dir, 'search_area.png'), search_area)
-        detector.save_debug_images(search_area, mask, name_area)
-
-        best_y, best_width, best_first, best_last = detector.find_hp_bar(mask, search_area)
-        bar_found = (
-            best_y is not None and best_width > 0 and best_width >= MIN_HP_BAR_WIDTH
-        )
-
-        if bar_found:
-            enemy_x = mp_x - 1 + best_first
-            enemy_y = search_y + best_y + HP_BAR_CENTER_OFFSET
-            position = (enemy_x, enemy_y)
-            hp_percentage = float(max(0, min(100, best_width / SEARCH_AREA_WIDTH * 100)))
-            debug_utils.debug_print(
-                f'Enemy at ({enemy_x}, {enemy_y}) HP {hp_percentage:.1f}%',
-                'AutoAttack',
-            )
-            bar_img = search_area[
-                best_y + HP_BAR_CENTER_OFFSET:best_y + HP_BAR_CENTER_OFFSET + HP_BAR_HEIGHT,
-                best_first:best_last + 1,
-            ]
-            detector.save_debug_images(
-                search_area, mask, name_area, bar_img, enemy_x, enemy_y)
-            return EnemyDetectionResult(
-                found=True,
-                hp=hp_percentage,
-                position=position,
-                screen=screen,
-            ).to_dict()
-
-        debug_utils.debug_print('No red HP bar detected', 'AutoAttack')
-        return EnemyDetectionResult(found=False, screen=screen).to_dict()
-
-    except Exception as e:
-        print(f"[Enemy HP Detection] Error: {e}")
-        return EnemyDetectionResult().to_dict()
+    Uses the general red mask but suppresses low-saturation bright pixels that show up
+    as "pink/red-ish" on light backgrounds and can linger after kills.
+    """
+    if bgr is None or bgr.size == 0:
+        return np.zeros((0, 0), dtype=np.uint8)
+    base = ui_bar_detection.build_red_mask(bgr)
+    try:
+        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+        sat = hsv[:, :, 1]
+        val = hsv[:, :, 2]
+        sat_min = int(getattr(config, 'enemy_hp_red_sat_min', 55))
+        val_min = int(getattr(config, 'enemy_hp_red_val_min', 70))
+        # Keep pixels that are sufficiently saturated and not too dim.
+        keep = (sat >= sat_min) & (val >= val_min)
+        return cv2.bitwise_and(base, keep.astype(np.uint8) * 255)
+    except Exception:
+        return base
 
 # ============================================================================
 # Assist Only Mode Logic
@@ -474,11 +583,15 @@ def reset_enemy_tracking():
 
 
 def check_assist_key():
-    """Assist mode: click assist icon in skill bar on interval."""
+    """Assist mode: press configured assist hotkey on interval."""
     if not config.assist_only_enabled:
         return
 
     if not config.connected_window:
+        return
+
+    key = (config.assist_key or '').strip()
+    if not key:
         return
 
     interval = getattr(config, "assist_click_interval_seconds", 1.0)
@@ -490,12 +603,12 @@ def check_assist_key():
         return
 
     try:
-        hwnd = config.connected_window.handle
-        if skill_bar_actions.click_skill_icon(hwnd, 'assist'):
-            check_assist_key.last_click_time = current_time
-            debug_utils.debug_print('Assist icon clicked', 'AssistOnly')
+        import input_handler
+        input_handler.send_input(key)
+        check_assist_key.last_click_time = current_time
+        debug_utils.debug_print(f'Assist key pressed: {key!r}', 'AssistOnly')
     except Exception as e:
-        print(f'[Assist Only] Error clicking assist icon: {e}')
+        print(f'[Assist Only] Error pressing assist key: {e}')
 
 
 # ============================================================================
@@ -768,8 +881,8 @@ def check_auto_attack():
         else:
             return
 
-    # Require calibration to be available
-    if not config.calibrator or config.calibrator.mp_position is None:
+    # Require enemy detection regions (manual pick or legacy calibrator)
+    if not region_helpers.combat_detection_ready():
         config.current_enemy_hp_percentage = 0.0
         return
     
@@ -779,10 +892,6 @@ def check_auto_attack():
         
         cv_mob_filter = mob_filter.is_active()
         prev_mob_match = config.current_mob_match if cv_mob_filter else None
-        if cv_mob_filter and not config.is_looting:
-            mob_filter.refresh_scan(hwnd)
-
-        mob_match_lost = _mob_match_lost_during_combat(prev_mob_match)
 
         result = detect_enemy_for_auto_attack(hwnd)
         
@@ -794,9 +903,27 @@ def check_auto_attack():
         else:
             has_red_bar = False
             raw_enemy_hp_percentage = 0.0
+
+        # Track whether the enemy name row exists (can disappear earlier than HP pixels).
+        name_present = result.get('name_present', None)
+        if has_red_bar and name_present is False:
+            config.enemy_name_missing_streak = int(getattr(config, 'enemy_name_missing_streak', 0)) + 1
+        else:
+            config.enemy_name_missing_streak = 0
+            if name_present is True:
+                config.last_enemy_name_seen_time = current_time
+
+        if cv_mob_filter and not config.is_looting:
+            if has_red_bar:
+                mob_filter.refresh_scan(hwnd)
+            else:
+                mob_filter.clear_match()
+
+        mob_match_lost = _mob_match_lost_during_combat(prev_mob_match)
         
         # Handle case when no enemy is found
         if not has_red_bar:
+            config.enemy_name_missing_streak = 0
             # Check if we had an enemy recently (multiple conditions to catch all cases)
             # Also check if we detected a name but no HP bar (enemy might be dead but name still visible briefly)
             had_enemy = (
@@ -843,6 +970,24 @@ def check_auto_attack():
                     _auto_target_manager.try_auto_target("no enemy detected")
                     _auto_target_manager.update_search_timer(current_time)
         else:
+            # Stale HP bar case: name row is gone but red pixels linger (common right after kill).
+            # If this persists for a few frames, treat target as lost and retarget (no loot trigger).
+            streak_threshold = int(getattr(config, 'enemy_name_missing_streak_threshold', 3))
+            grace_s = float(getattr(config, 'enemy_name_missing_grace_seconds', 0.6))
+            if (name_present is False
+                    and config.enemy_target_time > 0
+                    and (current_time - config.enemy_target_time) >= grace_s
+                    and config.enemy_name_missing_streak >= streak_threshold):
+                print(
+                    f"[Auto Attack] Target name missing for {config.enemy_name_missing_streak} frames "
+                    f"while HP bar still visible — forcing retarget"
+                )
+                EnemyStateManager.reset_enemy_state()
+                _auto_target_manager.reset_search_timer()
+                if not config.is_looting:
+                    _auto_target_manager.try_auto_target("target name missing (stale HP)")
+                return
+
             # After a kill the mob name often clears before the HP bar.
             if mob_match_lost:
                 _finish_kill_with_loot(
@@ -850,11 +995,10 @@ def check_auto_attack():
                 )
                 return
 
-            # Only retarget unknown mobs before combat starts.
-            if (cv_mob_filter and config.current_mob_match is None
-                    and not config.is_looting
-                    and config.enemy_target_time == 0):
-                print("[Mob Filter] No CV template match (retargeting)")
+            # Block combat when mob filter is on but target is not on the whitelist.
+            if (cv_mob_filter and not config.is_looting
+                    and not should_target_current_mob()):
+                print("[Mob Filter] No whitelist match — retargeting")
                 EnemyStateManager.reset_enemy_state()
                 if config.skill_sequence_manager:
                     config.skill_sequence_manager.reset_sequence()
@@ -901,7 +1045,8 @@ def check_auto_attack():
                         and config.skill_sequence_config[i]['enabled']
                         for i in range(8)
                     )):
-                    if should_use_skills(enemy_hp_percentage):
+                    if (should_use_skills(enemy_hp_percentage)
+                            and should_target_current_mob()):
                         try:
                             skill_screen = result.get('screen')
                             if skill_screen is None:
@@ -909,7 +1054,7 @@ def check_auto_attack():
                             if skill_screen is not None:
                                 config.skill_sequence_manager.execute_skill_sequence(
                                     hwnd, skill_screen, config.area_skills,
-                                    enemy_found=True, run_active=config.bot_running
+                                    enemy_found=True, run_active=config.bot_running,
                                 )
                         except Exception as e:
                             print(f"[AutoAttack] Error executing skill sequence: {e}")
@@ -919,7 +1064,7 @@ def check_auto_attack():
                         current_time - config.last_mob_verification_time > MOB_VERIFICATION_INTERVAL):
                     config.last_mob_verification_time = current_time
                     prev_verify_match = config.current_mob_match
-                    mob_filter.refresh_scan(hwnd)
+                    mob_filter.refresh_scan_stable(hwnd)
                     if _mob_match_lost_during_combat(prev_verify_match):
                         _finish_kill_with_loot(
                             "Mob template match lost during periodic verification"
@@ -1003,7 +1148,7 @@ def check_auto_attack():
                     
                     # Verify mob filter after targeting
                     if mob_filter.is_active():
-                        mob_filter.refresh_scan(hwnd)
+                        mob_filter.refresh_scan_stable(hwnd)
                         if config.current_mob_match is None:
                             print("[Mob Filter] No CV template match after targeting — retargeting")
                             EnemyStateManager.reset_enemy_state()

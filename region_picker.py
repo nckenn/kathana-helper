@@ -4,9 +4,7 @@ import win32gui
 
 
 def pick_region(root, hwnd, instruction, on_complete, on_cancel=None):
-    """
-    Hide root, show overlay. on_complete(rel_x, rel_y, width, height) on success.
-    """
+    """Hide root, show overlay. on_complete(rel_x, rel_y, width, height) on success."""
     root.withdraw()
     picker = tk.Toplevel()
     picker.attributes('-fullscreen', True)

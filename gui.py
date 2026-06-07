@@ -27,6 +27,7 @@ import debug_utils
 import logger
 from ui.keybind_dialogs import open_keybind_dialog
 from ui.settings_overlays import collect_gui_overlay
+from ui.regions_panel import build_regions_panel
 
 
 class ToolTip:
@@ -83,6 +84,16 @@ class ToolTip:
 def create_tooltip(widget, text):
     """Helper function to create a tooltip for a widget"""
     return ToolTip(widget, text)
+
+
+KEY_BUTTON_DEFAULT_LABEL = "Set Key"
+
+
+def key_button_label(key_value):
+    """Uniform label for hotkey assignment buttons (unset vs assigned)."""
+    if key_value and str(key_value).strip():
+        return str(key_value).strip().upper()
+    return KEY_BUTTON_DEFAULT_LABEL
 
 
 class BotGUI:
@@ -745,8 +756,14 @@ class BotGUI:
             if hasattr(self, 'assist_only_var'):
                 self.assist_only_var.set(config.assist_only_enabled)
                 print(f"  Applied assist only: enabled={config.assist_only_enabled}")
+                if hasattr(self, 'assist_key_var'):
+                    self.assist_key_var.set(config.assist_key)
                 if config.assist_only_enabled:
                     self._set_assist_only_dependent_widgets_state('disabled')
+            if hasattr(self, 'repair_key_var'):
+                self.repair_key_var.set(config.repair_key)
+            if hasattr(self, 'refresh_region_pick_labels'):
+                self.refresh_region_pick_labels()
             # Low CPU mode is always enabled (no UI var)
             
             # Apply HP settings
@@ -800,6 +817,8 @@ class BotGUI:
                     try:
                         # Update enabled state
                         self.buffs_vars[i].set(config.buffs_config[i]['enabled'])
+                        if hasattr(self, 'buffs_key_vars') and i in self.buffs_key_vars:
+                            self.buffs_key_vars[i].set(config.buffs_config[i].get('key', ''))
                         # Load image if exists - resolve relative path
                         if config.buffs_config[i]['image_path']:
                             image_path = self.convert_to_absolute_path(config.buffs_config[i]['image_path'])
@@ -837,6 +856,8 @@ class BotGUI:
                         # Update bypass state
                         if hasattr(self, 'skill_sequence_bypass_vars') and i in self.skill_sequence_bypass_vars:
                             self.skill_sequence_bypass_vars[i].set(config.skill_sequence_config[i].get('bypass', False))
+                        if hasattr(self, 'skill_sequence_key_vars') and i in self.skill_sequence_key_vars:
+                            self.skill_sequence_key_vars[i].set(config.skill_sequence_config[i].get('key', ''))
                         # Load image if exists - resolve relative path
                         if config.skill_sequence_config[i].get('image_path'):
                             image_path = self.convert_to_absolute_path(config.skill_sequence_config[i]['image_path'])
@@ -1010,15 +1031,10 @@ class BotGUI:
         self.connect_button.grid(row=0, column=0, padx=(10, 5), pady=5)
         create_tooltip(self.connect_button, "Connect to the game window. Select a window from the dropdown and click Connect.")
         
-        # Calibrate button
-        self.calibrate_button = ctk.CTkButton(bot_frame, text="Calibrate", command=self.calibrate_bars, width=100, height=32, corner_radius=6, state="disabled")
-        self.calibrate_button.grid(row=0, column=1, padx=5, pady=5)
-        create_tooltip(self.calibrate_button, "Auto-detects HP/MP bar positions and skill area. Required before starting the bot. Make sure HP/MP bars are visible in-game.")
-        
         # Start/Stop toggle button
         self.toggle_bot_button = ctk.CTkButton(bot_frame, text="Start", command=self.toggle_bot, state="disabled", width=100, height=32, corner_radius=6, fg_color="green", hover_color="darkgreen")
-        self.toggle_bot_button.grid(row=0, column=2, padx=5, pady=5)
-        create_tooltip(self.toggle_bot_button, "Start or stop the bot. Bot must be calibrated before starting.")
+        self.toggle_bot_button.grid(row=0, column=1, padx=5, pady=5)
+        create_tooltip(self.toggle_bot_button, "Start or stop the bot. Pick HP + MP regions in the Regions tab first.")
         
         # Separator frame (using a thin frame as separator) - fixed height to match buttons
         separator = ctk.CTkFrame(bot_frame, width=2, height=40, fg_color="gray50")
@@ -1040,12 +1056,15 @@ class BotGUI:
         main_frame.rowconfigure(3, weight=1)
         
         # Create tabs
+        regions_tab = tabview.add("Regions")
         status_tab = tabview.add("Status")
         settings_tab = tabview.add("Settings")
         skill_sequence_tab = tabview.add("Skill Sequence")
-        skills_tab = tabview.add("Skill Interval")
         buffs_tab = tabview.add("Buffs")
+        skills_tab = tabview.add("Skill Interval")
         mouse_clicker_tab = tabview.add("Mouse Clicker")
+
+        build_regions_panel(regions_tab, self)
         
         # Action slots frame - moved to Status tab (wrap in scrollable frame)
         status_scroll = ctk.CTkScrollableFrame(status_tab)
@@ -1227,126 +1246,168 @@ class BotGUI:
         settings_scroll.pack(fill="both", expand=True)
         settings_frame = settings_scroll
         
-        # Configure settings frame for 2 columns with padding
-        settings_frame.columnconfigure(0, weight=1)
-        settings_frame.columnconfigure(1, weight=1)
-        settings_frame.rowconfigure(0, weight=0)
-        settings_frame.rowconfigure(1, weight=0)
-        settings_frame.rowconfigure(2, weight=0)
-        settings_frame.rowconfigure(3, weight=0)
-        settings_frame.rowconfigure(4, weight=0)
-        
-        # Low CPU mode is always enabled (no UI toggle)
-        
-        # Column 0: Auto Attack, Auto Loot, Auto Repair
-        # Auto Attack frame
-        auto_attack_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        auto_attack_frame.grid(row=1, column=0, sticky="ew", padx=(15, 5), pady=(10, 0))
-        
-        # Auto Attack checkbox
+        # Configure settings frame for 2 columns
+        settings_frame.columnconfigure(0, weight=1, uniform="settings_cols")
+        settings_frame.columnconfigure(1, weight=1, uniform="settings_cols")
+
+        # Typography tuned for small screens (avoid global widget scaling, which looks pixelated).
+        _h_font = ctk.CTkFont(size=11, weight="bold")
+        _t_font = ctk.CTkFont(size=11)
+        _small_font = ctk.CTkFont(size=10)
+        _chk_w = 118
+
+        def _card(parent, title):
+            frame = ctk.CTkFrame(parent, fg_color=("gray92", "gray20"), corner_radius=10)
+            frame.columnconfigure(0, weight=1)
+            ctk.CTkLabel(
+                frame,
+                text=title,
+                font=_h_font,
+                text_color=("gray25", "gray80"),
+                anchor="w",
+            ).grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 2))
+            body = ctk.CTkFrame(frame, fg_color="transparent")
+            body.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 10))
+            body.columnconfigure(0, weight=1)
+            return frame, body
+
+        left_card, left_body = _card(settings_frame, "Combat & Utility")
+        left_card.grid(row=1, column=0, sticky="nsew", padx=(15, 6), pady=(10, 6))
+
+        right_card, right_body = _card(settings_frame, "Pots & Unstuck")
+        right_card.grid(row=1, column=1, sticky="nsew", padx=(6, 15), pady=(10, 6))
+
+        # --- Left card (Combat & Utility) ---
+        auto_attack_row = ctk.CTkFrame(left_body, fg_color="transparent")
+        auto_attack_row.pack(fill="x", pady=(0, 6))
         self.auto_attack_var = tk.BooleanVar()
-        self.auto_attack_checkbox = ctk.CTkCheckBox(auto_attack_frame, text="Auto Attack", 
-                                         variable=self.auto_attack_var,
-                                         command=self.update_auto_attack,
-                                         font=ctk.CTkFont(size=11))
-        self.auto_attack_checkbox.grid(row=0, column=0, sticky="w", pady=5)
-        create_tooltip(self.auto_attack_checkbox, "Automatically targets and attacks enemies. Requires enemy HP bar calibration.")
-        
-        # Auto Loot frame
-        auto_loot_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        auto_loot_frame.grid(row=2, column=0, sticky="ew", padx=(15, 5), pady=(0, 0))
-        
-        # Auto Loot checkbox
+        self.auto_attack_checkbox = ctk.CTkCheckBox(
+            auto_attack_row,
+            text="Auto Attack",
+            width=_chk_w,
+            variable=self.auto_attack_var,
+            command=self.update_auto_attack,
+            font=_t_font,
+        )
+        self.auto_attack_checkbox.pack(side="left")
+        create_tooltip(self.auto_attack_checkbox, "Automatically targets and attacks enemies.")
+
+        auto_loot_row = ctk.CTkFrame(left_body, fg_color="transparent")
+        auto_loot_row.pack(fill="x", pady=(0, 6))
         self.action_vars['pick'] = tk.BooleanVar(value=config.action_slots['pick']['enabled'])
-        auto_loot_checkbox = ctk.CTkCheckBox(auto_loot_frame, text="Auto Loot", 
-                                         variable=self.action_vars['pick'],
-                                         command=lambda: self.update_action_slot('pick'),
-                                         font=ctk.CTkFont(size=11))
-        auto_loot_checkbox.grid(row=0, column=0, sticky="w", pady=5)
-        create_tooltip(auto_loot_checkbox, "Automatically picks up items after killing enemies. Uses the 'pick' action key (default: F).")
-        
-        # Looting duration input (seconds)
+        auto_loot_checkbox = ctk.CTkCheckBox(
+            auto_loot_row,
+            text="Auto Loot",
+            width=_chk_w,
+            variable=self.action_vars['pick'],
+            command=lambda: self.update_action_slot('pick'),
+            font=_t_font,
+        )
+        auto_loot_checkbox.pack(side="left")
+        create_tooltip(auto_loot_checkbox, "Picks items after kills (uses your Pick hotkey).")
         self.looting_duration_var = tk.StringVar(value=str(config.LOOTING_DURATION))
-        looting_duration_entry = ctk.CTkEntry(auto_loot_frame, textvariable=self.looting_duration_var, width=50, font=ctk.CTkFont(size=11))
-        looting_duration_entry.grid(row=0, column=1, padx=(10, 5))
+        looting_duration_entry = ctk.CTkEntry(
+            auto_loot_row,
+            textvariable=self.looting_duration_var,
+            width=52,
+            font=_t_font,
+        )
+        looting_duration_entry.pack(side="left", padx=(10, 4))
         looting_duration_entry.bind('<KeyRelease>', lambda event: self.update_looting_duration())
         looting_duration_entry.bind('<FocusOut>', lambda event: self.update_looting_duration())
-        looting_seconds_label = ctk.CTkLabel(auto_loot_frame, text="s", font=ctk.CTkFont(size=11))
-        looting_seconds_label.grid(row=0, column=2, sticky="w")
-        create_tooltip(looting_duration_entry, "Input: Looting duration in seconds. This is how long the bot prevents auto-targeting after looting starts. Lower values allow faster retargeting to the next enemy.")
-        
-        # Auto Repair frame
-        auto_repair_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        auto_repair_frame.grid(row=3, column=0, sticky="ew", padx=(15, 5), pady=(0, 0))
-        
-        # Auto Repair checkbox
+        ctk.CTkLabel(auto_loot_row, text="s", font=_t_font).pack(side="left")
+        create_tooltip(looting_duration_entry, "Looting lockout duration (seconds).")
+
+        mage_row = ctk.CTkFrame(left_body, fg_color="transparent")
+        mage_row.pack(fill="x", pady=(0, 6))
+        self.is_mage_var = tk.BooleanVar(value=config.is_mage)
+        mage_checkbox = ctk.CTkCheckBox(
+            mage_row,
+            text="Mage",
+            width=_chk_w,
+            variable=self.is_mage_var,
+            command=self.update_is_mage,
+            font=_t_font,
+        )
+        mage_checkbox.pack(side="left")
+        create_tooltip(mage_checkbox, "Enable if you use skills instead of basic attack after targeting.")
+
+        auto_repair_row = ctk.CTkFrame(left_body, fg_color="transparent")
+        auto_repair_row.pack(fill="x", pady=(0, 6))
         self.auto_repair_var = tk.BooleanVar(value=config.auto_repair_enabled)
-        auto_repair_checkbox = ctk.CTkCheckBox(auto_repair_frame, text="Auto Repair", 
-                                         variable=self.auto_repair_var,
-                                         command=self.update_auto_repair,
-                                         font=ctk.CTkFont(size=11))
-        auto_repair_checkbox.grid(row=0, column=0, sticky="w", pady=5)
-        create_tooltip(
-            auto_repair_checkbox,
-            "Clicks the repair skill after the break warning appears 10 times (each time the message shows up in chat).",
+        auto_repair_checkbox = ctk.CTkCheckBox(
+            auto_repair_row,
+            text="Auto Repair",
+            width=_chk_w,
+            variable=self.auto_repair_var,
+            command=self.update_auto_repair,
+            font=_t_font,
         )
-        counter_frame = ctk.CTkFrame(auto_repair_frame, fg_color="transparent")
-        counter_frame.grid(row=0, column=1, sticky="w", padx=(10, 0), pady=5)
-        self.auto_repair_progress = ctk.CTkProgressBar(
-            counter_frame, width=64, height=8, corner_radius=4,
-        )
-        self.auto_repair_progress.pack(side="left", padx=(0, 8))
-        self.auto_repair_progress.set(0)
-        self.auto_repair_count_label = ctk.CTkLabel(
-            counter_frame, text="0/10", anchor='w',
-            font=ctk.CTkFont(size=11), text_color="gray",
-        )
-        self.auto_repair_count_label.pack(side="left")
+        auto_repair_checkbox.pack(side="left")
+        create_tooltip(auto_repair_checkbox, "Repairs after repeated 'about to break' warnings.")
+        self.auto_repair_count_label = ctk.CTkLabel(auto_repair_row, text="0/10", font=_small_font, text_color="gray")
+        self.auto_repair_count_label.pack(side="left", padx=(10, 0))
         self.auto_repair_reset_btn = ctk.CTkButton(
-            counter_frame, text="↺", width=28, height=22, corner_radius=6,
+            auto_repair_row,
+            text="↺",
+            width=28,
+            height=24,
+            corner_radius=6,
             command=self.reset_auto_repair_count,
-            fg_color=("gray75", "gray30"), hover_color=("gray65", "gray40"),
+            fg_color=("gray75", "gray30"),
+            hover_color=("gray65", "gray40"),
             font=ctk.CTkFont(size=13),
         )
         self.auto_repair_reset_btn.pack(side="left", padx=(6, 0))
-        create_tooltip(
-            counter_frame,
-            "Break warnings detected. Repair runs when this reaches 10.",
-        )
-        create_tooltip(
-            self.auto_repair_reset_btn,
-            "Reset break warning count to 0.",
-        )
         self._update_auto_repair_count_display()
-        
-        # Mage frame
-        mage_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        mage_frame.grid(row=4, column=0, sticky="ew", padx=(15, 5), pady=(0, 0))
-        
-        # Mage checkbox
-        self.is_mage_var = tk.BooleanVar(value=config.is_mage)
-        mage_checkbox = ctk.CTkCheckBox(mage_frame, text="Mage?", 
-                                         variable=self.is_mage_var,
-                                         command=self.update_is_mage,
-                                         font=ctk.CTkFont(size=11))
-        mage_checkbox.grid(row=0, column=0, sticky="w", pady=5)
-        create_tooltip(mage_checkbox, "Enable if playing as a mage. Prevents attack action from triggering after targeting (mages use skills instead).")
-        
-        # Assist Only frame
-        assist_only_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        assist_only_frame.grid(row=5, column=0, sticky="ew", padx=(15, 5), pady=(0, 0))
-        
-        # Assist Only checkbox
-        self.assist_only_var = tk.BooleanVar(value=config.assist_only_enabled)
-        self.assist_only_checkbox = ctk.CTkCheckBox(assist_only_frame, text="Assist Mode", 
-                                         variable=self.assist_only_var,
-                                         command=self.update_assist_only,
-                                         font=ctk.CTkFont(size=11))
-        self.assist_only_checkbox.grid(row=0, column=0, sticky="w", pady=5)
-        create_tooltip(
-            self.assist_only_checkbox,
-            "Party assist mode: clicks the assist button in your skill bar on an interval.",
+
+        repair_key_row = ctk.CTkFrame(left_body, fg_color="transparent")
+        repair_key_row.pack(fill="x", pady=(0, 6))
+        ctk.CTkLabel(repair_key_row, text="Repair key", font=_small_font, text_color=("gray35", "gray70")).pack(side="left")
+        self.repair_key_var = tk.StringVar(value=config.repair_key)
+        self.repair_key_btn = ctk.CTkButton(
+            repair_key_row,
+            width=78,
+            height=28,
+            text=key_button_label(config.repair_key),
+            command=self.register_repair_key,
+            font=_small_font,
         )
+        self.repair_key_btn.pack(side="left", padx=(10, 0))
+        self.repair_key_var.trace_add('write', lambda *_: self.repair_key_btn.configure(
+            text=key_button_label(self.repair_key_var.get()),
+        ))
+
+        assist_row = ctk.CTkFrame(left_body, fg_color="transparent")
+        assist_row.pack(fill="x", pady=(0, 2))
+        self.assist_only_var = tk.BooleanVar(value=config.assist_only_enabled)
+        self.assist_only_checkbox = ctk.CTkCheckBox(
+            assist_row,
+            text="Assist Mode",
+            width=_chk_w,
+            variable=self.assist_only_var,
+            command=self.update_assist_only,
+            font=_t_font,
+        )
+        self.assist_only_checkbox.pack(side="left")
+        create_tooltip(self.assist_only_checkbox, "Party assist: presses Assist key on an interval.")
+
+        assist_key_row = ctk.CTkFrame(left_body, fg_color="transparent")
+        assist_key_row.pack(fill="x", pady=(0, 2))
+        ctk.CTkLabel(assist_key_row, text="Assist key", font=_small_font, text_color=("gray35", "gray70")).pack(side="left")
+        self.assist_key_var = tk.StringVar(value=config.assist_key)
+        self.assist_key_btn = ctk.CTkButton(
+            assist_key_row,
+            width=78,
+            height=28,
+            text=key_button_label(config.assist_key),
+            command=self.register_assist_key,
+            font=_small_font,
+        )
+        self.assist_key_btn.pack(side="left", padx=(10, 0))
+        self.assist_key_var.trace_add('write', lambda *_: self.assist_key_btn.configure(
+            text=key_button_label(self.assist_key_var.get()),
+        ))
         
         # If assist_only is enabled on startup, disable dependent features
         if config.assist_only_enabled:
@@ -1366,26 +1427,44 @@ class BotGUI:
             # Disable checkboxes in GUI (will be set after widgets are created)
             self.root.after(100, lambda: self._set_assist_only_dependent_widgets_state('disabled'))
         
-        # Column 1: Auto HP, Auto MP, Auto Unstuck
-        # Auto HP frame
-        auto_hp_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        auto_hp_frame.grid(row=1, column=1, sticky="ew", padx=(5, 15), pady=(10, 0))
-        
-        # Auto HP checkbox
+        # If assist_only is enabled on startup, disable dependent features
+        if config.assist_only_enabled:
+            if config._assist_only_previous_auto_attack is None:
+                config._assist_only_previous_auto_attack = config.auto_attack_enabled
+            if config._assist_only_previous_mob_detection is None:
+                config._assist_only_previous_mob_detection = config.mob_detection_enabled
+            if config._assist_only_previous_auto_change_target is None:
+                config._assist_only_previous_auto_change_target = config.auto_change_target_enabled
+            config.auto_attack_enabled = False
+            config.mob_detection_enabled = False
+            config.auto_change_target_enabled = False
+            self.root.after(100, lambda: self._set_assist_only_dependent_widgets_state('disabled'))
+
+        # --- Right card (Pots & Unstuck) ---
+        auto_hp_row = ctk.CTkFrame(right_body, fg_color="transparent")
+        auto_hp_row.pack(fill="x", pady=(0, 6))
         self.auto_hp_var = tk.BooleanVar()
-        auto_hp_checkbox = ctk.CTkCheckBox(auto_hp_frame, text="Auto HP", 
-                                         variable=self.auto_hp_var,
-                                         command=self.update_auto_hp,
-                                         font=ctk.CTkFont(size=11))
-        auto_hp_checkbox.grid(row=0, column=0, sticky="w", pady=5)
-        create_tooltip(auto_hp_checkbox, "Automatically uses HP potions when HP drops below configured thresholds. Requires HP bar calibration.")
-        
-        # Ellipsis button for multiple HP thresholds configuration
-        hp_thresholds_button = ctk.CTkButton(auto_hp_frame, text="⋯", width=28, height=28,
-                                            command=self.configure_hp_thresholds,
-                                            font=ctk.CTkFont(size=16), corner_radius=4)
-        hp_thresholds_button.grid(row=0, column=1, padx=(10, 0), pady=5)
-        create_tooltip(hp_thresholds_button, "Configure multiple HP thresholds with different keys. Example: 80% = key 0, 50% = key 3")
+        auto_hp_checkbox = ctk.CTkCheckBox(
+            auto_hp_row,
+            text="Auto HP",
+            variable=self.auto_hp_var,
+            command=self.update_auto_hp,
+            font=_t_font,
+        )
+        auto_hp_checkbox.pack(side="left")
+        create_tooltip(auto_hp_checkbox, "Uses HP potions based on configured thresholds.")
+
+        hp_thresholds_button = ctk.CTkButton(
+            auto_hp_row,
+            text="⋯",
+            width=28,
+            height=28,
+            command=self.configure_hp_thresholds,
+            font=ctk.CTkFont(size=16),
+            corner_radius=6,
+        )
+        hp_thresholds_button.pack(side="left", padx=(10, 0))
+        create_tooltip(hp_thresholds_button, "Configure multiple HP thresholds and keys.")
         
         # HP bar area input (x, y, width, height) - hidden, only used internally
         self.hp_x_var = tk.StringVar(value=str(config.hp_bar_area['x']))
@@ -1394,44 +1473,48 @@ class BotGUI:
         self.hp_height_var = tk.StringVar(value=str(config.hp_bar_area['height']))
         self.hp_coords_var = tk.StringVar(value=f"{config.hp_bar_area['x']},{config.hp_bar_area['y']}")
         
-        # Auto MP frame
-        auto_mp_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        auto_mp_frame.grid(row=2, column=1, sticky="ew", padx=(5, 15), pady=(0, 0))
-        
-        # Auto MP checkbox
+        auto_mp_row = ctk.CTkFrame(right_body, fg_color="transparent")
+        auto_mp_row.pack(fill="x", pady=(0, 6))
         self.auto_mp_var = tk.BooleanVar()
-        auto_mp_checkbox = ctk.CTkCheckBox(auto_mp_frame, text="Auto MP", 
-                                         variable=self.auto_mp_var,
-                                         command=self.update_auto_mp,
-                                         font=ctk.CTkFont(size=11))
-        auto_mp_checkbox.grid(row=0, column=0, sticky="w", pady=5)
-        create_tooltip(auto_mp_checkbox, "Automatically uses MP potions when MP drops below the threshold. Requires MP bar calibration.")
-        
-        # MP threshold input (percentage)
+        auto_mp_checkbox = ctk.CTkCheckBox(
+            auto_mp_row,
+            text="Auto MP",
+            variable=self.auto_mp_var,
+            command=self.update_auto_mp,
+            font=_t_font,
+        )
+        auto_mp_checkbox.pack(side="left")
+        create_tooltip(auto_mp_checkbox, "Uses MP potions when MP drops below the threshold.")
+
         self.mp_threshold_var = tk.StringVar(value=str(config.mp_threshold))
-        mp_threshold_entry = ctk.CTkEntry(auto_mp_frame, textvariable=self.mp_threshold_var, width=50, font=ctk.CTkFont(size=11))
-        mp_threshold_entry.grid(row=0, column=1, padx=(10, 5))
+        mp_threshold_entry = ctk.CTkEntry(
+            auto_mp_row,
+            textvariable=self.mp_threshold_var,
+            width=52,
+            font=_t_font,
+        )
+        mp_threshold_entry.pack(side="left", padx=(10, 4))
         mp_threshold_entry.bind('<KeyRelease>', lambda event: self.update_mp_threshold())
         mp_threshold_entry.bind('<FocusOut>', lambda event: self.update_mp_threshold())
-        mp_percent_label = ctk.CTkLabel(auto_mp_frame, text="%", font=ctk.CTkFont(size=11))
-        mp_percent_label.grid(row=0, column=2, sticky="w")
-        create_tooltip(mp_threshold_entry, "Input: MP percentage threshold (0-100). Enter the MP percentage below which the bot will automatically use MP potions. Example: 50 means potion is used when MP drops below 50%.")
-        
-        # MP key registration
+        ctk.CTkLabel(auto_mp_row, text="%", font=_t_font).pack(side="left")
+        create_tooltip(mp_threshold_entry, "MP % threshold (0–100).")
+
         self.mp_key_var = tk.StringVar(value=config.mp_key)
         def update_mp_key_button_text(var=self.mp_key_var, btn=None):
-            if var.get():
-                btn.configure(text=var.get().upper())
-            else:
-                btn.configure(text="Set Key")
-        mp_key_button = ctk.CTkButton(auto_mp_frame, width=60, height=28,
-                                      command=self.register_mp_key,
-                                      font=ctk.CTkFont(size=10), corner_radius=4)
-        mp_key_button.grid(row=0, column=3, padx=(10, 0), pady=5)
+            btn.configure(text=key_button_label(var.get()))
+        mp_key_button = ctk.CTkButton(
+            auto_mp_row,
+            width=78,
+            height=28,
+            command=self.register_mp_key,
+            font=_small_font,
+            corner_radius=6,
+        )
+        mp_key_button.pack(side="left", padx=(10, 0))
         update_mp_key_button_text(btn=mp_key_button)
         self.mp_key_var.trace_add('write', lambda *args: update_mp_key_button_text(btn=mp_key_button))
         mp_key_button.bind('<Button-3>', lambda e: self.clear_mp_key())
-        create_tooltip(mp_key_button, "Click to register the hotkey for MP potion. Right-click to clear.")
+        create_tooltip(mp_key_button, "Click to set key. Right-click to clear.")
         
         # MP bar area input (x, y, width, height) - hidden, only used internally
         self.mp_x_var = tk.StringVar(value=str(config.mp_bar_area['x']))
@@ -1440,35 +1523,31 @@ class BotGUI:
         self.mp_height_var = tk.StringVar(value=str(config.mp_bar_area['height']))
         self.mp_coords_var = tk.StringVar(value=f"{config.mp_bar_area['x']},{config.mp_bar_area['y']}")
         
-        # Auto Unstuck frame
-        auto_change_target_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        auto_change_target_frame.grid(row=3, column=1, sticky="ew", padx=(5, 15), pady=(0, 0))
-        
-        # Auto Unstuck checkbox
+        auto_unstuck_row = ctk.CTkFrame(right_body, fg_color="transparent")
+        auto_unstuck_row.pack(fill="x", pady=(0, 2))
         self.auto_change_target_var = tk.BooleanVar(value=config.auto_change_target_enabled)
-        self.auto_change_target_checkbox = ctk.CTkCheckBox(auto_change_target_frame, text="Auto Unstuck", 
-                                         variable=self.auto_change_target_var,
-                                         command=self.update_auto_change_target,
-                                         font=ctk.CTkFont(size=11))
-        self.auto_change_target_checkbox.grid(row=0, column=0, sticky="w", pady=5)
-        create_tooltip(self.auto_change_target_checkbox, "Automatically changes target when enemy HP becomes stagnant (stuck). Detects when enemy HP doesn't decrease for the timeout duration.")
-        
-        # Unstuck timeout input (seconds)
+        self.auto_change_target_checkbox = ctk.CTkCheckBox(
+            auto_unstuck_row,
+            text="Auto Unstuck",
+            variable=self.auto_change_target_var,
+            command=self.update_auto_change_target,
+            font=_t_font,
+        )
+        self.auto_change_target_checkbox.pack(side="left")
+        create_tooltip(self.auto_change_target_checkbox, "Switch target if enemy HP stops changing for too long.")
+
         self.unstuck_timeout_var = tk.StringVar(value=str(config.unstuck_timeout))
-        unstuck_timeout_entry = ctk.CTkEntry(auto_change_target_frame, textvariable=self.unstuck_timeout_var, width=50, font=ctk.CTkFont(size=11))
-        unstuck_timeout_entry.grid(row=0, column=1, padx=(10, 5))
+        unstuck_timeout_entry = ctk.CTkEntry(
+            auto_unstuck_row,
+            textvariable=self.unstuck_timeout_var,
+            width=52,
+            font=_t_font,
+        )
+        unstuck_timeout_entry.pack(side="left", padx=(10, 4))
         unstuck_timeout_entry.bind('<KeyRelease>', lambda event: self.update_unstuck_timeout())
         unstuck_timeout_entry.bind('<FocusOut>', lambda event: self.update_unstuck_timeout())
-        unstuck_seconds_label = ctk.CTkLabel(auto_change_target_frame, text="s", font=ctk.CTkFont(size=11))
-        unstuck_seconds_label.grid(row=0, column=2, sticky="w")
-        create_tooltip(unstuck_timeout_entry, "Input: Unstuck timeout in seconds. Time to wait before considering enemy HP stagnant (stuck). Slow boss chip damage still resets the countdown. Lower values switch targets sooner. Default: 8 seconds.")
-        
-        # Configure options frame rows for proper visibility
-        settings_frame.rowconfigure(1, weight=0)
-        settings_frame.rowconfigure(2, weight=0)
-        settings_frame.rowconfigure(3, weight=0)
-        settings_frame.rowconfigure(4, weight=0)
-        settings_frame.rowconfigure(5, weight=0)
+        ctk.CTkLabel(auto_unstuck_row, text="s", font=_t_font).pack(side="left")
+        create_tooltip(unstuck_timeout_entry, "Seconds before considering HP stagnant.")
         
         mob_separator = ctk.CTkFrame(settings_frame, height=1, fg_color="gray50")
         mob_separator.grid(row=6, column=0, columnspan=2, sticky="ew", padx=15, pady=(4, 0))
@@ -1488,7 +1567,7 @@ class BotGUI:
         self.mob_checkbox.grid(row=8, column=0, columnspan=2, sticky="w", padx=15, pady=(0, 6))
         create_tooltip(
             self.mob_checkbox,
-            "Only attack mobs that match learned templates. Calibrate first, then learn templates.",
+            "Only attack mobs that match learned templates. Pick Enemy Name on the Regions tab, then Learn.",
         )
 
         self.mob_elite_skip_var = tk.BooleanVar(value=config.mob_elite_skip_enabled)
@@ -1531,7 +1610,15 @@ class BotGUI:
             fg_color=("gray75", "gray30"), hover_color=("gray65", "gray40"),
             state="disabled",
         )
-        self.mob_test_btn.pack(side="left")
+        self.mob_test_btn.pack(side="left", padx=(0, 6))
+
+        self.mob_compare_btn = ctk.CTkButton(
+            mob_btn_row, text="Compare", command=self._compare_selected_mob_template_live,
+            width=84, height=28, corner_radius=6,
+            fg_color=("gray75", "gray30"), hover_color=("gray65", "gray40"),
+            state="disabled",
+        )
+        self.mob_compare_btn.pack(side="left")
 
         mob_body = ctk.CTkFrame(
             settings_frame, fg_color=("gray92", "gray20"), corner_radius=8,
@@ -1564,7 +1651,7 @@ class BotGUI:
             text_color=("gray30", "gray70"),
         ).grid(row=0, column=0, sticky="w", pady=(0, 4))
         preview_box = ctk.CTkFrame(
-            preview_col, height=72, corner_radius=6,
+            preview_col, height=88, corner_radius=6,
             border_width=1, border_color=("gray70", "gray35"),
             fg_color=("gray88", "gray14"),
         )
@@ -1585,8 +1672,9 @@ class BotGUI:
 
         self.mob_filter_help = ctk.CTkLabel(
             settings_frame,
-            text='Calibrate to auto-detect the enemy name area. Target a normal mob at full HP, then Learn. '
-                 'Elite skip compares max HP digits (e.g. 18000 vs 54000). Re-learn templates after updating.',
+            text='Pick Enemy Name on the Regions tab (full width of the name/level bar). '
+                 'Learn saves that exact region. Matching uses name text shape, not OCR. '
+                 'Re-learn templates if you change the region.',
             font=ctk.CTkFont(size=10), text_color=("gray40", "gray60"), anchor='w',
             justify='left',
         )
@@ -1634,10 +1722,10 @@ class BotGUI:
         info_title.grid(row=0, column=0, sticky="w", padx=10, pady=(10, 5))
         
         info_text = ctk.CTkLabel(info_frame, 
-                                text="1. Click the skill image to select a skill\n"
-                                     "2. Enable the checkbox to activate the skill\n"
-                                     "3. Skills execute automatically in sequence when enemy is found\n"
-                                     "4. Skip if CD: If enabled, skip skill if not found (on cooldown/not available) and move to next skill",
+                                text="1. Click the skill image to select a skill icon\n"
+                                     "2. Assign a hotkey for each skill (pressed instead of clicking)\n"
+                                     "3. Enable the checkbox to include the skill in the sequence\n"
+                                     "4. Skills run in order when an enemy is found (pick Skill Area on Regions tab)",
                                 font=ctk.CTkFont(size=12),
                                 justify="left", anchor="w")
         info_text.grid(row=1, column=0, sticky="w", padx=10, pady=(0, 10))
@@ -1645,6 +1733,7 @@ class BotGUI:
         # Initialize skill sequence variables
         self.skill_sequence_vars = {}
         self.skill_sequence_bypass_vars = {}
+        self.skill_sequence_key_vars = {}
         self.skill_sequence_canvases = []
         self.skill_sequence_state = []
         
@@ -1678,24 +1767,44 @@ class BotGUI:
             slot_label = ctk.CTkLabel(skill_slot_frame, text=f"Skill {i+1}", 
                                      font=ctk.CTkFont(size=11, weight="bold"), width=60)
             slot_label.grid(row=0, column=1, padx=(0, 5), pady=6, sticky="w")
-            
-            # Skill image canvas (clickable to select skill) - smaller size
-            canvas = tk.Canvas(skill_slot_frame, width=40, height=40, bg='gray20', 
+
+            canvas = tk.Canvas(skill_slot_frame, width=40, height=40, bg='gray20',
                              highlightthickness=1, highlightbackground='gray50', cursor='hand2')
             canvas.grid(row=0, column=2, padx=5, pady=6)
             canvas.bind('<Button-1>', lambda e, idx=i: self.show_skill_sequence_selector(idx))
             canvas.bind('<Button-3>', lambda e, idx=i: self.clear_skill_sequence_skill(idx))
             self.skill_sequence_canvases.append(canvas)
-            
-            # Skip if unavailable checkbox (skip skill if not found/on cooldown) - rightmost position
+
+            self.skill_sequence_key_vars[i] = tk.StringVar(
+                value=config.skill_sequence_config[i].get('key', ''),
+            )
+            key_btn = ctk.CTkButton(
+                skill_slot_frame, width=72, height=28, text=KEY_BUTTON_DEFAULT_LABEL,
+                command=lambda idx=i: self.register_skill_sequence_key(idx),
+                font=ctk.CTkFont(size=10),
+            )
+            key_btn.grid(row=0, column=3, padx=(5, 5), pady=6, sticky="w")
+            self.skill_sequence_key_vars[i].trace_add(
+                'write',
+                lambda *_a, idx=i, btn=key_btn: btn.configure(
+                    text=key_button_label(self.skill_sequence_key_vars[idx].get()),
+                ),
+            )
+            if config.skill_sequence_config[i].get('key'):
+                key_btn.configure(text=key_button_label(config.skill_sequence_config[i]['key']))
+
+            # Skip if on cooldown (icon not visible in Skill Area)
             self.skill_sequence_bypass_vars[i] = tk.BooleanVar(value=config.skill_sequence_config[i].get('bypass', False))
-            bypass_checkbox = ctk.CTkCheckBox(skill_slot_frame, text="Skip if CD", 
+            bypass_checkbox = ctk.CTkCheckBox(skill_slot_frame, text="",
                                              variable=self.skill_sequence_bypass_vars[i],
                                              command=lambda idx=i: self.update_skill_sequence_bypass(idx),
-                                             font=ctk.CTkFont(size=10), width=80)
-            bypass_checkbox.grid(row=0, column=3, padx=(5, 8), pady=6, sticky="e")
-            
-            # Initialize skill sequence state
+                                             font=ctk.CTkFont(size=10), width=20)
+            bypass_checkbox.grid(row=0, column=4, padx=(5, 8), pady=6, sticky="e")
+            create_tooltip(
+                bypass_checkbox,
+                "Skip if on cooldown: when this skill's icon is not found in the Skill Area "
+                "(likely on cooldown), skip this slot and continue to the next skill.",
+            )
             self.skill_sequence_state.append({
                 'image_path': config.skill_sequence_config[i].get('image_path'),
                 'enabled': config.skill_sequence_config[i]['enabled']
@@ -1833,15 +1942,16 @@ class BotGUI:
         buffs_info_title.grid(row=0, column=0, sticky="w", padx=10, pady=(10, 5))
         
         buffs_info_text = ctk.CTkLabel(buffs_info_frame, 
-                                      text="1. Click the skill image to select a buff skill\n"
-                                           "2. Enable the checkbox to activate the buff\n"
-                                           "3. Important: Place buff icons above the system message for detection",
+                                      text="1. Pick the Buff Area on the Regions tab (active buff icons)\n"
+                                           "2. Click a buff image to detect when it is already active\n"
+                                           "3. Assign a hotkey — pressed when the buff is missing",
                                       font=ctk.CTkFont(size=12),
                                       justify="left", anchor="w")
         buffs_info_text.grid(row=1, column=0, sticky="w", padx=10, pady=(0, 10))
         
         # Initialize buffs variables
         self.buffs_vars = {}
+        self.buffs_key_vars = {}
         self.buffs_canvases = []
         self.buffs_state = []
         
@@ -1883,6 +1993,22 @@ class BotGUI:
             canvas.bind('<Button-1>', lambda e, idx=i: self.show_buff_skill_selector(idx))
             canvas.bind('<Button-3>', lambda e, idx=i: self.clear_buff_skill(idx))
             self.buffs_canvases.append(canvas)
+
+            self.buffs_key_vars[i] = tk.StringVar(value=config.buffs_config[i].get('key', ''))
+            buff_key_btn = ctk.CTkButton(
+                buff_slot_frame, width=72, height=28, text=KEY_BUTTON_DEFAULT_LABEL,
+                command=lambda idx=i: self.register_buff_key(idx),
+                font=ctk.CTkFont(size=10),
+            )
+            buff_key_btn.grid(row=0, column=3, padx=(5, 8), pady=6, sticky="e")
+            self.buffs_key_vars[i].trace_add(
+                'write',
+                lambda *_a, idx=i, btn=buff_key_btn: btn.configure(
+                    text=key_button_label(self.buffs_key_vars[idx].get()),
+                ),
+            )
+            if config.buffs_config[i].get('key'):
+                buff_key_btn.configure(text=key_button_label(config.buffs_config[i]['key']))
             
             # Initialize buff state
             self.buffs_state.append({
@@ -2107,16 +2233,15 @@ class BotGUI:
         
         if config.connected_window:
             self.connect_button.configure(text="Connected", state="disabled")
-            self.calibrate_button.configure(state="normal")
-            # Don't enable toggle button here - it will be enabled when calibrated
             self.update_toggle_bot_button_state()
             self.connection_label.configure(text=f"Window: {selected_window_title}")
             self.status_label.configure(text="Status: Connected")
             print(f"Successfully connected to: {selected_window_title}")
+            if hasattr(self, 'refresh_region_pick_labels'):
+                self.refresh_region_pick_labels()
             self.update_mob_filter_ui_state()
         else:
             self.connect_button.configure(text="Connect")
-            self.calibrate_button.configure(state="disabled")
             self.toggle_bot_button.configure(state="disabled")
             self.connection_label.configure(text="Window: Connection Failed")
             self.status_label.configure(text="Status: Connection Failed")
@@ -2135,12 +2260,16 @@ class BotGUI:
         def calibration_thread():
             try:
                 hwnd = config.connected_window.handle
+                window_utils.focus_game_window(hwnd)
                 
                 # Create calibrator instance
                 calibrator = calibration.Calibrator()
                 
                 # Perform calibration
                 success = calibrator.calibrate(hwnd)
+                preview_path = calibrator.last_capture_path
+                capture_note = calibrator.last_capture_stats or {}
+                capture_method = calibrator.last_capture_method or '?'
                 
                 if success:
                     # Update config with calibrated positions
@@ -2209,6 +2338,9 @@ class BotGUI:
                             else:
                                 messagebox.showinfo("Calibration Success", 
                                     "Calibration completed successfully!")
+                            self._show_calibration_capture_preview(
+                                preview_path, capture_method, capture_note, success=True,
+                            )
                         except Exception as e:
                             print(f"[Calibration] Error updating GUI: {e}")
                             self.calibrate_button.configure(state="normal", text="Calibrate")
@@ -2217,13 +2349,25 @@ class BotGUI:
                 else:
                     def show_error():
                         self.calibrate_button.configure(state="normal", text="Calibrate")
-                        messagebox.showerror("Calibration Failed", 
+                        mean = capture_note.get('mean', 0)
+                        black_hint = (
+                            "\n\nCapture looks black/empty — try windowed mode, "
+                            "keep the game visible on screen, and avoid minimizing."
+                            if mean < 6 else ""
+                        )
+                        messagebox.showerror(
+                            "Calibration Failed",
                             "Failed to detect HP/MP bars.\n\n"
                             "Please ensure:\n"
-                            "1. The game window is visible\n"
-                            "2. HP/MP bars are visible on screen\n"
-                            "3. No other red/blue UI elements are blocking the bars\n"
-                            "4. Make sure HP/MP bars are full")
+                            "1. The game window is visible (not minimized)\n"
+                            "2. Player HP/MP bars are on screen\n"
+                            "3. A mob is targeted (enemy name bar visible)\n"
+                            "4. Check the capture preview that opens next"
+                            f"{black_hint}",
+                        )
+                        self._show_calibration_capture_preview(
+                            preview_path, capture_method, capture_note, success=False,
+                        )
                     
                     self.root.after(0, show_error)
                     
@@ -2390,9 +2534,14 @@ class BotGUI:
     
     def start_bot(self):
         if not config.bot_running:
-            # Check if window is connected
             if not config.connected_window:
                 print("Please connect to a window first")
+                return
+            if not config.bot_regions_ready():
+                messagebox.showwarning(
+                    "Regions Required",
+                    "Pick HP and MP bar regions on the Regions tab before starting.",
+                )
                 return
             
             # Reset all bot state for clean start
@@ -2917,12 +3066,9 @@ class BotGUI:
             key_label.grid(row=0, column=3, padx=5, pady=5)
             
             def update_key_button_text(var=key_var, btn=None):
-                if var.get():
-                    btn.configure(text=var.get().upper())
-                else:
-                    btn.configure(text="Set Key")
+                btn.configure(text=key_button_label(var.get()))
             
-            key_button = ctk.CTkButton(row_frame, width=60, height=28,
+            key_button = ctk.CTkButton(row_frame, width=72, height=28,
                                       command=lambda: self.register_key_in_dialog(key_var, dialog),
                                       font=ctk.CTkFont(size=10), corner_radius=4)
             key_button.grid(row=0, column=4, padx=5, pady=5)
@@ -3131,6 +3277,36 @@ class BotGUI:
         self.mp_key_var.set('')
         config.mp_key = '9'  # Reset to default
         print("MP key cleared, reset to default: 9")
+
+    def register_repair_key(self):
+        def set_value(value: str):
+            self.repair_key_var.set(value)
+            config.repair_key = value.lower()
+        open_keybind_dialog(self.root, title="Repair key", prompt="Press repair hotkey...", on_value=set_value)
+
+    def register_assist_key(self):
+        def set_value(value: str):
+            self.assist_key_var.set(value)
+            config.assist_key = value.lower()
+        open_keybind_dialog(self.root, title="Assist key", prompt="Press assist hotkey...", on_value=set_value)
+
+    def register_skill_sequence_key(self, idx):
+        def set_value(value: str):
+            self.skill_sequence_key_vars[idx].set(value)
+            config.skill_sequence_config[idx]['key'] = value.lower()
+        open_keybind_dialog(
+            self.root, title=f"Skill {idx + 1} key",
+            prompt="Press skill hotkey...", on_value=set_value,
+        )
+
+    def register_buff_key(self, idx):
+        def set_value(value: str):
+            self.buffs_key_vars[idx].set(value)
+            config.buffs_config[idx]['key'] = value.lower()
+        open_keybind_dialog(
+            self.root, title=f"Buff {idx + 1} key",
+            prompt="Press buff hotkey...", on_value=set_value,
+        )
 
     def _update_auto_repair_count_display(self):
         if not hasattr(self, 'auto_repair_count_label'):
@@ -4433,6 +4609,51 @@ class BotGUI:
             # Make sure main window is shown
             self.root.deiconify()
     
+    def _show_calibration_capture_preview(self, image_path, method, stats, success=True):
+        """Show what Calibrate actually captured (saved to debug/calibrate_original.png)."""
+        import os
+        import tkinter as tk
+        if not image_path or not os.path.isfile(image_path):
+            return
+        try:
+            pil = Image.open(image_path)
+        except Exception as exc:
+            print(f'[Calibration] Could not open capture preview: {exc}')
+            return
+
+        top = tk.Toplevel(self.root)
+        top.title('Calibration capture preview')
+        top.transient(self.root)
+        top.grab_set()
+
+        mean = stats.get('mean', 0) if stats else 0
+        std = stats.get('std', 0) if stats else 0
+        w = stats.get('width', pil.width)
+        h = stats.get('height', pil.height)
+        status = 'OK' if success else 'FAILED'
+        if mean < 6:
+            status = 'BLACK / EMPTY CAPTURE'
+        caption = (
+            f"{status} — {w}×{h}px via {method} "
+            f"(brightness mean={mean:.1f}, std={std:.1f})\n"
+            f"{image_path}"
+        )
+
+        max_w = 960
+        scale = min(1.0, max_w / max(1, pil.width))
+        if scale < 1.0:
+            pil = pil.resize(
+                (max(1, int(pil.width * scale)), max(1, int(pil.height * scale))),
+                Image.Resampling.LANCZOS,
+            )
+
+        photo = ImageTk.PhotoImage(pil)
+        label = tk.Label(top, image=photo)
+        label.image = photo
+        label.pack(padx=8, pady=(8, 4))
+        tk.Label(top, text=caption, justify='left', wraplength=max_w).pack(padx=8, pady=(0, 8))
+        tk.Button(top, text='Close', command=top.destroy).pack(pady=(0, 8))
+
     def update_calibration_button_texts(self):
         """Update calibration button texts to show if areas are already set"""
 
@@ -4449,11 +4670,8 @@ class BotGUI:
         self.update_toggle_bot_button_state()
     
     def update_toggle_bot_button_state(self):
-        """Update the Start/Stop button state based on calibration and connection"""
-        # Button should be enabled only if:
-        # 1. Window is connected
-        # 2. Calibration has been completed (calibrator exists)
-        is_calibrated = config.calibrator is not None and config.calibrator.mp_position is not None
+        """Update the Start/Stop button state based on regions and connection."""
+        is_ready = config.bot_regions_ready()
 
         def cfg_min(btn, **kwargs):
             if not btn:
@@ -4465,7 +4683,7 @@ class BotGUI:
 
         minib = getattr(self, "minimized_toggle_bot_button", None)
         
-        if config.connected_window and is_calibrated and not config.bot_running:
+        if config.connected_window and is_ready and not config.bot_running:
             self.toggle_bot_button.configure(
                 state="normal", text="Start", fg_color="green", hover_color="darkgreen", command=self.toggle_bot
             )
@@ -4482,26 +4700,22 @@ class BotGUI:
         self.update_mob_filter_ui_state()
     
     def _mob_filter_ready(self):
-        """Mob filter controls require connect + calibration with enemy name area."""
+        """Mob filter controls require connect + enemy name region."""
         return (
             config.connected_window is not None
-            and config.calibrator is not None
-            and config.calibrator.mp_position is not None
             and mob_filter.scan_area_available()
         )
 
     def _mob_scan_status_text(self):
         if not config.connected_window:
             return 'Scan area: connect to game first'
-        if not config.calibrator or config.calibrator.mp_position is None:
-            return 'Scan area: calibrate to auto-detect enemy name'
         if not mob_filter.scan_area_available():
-            return 'Scan area: enemy name area not found — recalibrate'
+            return 'Scan area: pick Enemy Name on Regions tab'
         area = mob_filter.get_scan_area()
-        return f"Scan area: auto ({area['width']}×{area['height']})"
+        return f"Scan area: ({area['x']},{area['y']}) {area['width']}×{area['height']}"
 
     def update_mob_filter_ui_state(self):
-        """Enable mob filter controls only after successful calibration."""
+        """Enable mob filter controls when connected and enemy name region is set."""
         if not hasattr(self, 'mob_checkbox'):
             return
         ready = self._mob_filter_ready() and not config.assist_only_enabled
@@ -4513,6 +4727,8 @@ class BotGUI:
             self.mob_learn_btn.configure(state=state)
             self.mob_remove_btn.configure(state=state)
             self.mob_test_btn.configure(state=state)
+            if hasattr(self, 'mob_compare_btn'):
+                self.mob_compare_btn.configure(state=state)
             # Keep list readable even before connect/calibrate (disabled listboxes hide inserts).
             self.mob_listbox.configure(state='normal')
         except (tk.TclError, AttributeError):
@@ -4532,12 +4748,15 @@ class BotGUI:
             config.target_name_area['y'] = y
             config.target_name_area['width'] = int(self.mob_width_var.get())
             config.target_name_area['height'] = int(self.mob_height_var.get())
+            import region_helpers
+            region_helpers.sync_mob_scan_from_enemy_name()
+            mob_filter.invalidate_cache()
             
             print(f"Updated mob coordinates: {config.target_name_area}")
         except (ValueError, AttributeError) as e:
             print(f"Invalid coordinates - please enter numbers only: {e}")
     
-    def _refresh_mob_list(self, select_index=None):
+    def _refresh_mob_list(self, select_index=None, update_preview=True):
         if not hasattr(self, 'mob_listbox'):
             return
         lb = self.mob_listbox
@@ -4556,7 +4775,8 @@ class BotGUI:
             lb.selection_clear(0, tk.END)
             lb.selection_set(idx)
             lb.activate(idx)
-            self._update_mob_preview()
+            if update_preview:
+                self._update_mob_preview()
         finally:
             if prev_state == 'disabled':
                 lb.configure(state='disabled')
@@ -4564,11 +4784,11 @@ class BotGUI:
     def _bgr_to_preview_photo(self, bgr):
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         pil = Image.fromarray(rgb)
-        pil.thumbnail((320, 52), Image.Resampling.LANCZOS)
-        if pil.height < 36:
-            scale = 36 / pil.height
+        pil.thumbnail((360, 80), Image.Resampling.LANCZOS)
+        if pil.height < 40:
+            scale = 40 / max(pil.height, 1)
             pil = pil.resize(
-                (max(1, int(pil.width * scale)), 36),
+                (max(1, int(pil.width * scale)), 40),
                 Image.Resampling.NEAREST,
             )
         return ImageTk.PhotoImage(pil)
@@ -4580,13 +4800,7 @@ class BotGUI:
 
     def _mob_hp_profile_caption(self, entry):
         if entry.get('hp_max_file') or mob_template_store.load_hp_max_sig(entry) is not None:
-            return " — max HP signature saved"
-        max_hp = int(entry.get('max_hp') or 0)
-        digits = int(entry.get('hp_digit_count') or 0)
-        if max_hp > 0:
-            return f" — max HP ~{max_hp:,}"
-        if digits > 0:
-            return f" — {digits}-digit max HP"
+            return " — max HP signature saved (elite skip)"
         return ""
 
     def _show_mob_preview_bgr(self, bgr, caption=None):
@@ -4595,30 +4809,39 @@ class BotGUI:
         if caption:
             self.mob_preview_caption.configure(text=caption)
 
+    def _mob_preview_caption(self, entry, w, h):
+        note = "captured region"
+        if entry.get('normalized') and getattr(config, 'mob_normalize_match', True):
+            note = "captured region (name corners used for matching)"
+        return (
+            f"{entry.get('name', '?')} — {w}×{h} px — {note}"
+            f"{self._mob_hp_profile_caption(entry)}"
+        )
+
     def _update_mob_preview(self):
         sel = self.mob_listbox.curselection()
         if not sel or sel[0] >= len(config.mob_templates):
             self._clear_mob_preview()
             return
         entry = config.mob_templates[sel[0]]
-        bgr = mob_template_store.load_template_bgr(entry)
-        if bgr is None:
+        if not mob_template_store.template_file_exists(entry):
             self._clear_mob_preview()
             self.mob_preview_caption.configure(
                 text=f"{entry.get('name', '?')} — image missing, use Learn again",
             )
             return
-        h, w = bgr.shape[:2]
-        self._show_mob_preview_bgr(
-            bgr,
-            f"{entry.get('name', '?')} — {w}×{h} px{self._mob_hp_profile_caption(entry)}",
-        )
+        preview = mob_filter.preview_bgr_for_entry(entry)
+        if preview is None:
+            self._clear_mob_preview()
+            return
+        h, w = preview.shape[:2]
+        self._show_mob_preview_bgr(preview, self._mob_preview_caption(entry, w, h))
 
     def _learn_mob_template(self):
         if not self._mob_filter_ready():
             messagebox.showwarning(
                 'Learn',
-                'Connect and calibrate first. The enemy name scan area is set automatically during calibration.',
+                'Connect to the game and pick Enemy Name on the Regions tab first.',
             )
             return
         print('Switch to game, target mob — capturing in 2s…')
@@ -4637,19 +4860,29 @@ class BotGUI:
         if bgr is None or bgr.size == 0:
             print('Learn failed — could not capture scan region')
             return
-        h, w = bgr.shape[:2]
+        save_img = mob_filter.prepare_template_for_storage(bgr)
+        if save_img is None:
+            print('Learn failed — could not prepare template image')
+            return
+        h, w = save_img.shape[:2]
         hp_profile = mob_filter.build_hp_profile(hwnd)
-        entry = mob_template_store.add_template(bgr, hp_profile=hp_profile)
+        entry = mob_template_store.add_template(
+            save_img,
+            hp_profile=hp_profile,
+            normalized=getattr(config, 'mob_normalize_match', True),
+        )
         if entry is None:
             messagebox.showerror('Learn', 'Could not save template image to disk.')
             return
         mob_filter.invalidate_cache()
         new_idx = len(config.mob_templates) - 1
-        self._refresh_mob_list(select_index=new_idx)
-        caption = f"Captured {entry['name']} — {w}×{h} px{self._mob_hp_profile_caption(entry)}"
+        self._refresh_mob_list(select_index=new_idx, update_preview=False)
+        caption = self._mob_preview_caption(entry, w, h)
         if not hp_profile:
             caption += " — no HP numbers detected"
-        self._show_mob_preview_bgr(bgr, caption)
+        preview = mob_filter.preview_bgr_for_entry(entry)
+        if preview is not None:
+            self._show_mob_preview_bgr(preview, caption)
         hp_note = self._mob_hp_profile_caption(entry).strip(' —') or "no HP profile"
         print(f"Learned {entry['name']} ({w}×{h}), {hp_note}")
         self._autosave_settings_silent()
@@ -4673,7 +4906,7 @@ class BotGUI:
         if not self._mob_filter_ready():
             messagebox.showwarning(
                 'Test match',
-                'Connect and calibrate first. The enemy name scan area is set automatically during calibration.',
+                'Connect to the game and pick Enemy Name on the Regions tab first.',
             )
             return
         if not config.mob_templates:
@@ -4697,7 +4930,11 @@ class BotGUI:
             return
         match = result.get('match')
         if match:
-            msg = f"Match: {match['name']} ({match['confidence']:.0%})"
+            msg = (
+                f"Match: {match['name']} ({match['confidence']:.0%})\n\n"
+                "Visual match on name/level bar (forgiving of small pixel shifts). "
+                "Not letter case — uses shape, not OCR."
+            )
             print(f"TEST: {msg}")
             messagebox.showinfo('Test match', msg)
             if hasattr(self, 'current_mob_label'):
@@ -4728,6 +4965,102 @@ class BotGUI:
             messagebox.showwarning('Test match', msg)
             if hasattr(self, 'current_mob_label'):
                 self.current_mob_label.configure(text="No match", text_color="orange")
+
+    def _compare_selected_mob_template_live(self):
+        if not self._mob_filter_ready():
+            messagebox.showwarning(
+                'Compare',
+                'Connect to the game and pick Enemy Name on the Regions tab first.',
+            )
+            return
+        if not config.mob_templates:
+            messagebox.showwarning('Compare', 'Learn at least one mob template first.')
+            return
+        sel = self.mob_listbox.curselection()
+        if not sel or sel[0] >= len(config.mob_templates):
+            messagebox.showinfo('Compare', 'Select a template from the list first.')
+            return
+
+        hwnd = window_utils.resolve_hwnd()
+        if not hwnd:
+            messagebox.showerror('Compare', 'Could not get game window handle.')
+            return
+        window_utils.focus_game_window(hwnd)
+        time.sleep(0.15)
+
+        entry = config.mob_templates[sel[0]]
+        result = mob_filter.compare_live_to_entry(hwnd, entry)
+        if result.get('error'):
+            messagebox.showerror('Compare', result['error'])
+            return
+
+        def to_bgr(img):
+            if img is None:
+                return None
+            if img.ndim == 2:
+                return cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+            return img
+
+        scan_bgr = to_bgr(result.get('scan_bgr'))
+        tmpl_bgr = to_bgr(result.get('template_bgr'))
+        scan_norm = to_bgr(result.get('scan_norm'))
+        tmpl_norm = to_bgr(result.get('template_norm'))
+
+        win = tk.Toplevel(self.root)
+        win.title('Mob Filter Compare')
+        win.configure(bg='#242424')
+        win.resizable(False, False)
+        win.transient(self.root)
+
+        header = ctk.CTkFrame(win, fg_color=('gray18', 'gray14'))
+        header.pack(fill='x', padx=12, pady=(12, 8))
+        score = float(result.get('score', 0.0))
+        agree = float(result.get('column_agreement', 0.0))
+        thresh = float(result.get('threshold', config.mob_match_threshold))
+        name = entry.get('name', entry.get('id', '?'))
+        ctk.CTkLabel(
+            header,
+            text=f'{name} — score {score:.0%} (need {thresh:.0%}) · column agreement {agree:.0%}',
+            font=ctk.CTkFont(size=12, weight='bold'),
+            anchor='w',
+        ).pack(anchor='w', padx=10, pady=(8, 2))
+        ctk.CTkLabel(
+            header,
+            text='Top row: raw capture (live vs template). Bottom row: normalized match mask (what matcher uses).',
+            font=ctk.CTkFont(size=10),
+            text_color=('gray55', 'gray65'),
+            anchor='w',
+        ).pack(anchor='w', padx=10, pady=(0, 8))
+
+        body = ctk.CTkFrame(win, fg_color='transparent')
+        body.pack(padx=12, pady=(0, 12))
+
+        grid = ctk.CTkFrame(body, fg_color=('gray92', 'gray20'), corner_radius=8)
+        grid.pack()
+
+        # Prevent PhotoImage GC.
+        win._mob_compare_photos = []
+
+        def add_cell(r, c, title, bgr):
+            cell = ctk.CTkFrame(grid, fg_color='transparent')
+            cell.grid(row=r, column=c, padx=10, pady=10)
+            ctk.CTkLabel(
+                cell, text=title, font=ctk.CTkFont(size=10, weight='bold'),
+                text_color=('gray30', 'gray70'),
+            ).pack(anchor='w', pady=(0, 4))
+            img = self._bgr_to_preview_photo(bgr) if bgr is not None else None
+            lbl = tk.Label(cell, bg='#242424', bd=0, highlightthickness=0)
+            lbl.pack()
+            if img is not None:
+                lbl.configure(image=img)
+                win._mob_compare_photos.append(img)
+            else:
+                lbl.configure(text='(missing)', fg='white', bg='#242424')
+
+        add_cell(0, 0, 'Live scan (raw)', scan_bgr)
+        add_cell(0, 1, 'Template (raw)', tmpl_bgr)
+        add_cell(1, 0, 'Live scan (normalized)', scan_norm)
+        add_cell(1, 1, 'Template (normalized)', tmpl_norm)
 
     def test_mob_detection(self):
         """Test mob filter match (alias for status bar testing)."""

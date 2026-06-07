@@ -3,13 +3,16 @@ import cv2
 import numpy as np
 import config
 import frame_cache
+import ui_bar_detection
 
-# Must match auto_attack.py enemy target strip geometry.
-SEARCH_AREA_OFFSET_Y = 19
+# Enemy target UI geometry (name row + HP bar below player MP).
+SEARCH_AREA_OFFSET_Y = 19  # fallback only when strip cannot be detected
 SEARCH_AREA_WIDTH = 210
 SEARCH_AREA_HEIGHT = 35
 SEARCH_AREA_OFFSET_X = -1
 NAME_AREA_HEIGHT = 18
+PLAYER_MP_BAR_HEIGHT = 15
+ENEMY_STRIP_SCAN_BELOW_MP = 56
 
 HP_SIG_HEIGHT = 14
 HP_SIG_MATCH_THRESHOLD = 0.82
@@ -22,8 +25,129 @@ def _search_origin(mp_x, mp_y):
     )
 
 
+def locate_enemy_target_strip(screen_bgr, mp_x, mp_y, mp_bar_h=None):
+    """
+    Detect the enemy target strip (name row + red HP bar) below the player's MP bar.
+
+    New UI stacks player (name+HP+MP) above enemy (name+HP). A fixed pixel offset from MP
+    drifts when bar heights change — scan for the next wide red HP bar instead.
+    """
+    if screen_bgr is None or screen_bgr.size == 0:
+        return None
+    if mp_bar_h is None:
+        mp_bar_h = PLAYER_MP_BAR_HEIGHT
+
+    screen_h, screen_w = screen_bgr.shape[:2]
+    scan_y1 = max(0, int(mp_y + mp_bar_h))
+    scan_y2 = min(screen_h, scan_y1 + ENEMY_STRIP_SCAN_BELOW_MP)
+    if scan_y2 <= scan_y1 + NAME_AREA_HEIGHT:
+        return None
+
+    strip_x = max(0, int(mp_x + SEARCH_AREA_OFFSET_X))
+    strip_w = min(SEARCH_AREA_WIDTH, screen_w - strip_x)
+    if strip_w <= 0:
+        return None
+
+    band = screen_bgr[scan_y1:scan_y2, strip_x:strip_x + strip_w]
+    if band.size == 0:
+        return None
+
+    red_bands, _ = ui_bar_detection.find_bar_bands(ui_bar_detection.build_red_mask(band))
+    for bx, by, bw, bh in red_bands:
+        hp_y = scan_y1 + by
+        name_y = max(0, hp_y - NAME_AREA_HEIGHT)
+        return {
+            'name_area': (
+                strip_x + strip_w // 2,
+                name_y + NAME_AREA_HEIGHT // 2,
+                strip_w,
+                NAME_AREA_HEIGHT,
+            ),
+            'hp_area': (strip_x + bx + bw // 2, hp_y + bh // 2, bw, bh),
+            'search_origin': (strip_x, name_y),
+        }
+
+    name_y = max(0, int(mp_y + mp_bar_h + 5))
+    return {
+        'name_area': (
+            strip_x + strip_w // 2,
+            name_y + NAME_AREA_HEIGHT // 2,
+            strip_w,
+            NAME_AREA_HEIGHT,
+        ),
+        'hp_area': None,
+        'search_origin': (strip_x, name_y),
+    }
+
+
+def get_enemy_name_bar_rect(calibrator=None):
+    """Screen rect (x, y, width, height) for the enemy name/level row."""
+    # If the caller passed a calibrator explicitly and it has an enemy name area,
+    # prefer it over any global/manual picks. This keeps calibration + tests stable
+    # even if other parts of the app previously configured manual regions.
+    if calibrator is not None:
+        enemy_name = getattr(calibrator, 'enemy_name_area', None)
+        if enemy_name:
+            cx, cy, w, _h = enemy_name
+            w = int(w)
+            return (
+                int(cx - w // 2),
+                int(cy - NAME_AREA_HEIGHT // 2),
+                w,
+                NAME_AREA_HEIGHT,
+            )
+
+    if config.bar_area_configured(config.target_name_area):
+        a = config.target_name_area
+        h = min(int(a.get('height') or NAME_AREA_HEIGHT), NAME_AREA_HEIGHT)
+        return (int(a['x']), int(a['y']), int(a['width']), h)
+    if config.bar_area_configured(config.mob_scan_area):
+        a = config.mob_scan_area
+        h = min(int(a.get('height') or NAME_AREA_HEIGHT), NAME_AREA_HEIGHT)
+        return (int(a['x']), int(a['y']), int(a['width']), h)
+
+    calibrator = calibrator or config.calibrator
+    enemy_name = getattr(calibrator, 'enemy_name_area', None) if calibrator else None
+    if enemy_name:
+        cx, cy, w, _h = enemy_name
+        w = int(w)
+        return (
+            int(cx - w // 2),
+            int(cy - NAME_AREA_HEIGHT // 2),
+            w,
+            NAME_AREA_HEIGHT,
+        )
+    if calibrator and calibrator.mp_position is not None:
+        mp_x, mp_y = calibrator.mp_position
+        sx, sy = _search_origin(mp_x, mp_y)
+        return (sx, sy, SEARCH_AREA_WIDTH, NAME_AREA_HEIGHT)
+    return None
+
+
+def get_enemy_target_strip_rect(calibrator=None):
+    """Screen rect (x, y, width, height) for name row + HP bar."""
+    if config.bar_area_configured(config.target_hp_bar_area):
+        a = config.target_hp_bar_area
+        return (int(a['x']), int(a['y']), int(a['width']), int(a['height']))
+    name = get_enemy_name_bar_rect(calibrator)
+    if name is None:
+        return None
+    x, y, w, _h = name
+    return (x, y, w, SEARCH_AREA_HEIGHT)
+
+
 def capture_enemy_hp_text_area(hwnd, screen=None):
     """Capture the HP bar strip below the enemy name (where HP numbers appear)."""
+    if config.bar_area_configured(config.target_hp_bar_area):
+        import window_utils
+        a = config.target_hp_bar_area
+        strip = window_utils.capture_window_region_bgr(
+            hwnd, a['x'], a['y'], a['width'], a['height'],
+        )
+        if strip is None or strip.size == 0:
+            return None
+        return _focus_red_bar(strip)
+
     if not config.calibrator or config.calibrator.mp_position is None:
         return None
     if screen is None:
@@ -31,11 +155,14 @@ def capture_enemy_hp_text_area(hwnd, screen=None):
     if screen is None:
         return None
 
-    mp_x, mp_y = config.calibrator.mp_position
-    search_x, search_y = _search_origin(mp_x, mp_y)
+    cal = config.calibrator
+    name_rect = get_enemy_name_bar_rect(cal)
+    if name_rect is None:
+        return None
+    search_x, search_y, search_w, _ = name_rect
     y1 = search_y + NAME_AREA_HEIGHT
     y2 = search_y + SEARCH_AREA_HEIGHT
-    x2 = search_x + SEARCH_AREA_WIDTH
+    x2 = search_x + search_w
     strip = frame_cache.crop_rect(
         screen, search_x, y1, x2, y2, frame_cache.get_origin(),
     )
@@ -48,11 +175,7 @@ def _focus_red_bar(strip_bgr):
     """Crop to the red HP bar rows when the capture includes extra padding."""
     if strip_bgr is None or strip_bgr.size == 0:
         return strip_bgr
-    hsv = cv2.cvtColor(strip_bgr, cv2.COLOR_BGR2HSV)
-    red = cv2.bitwise_or(
-        cv2.inRange(hsv, np.array([0, 100, 100]), np.array([10, 255, 255])),
-        cv2.inRange(hsv, np.array([160, 100, 100]), np.array([180, 255, 255])),
-    )
+    red = ui_bar_detection.build_red_mask(strip_bgr)
     row_sum = np.sum(red > 0, axis=1)
     min_cols = max(4, strip_bgr.shape[1] // 5)
     rows = np.where(row_sum >= min_cols)[0]

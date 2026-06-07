@@ -7,7 +7,6 @@ import time
 
 import config
 import debug_io
-import skill_bar_actions
 import window_utils
 
 try:
@@ -23,11 +22,15 @@ CALIBRATION_WARN_INTERVAL = 30.0
 DETECTION_LOG_INTERVAL = 2.0
 COOLDOWN_LOG_INTERVAL = 5.0
 
-# Light-green in-game warning text (HSV) — excludes magenta combat log (H ~150)
-WARNING_GREEN_LOWER = np.array([48, 70, 95]) if CV2_AVAILABLE else None
-WARNING_GREEN_UPPER = np.array([70, 140, 255]) if CV2_AVAILABLE else None
+# Light-green "is about to break" text only (HSV) — excludes magenta combat log (H ~150)
+WARNING_GREEN_LOWER = np.array([52, 88, 90]) if CV2_AVAILABLE else None
+WARNING_GREEN_UPPER = np.array([60, 118, 220]) if CV2_AVAILABLE else None
 MIN_GREEN_PIXEL_RATIO = 0.003
-MIN_WARNING_LINE_WIDTH = 70
+# Phrase is one long line (~130–150px); shorter green chat lines are ignored.
+MIN_WARNING_LINE_WIDTH = 115
+MIN_WARNING_ROW_PIXELS = 20
+MIN_WARNING_ROW_DENSITY = 0.18
+MIN_QUALIFYING_ROWS = 2
 
 
 class BreakWarningTracker:
@@ -50,16 +53,19 @@ class BreakWarningTracker:
 
 
 class RepairExecutor:
-    """Clicks the repair skill icon in the skill bar when a warning threshold is reached."""
+    """Press the configured repair hotkey when a warning threshold is reached."""
 
     @staticmethod
     def execute_repair(current_time, hwnd):
-        print("[Auto Repair] REPAIR TRIGGERED - clicking repair skill in skill bar")
-        if skill_bar_actions.click_skill_icon(hwnd, 'hammer'):
-            config.last_repair_time = current_time
-            return True
-        print("[Auto Repair] Could not find hammer icon in skill bar")
-        return False
+        key = (config.repair_key or '').strip()
+        if not key:
+            print("[Auto Repair] REPAIR TRIGGERED but no repair_key configured")
+            return False
+        print(f"[Auto Repair] REPAIR TRIGGERED - pressing key {key!r}")
+        import input_handler
+        input_handler.send_input(key)
+        config.last_repair_time = current_time
+        return True
 
     @staticmethod
     def is_on_cooldown(current_time):
@@ -111,16 +117,30 @@ def build_warning_green_mask(bgr_image):
     return cv2.inRange(hsv, WARNING_GREEN_LOWER, WARNING_GREEN_UPPER)
 
 
-def _max_green_run_in_row(mask_row):
+def _row_break_warning_stats(mask_row):
+    """Return (span_width, pixel_count) for green pixels in one row."""
     xs = np.where(mask_row > 0)[0]
     if xs.size == 0:
-        return 0
-    return int(xs[-1] - xs[0] + 1)
+        return 0, 0
+    return int(xs[-1] - xs[0] + 1), int(xs.size)
+
+
+def _row_qualifies_break_warning(mask_row):
+    """
+    One dense light-green line like "[Item] is about to break".
+    Rejects sparse scatter (wide span, few pixels) and short green lines.
+    """
+    span, pixels = _row_break_warning_stats(mask_row)
+    if span < MIN_WARNING_LINE_WIDTH or pixels < MIN_WARNING_ROW_PIXELS:
+        return False
+    if pixels / span < MIN_WARNING_ROW_DENSITY:
+        return False
+    return True
 
 
 def analyze_break_warning(bgr_image):
     """
-    Detect light-green warning line(s) in a captured system-message region.
+    Detect the light-green "is about to break" system message line(s).
     Returns (detected: bool, info: dict).
     """
     if not CV2_AVAILABLE or bgr_image is None or bgr_image.size == 0:
@@ -137,12 +157,12 @@ def analyze_break_warning(bgr_image):
     best_line_width = 0
     qualifying_rows = 0
     for y in range(mask.shape[0]):
-        run = _max_green_run_in_row(mask[y])
-        best_line_width = max(best_line_width, run)
-        if run >= MIN_WARNING_LINE_WIDTH:
+        span, pixels = _row_break_warning_stats(mask[y])
+        best_line_width = max(best_line_width, span)
+        if _row_qualifies_break_warning(mask[y]):
             qualifying_rows += 1
 
-    detected = qualifying_rows >= 1
+    detected = qualifying_rows >= MIN_QUALIFYING_ROWS
     return detected, {
         'green_ratio': ratio,
         'best_line_width': best_line_width,
@@ -165,11 +185,7 @@ class WarningTextDetector:
         height = config.system_message_area['height']
         if width <= 0 or height <= 0:
             return None
-        half_width = width // 2
-        half_height = height // 2
-        left = x - half_width
-        top = y - half_height
-        return left, top, width, height
+        return x, y, width, height
 
     def capture_warning_region(self, hwnd):
         bounds = self._region_bounds()
@@ -306,7 +322,7 @@ def check_auto_repair():
 
     if _repair_state_manager.should_log_detection(current_time):
         print(
-            f"[Auto Repair] Break warning detected "
+            f"[Auto Repair] \"About to break\" warning appeared "
             f"(count: {detection_count}/{config.BREAK_WARNING_TRIGGER_COUNT})"
         )
 
