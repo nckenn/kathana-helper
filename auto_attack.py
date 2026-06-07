@@ -915,7 +915,17 @@ def check_auto_attack():
 
         if cv_mob_filter and not config.is_looting:
             if has_red_bar:
-                mob_filter.refresh_scan(hwnd)
+                mob_interval = config.get_mob_scan_interval()
+                should_scan = (
+                    config.enemy_target_time == 0
+                    or (current_time - config.last_mob_scan_time) >= mob_interval
+                )
+                if should_scan:
+                    config.last_mob_scan_time = current_time
+                    if config.enemy_target_time > 0:
+                        mob_filter.refresh_scan_combat(hwnd)
+                    else:
+                        mob_filter.refresh_scan(hwnd)
             else:
                 mob_filter.clear_match()
 

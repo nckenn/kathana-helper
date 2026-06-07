@@ -5,6 +5,9 @@ Contains all global variables, constants, and default settings
 import os
 import sys
 
+APP_VERSION = "3.1.0"
+APP_TITLE = f"Kathana Helper v{APP_VERSION}"
+
 
 def app_dir():
     """Directory for settings and mob templates (next to exe when frozen)."""
@@ -137,6 +140,14 @@ mob_elite_skip_enabled = True
 mob_elite_sig_threshold = 0.82     # max-HP digit signature match (lower = elite)
 # Pixel shift tolerance when comparing templates (UI sub-pixel drift / window move)
 mob_match_shift_px = 3
+mob_combat_shift_px = 1
+mob_match_miss_streak = 0
+mob_combat_miss_required = 2
+mob_combat_match_grace_seconds = 0.3
+mob_verify_attempts = 3
+mob_verify_required = 2
+mob_verify_delay_s = 0.06
+last_mob_scan_time = 0
 MOB_TEMPLATES_DIR = os.path.join(app_dir(), 'mob_templates')
 target_name_area = {'x': 381, 'y': 161, 'width': 0, 'height': 0}
 target_hp_bar_area = {'x': 381, 'y': 183, 'width': 0, 'height': 0}
@@ -181,6 +192,8 @@ HP_MP_LOG_INTERVAL = 5.0
 # HP/MP capture throttling
 last_hp_capture_time = 0
 last_mp_capture_time = 0
+last_successful_hp_capture_time = 0
+last_successful_mp_capture_time = 0
 last_enemy_hp_capture_time = 0
 last_auto_target_time = 0
 enemy_target_time = 0
@@ -336,6 +349,19 @@ def get_gui_updates_interval_ms():
 def get_auto_repair_check_interval():
     """Poll warning region every 300ms; slightly relaxed in Low CPU mode."""
     return 0.45 if low_cpu_mode else REPAIR_WARNING_CHECK_INTERVAL
+
+
+def get_mob_scan_interval():
+    """Mob name-bar matching during combat (slower than enemy HP ticks)."""
+    if is_idle():
+        return 0.80
+    return 0.65 if low_cpu_mode else 0.50
+
+
+# Template matching thresholds (buffs, skills, skill bar icons)
+buff_match_threshold = 0.7
+skill_match_threshold = 0.7
+template_match_margin = 0.05
 
 
 def safe_update_gui(update_func):

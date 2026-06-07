@@ -1,5 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
+import sys
+
+# SPECPATH is the folder containing this .spec file (project root).
+sys.path.insert(0, os.path.abspath(SPECPATH))
+from config import APP_VERSION
+
 block_cipher = None
 
 hiddenimports = [
@@ -48,8 +55,9 @@ hiddenimports = [
     "hp_number_reader",
     "region_helpers",
     "bar_reader",
+    "match_utils",
     "ui_bar_detection",
-    "ui.regions_panel",
+    "ui.region_editor",
     "ui.keybind_dialogs",
     "ui.settings_overlays",
     "ui.window_helpers",
@@ -81,6 +89,7 @@ datas = [
     ("region_picker.py", "."),
     ("region_helpers.py", "."),
     ("bar_reader.py", "."),
+    ("match_utils.py", "."),
     ("ui_bar_detection.py", "."),
     ("buffs_manager.py", "."),
     ("skill_sequence_manager.py", "."),
@@ -125,7 +134,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name="Kathana Helper v3.0.0",
+    name=f"Kathana Helper v{APP_VERSION}",
     debug=False,
     strip=False,
     upx=True,

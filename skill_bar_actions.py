@@ -3,6 +3,7 @@ import config
 import frame_cache
 import input_handler
 import template_cache
+import match_utils
 
 try:
     import cv2
@@ -14,7 +15,12 @@ SKILL_ICON_FILES = {
     'hammer': 'hammer.bmp',
     'assist': 'assist.bmp',
 }
-MATCH_THRESHOLD = 0.7
+def _match_threshold():
+    return float(getattr(config, 'skill_match_threshold', 0.7))
+
+
+def _match_margin():
+    return float(getattr(config, 'template_match_margin', 0.05))
 _loc_cache = {}
 
 
@@ -25,7 +31,10 @@ def resolve_icon_path(icon_name):
     return config.resolve_resource_path(filename) or config.apply_resource_path(filename)
 
 
-def _match_in_skills(area_skills, template, resolved_path, threshold=MATCH_THRESHOLD):
+def _match_in_skills(area_skills, template, resolved_path, threshold=None):
+    if threshold is None:
+        threshold = _match_threshold()
+    margin = _match_margin()
     if not CV2_AVAILABLE or area_skills is None or template is None or area_skills.size == 0:
         return False, None, 0.0
     if area_skills.shape[0] < template.shape[0] or area_skills.shape[1] < template.shape[1]:
@@ -41,22 +50,24 @@ def _match_in_skills(area_skills, template, resolved_path, threshold=MATCH_THRES
         y1 = min(area_skills.shape[0], hy + template.shape[0] + pad)
         roi = area_skills[y0:y1, x0:x1]
         if roi.shape[0] >= template.shape[0] and roi.shape[1] >= template.shape[1]:
-            res = cv2.matchTemplate(roi, template, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, max_loc = cv2.minMaxLoc(res)
-            if max_val >= threshold:
+            matched, conf, max_loc = match_utils.template_match_with_margin(
+                roi, template, threshold, margin,
+            )
+            if matched and max_loc is not None:
                 loc = (x0 + max_loc[0], y0 + max_loc[1])
                 _loc_cache[resolved_path] = loc
-                return True, loc, float(max_val)
+                return True, loc, conf
 
-    res = cv2.matchTemplate(area_skills, template, cv2.TM_CCOEFF_NORMED)
-    _, max_val, _, max_loc = cv2.minMaxLoc(res)
-    if max_val >= threshold:
+    matched, conf, max_loc = match_utils.template_match_with_margin(
+        area_skills, template, threshold, margin,
+    )
+    if matched and max_loc is not None:
         _loc_cache[resolved_path] = max_loc
-        return True, max_loc, float(max_val)
-    return False, None, float(max_val)
+        return True, max_loc, conf
+    return False, None, conf
 
 
-def click_skill_icon(hwnd, icon_name, threshold=MATCH_THRESHOLD):
+def click_skill_icon(hwnd, icon_name, threshold=None):
     """Find icon in calibrated skill bar area and click it. Returns True on success."""
     if not CV2_AVAILABLE or not hwnd or not config.area_skills or not config.calibrator:
         return False

@@ -6,6 +6,7 @@ import os
 import config
 import input_handler
 import template_cache
+import match_utils
 try:
     import cv2
     CV2_AVAILABLE = True
@@ -121,7 +122,10 @@ class SkillSequenceManager:
             print(f'[SKILL-SEQUENCE] Could not load template from: {skill_path}')
             return
 
-        def match_with_hint(area_img, template_img, cache_key, threshold=0.7):
+        def match_with_hint(area_img, template_img, cache_key, threshold=None):
+            if threshold is None:
+                threshold = float(getattr(config, 'skill_match_threshold', 0.7))
+            margin = float(getattr(config, 'template_match_margin', 0.05))
             if area_img is None or template_img is None or area_img.size == 0:
                 return False, None, 0.0
             if area_img.shape[0] < template_img.shape[0] or area_img.shape[1] < template_img.shape[1]:
@@ -137,19 +141,21 @@ class SkillSequenceManager:
                 y1r = min(area_img.shape[0], hy + template_img.shape[0] + pad)
                 roi = area_img[y0:y1r, x0:x1r]
                 if roi.shape[0] >= template_img.shape[0] and roi.shape[1] >= template_img.shape[1]:
-                    res = cv2.matchTemplate(roi, template_img, cv2.TM_CCOEFF_NORMED)
-                    _, max_val, _, max_loc = cv2.minMaxLoc(res)
-                    if max_val >= threshold:
+                    matched, conf, max_loc = match_utils.template_match_with_margin(
+                        roi, template_img, threshold, margin,
+                    )
+                    if matched and max_loc is not None:
                         loc = (x0 + max_loc[0], y0 + max_loc[1])
                         self._skills_loc_cache[cache_key] = loc
-                        return True, loc, float(max_val)
+                        return True, loc, conf
 
-            res = cv2.matchTemplate(area_img, template_img, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, max_loc = cv2.minMaxLoc(res)
-            if max_val >= threshold:
+            matched, conf, max_loc = match_utils.template_match_with_margin(
+                area_img, template_img, threshold, margin,
+            )
+            if matched and max_loc is not None:
                 self._skills_loc_cache[cache_key] = max_loc
-                return True, max_loc, float(max_val)
-            return False, None, float(max_val)
+                return True, max_loc, conf
+            return False, None, conf
 
         if area.shape[0] < template.shape[0] or area.shape[1] < template.shape[1]:
             print(f'[SKILL-SEQUENCE] Template or area invalid for skill {original_idx + 1}')
@@ -159,7 +165,6 @@ class SkillSequenceManager:
             area_img=area,
             template_img=template,
             cache_key=skill_path,
-            threshold=0.7,
         )
 
         if found:

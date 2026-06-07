@@ -3,7 +3,7 @@ GUI module for Kathana Bot
 Refactored to use modular structure
 """
 import tkinter as tk
-from tkinter import messagebox, simpledialog
+from tkinter import messagebox, simpledialog, filedialog
 import customtkinter as ctk
 import threading
 import time
@@ -26,8 +26,7 @@ from license_manager import get_license_manager
 import debug_utils
 import logger
 from ui.keybind_dialogs import open_keybind_dialog
-from ui.settings_overlays import collect_gui_overlay
-from ui.regions_panel import build_regions_panel
+from ui.settings_overlays import collect_gui_overlay, sync_gui_to_config
 
 
 class ToolTip:
@@ -87,6 +86,7 @@ def create_tooltip(widget, text):
 
 
 KEY_BUTTON_DEFAULT_LABEL = "Set Key"
+KEY_BUTTON_TOOLTIP = "Click to set key. Right-click to clear."
 
 
 def key_button_label(key_value):
@@ -94,6 +94,12 @@ def key_button_label(key_value):
     if key_value and str(key_value).strip():
         return str(key_value).strip().upper()
     return KEY_BUTTON_DEFAULT_LABEL
+
+
+def bind_key_button_clear(button, clear_callback, tooltip=KEY_BUTTON_TOOLTIP):
+    """Right-click clears the assigned hotkey."""
+    button.bind('<Button-3>', lambda _event: clear_callback())
+    create_tooltip(button, tooltip)
 
 
 class BotGUI:
@@ -662,30 +668,78 @@ class BotGUI:
             binding_color = "orange" if machine_bound else "gray"
             self.license_binding_value.configure(text=binding_text, text_color=binding_color)
     
-    def _autosave_settings_silent(self):
-        """Persist config changes without a dialog (mob templates, toggles, etc.)."""
-        settings_manager.save_settings()
+    def _settings_dialog_dir(self):
+        return os.path.dirname(settings_manager.get_settings_path()) or config.app_dir()
+
+    def _update_settings_profile_label(self):
+        if not hasattr(self, 'settings_profile_label'):
+            return
+        profile = settings_manager.settings_profile_label()
+        self.settings_profile_label.configure(
+            text=f"Profile: {profile}  (use Save / Save As / Load)",
+        )
 
     def save_settings_gui(self):
-        """Save settings from GUI"""
-        if settings_manager.save_settings():
-            logger.info("Settings saved successfully!", "Settings")
-            messagebox.showinfo("Save Settings", "Settings saved successfully!")
+        """Save current GUI state to the active profile file."""
+        sync_gui_to_config(self)
+        path = settings_manager.get_settings_path()
+        if settings_manager.save_settings(path=path):
+            self._update_settings_profile_label()
+            logger.info(f"Settings saved to {path}", "Settings")
+            messagebox.showinfo(
+                "Save Settings",
+                f"Settings saved to:\n{path}",
+            )
         else:
             logger.warn("Failed to save settings!", "Settings")
             messagebox.showerror("Save Settings", "Failed to save settings!")
-    
+
+    def save_settings_as_gui(self):
+        """Save current GUI state to a new profile file."""
+        sync_gui_to_config(self)
+        initial = settings_manager.get_settings_path()
+        path = filedialog.asksaveasfilename(
+            parent=self.root,
+            title="Save Settings As",
+            initialdir=self._settings_dialog_dir(),
+            initialfile=os.path.basename(initial),
+            defaultextension=".json",
+            filetypes=settings_manager.SETTINGS_FILE_FILTER,
+        )
+        if not path:
+            return
+        if settings_manager.save_settings(path=path):
+            self._update_settings_profile_label()
+            logger.info(f"Settings saved to {path}", "Settings")
+            messagebox.showinfo(
+                "Save Settings As",
+                f"Settings saved to:\n{path}",
+            )
+        else:
+            messagebox.showerror("Save Settings As", "Failed to save settings!")
+
     def load_settings_gui(self):
-        """Load settings to GUI"""
-        logger.info("Loading settings...", "Settings")
-        if settings_manager.load_settings():
-            logger.info("Settings loaded from file, applying to GUI...", "Settings")
+        """Load a profile file into the GUI."""
+        path = filedialog.askopenfilename(
+            parent=self.root,
+            title="Load Settings",
+            initialdir=self._settings_dialog_dir(),
+            filetypes=settings_manager.LOAD_SETTINGS_FILE_FILTER,
+        )
+        if not path:
+            return
+        logger.info(f"Loading settings from {path}...", "Settings")
+        if settings_manager.load_settings(path=path):
             self.apply_settings_to_gui()
+            self._update_settings_profile_label()
             logger.info("Settings loaded and applied successfully!", "Settings")
-            messagebox.showinfo("Load Settings", "Settings loaded successfully!")
+            messagebox.showinfo(
+                "Load Settings",
+                f"Settings loaded from:\n{path}",
+            )
         else:
             logger.warn("Failed to load settings!", "Settings")
-            messagebox.showwarning("Load Settings", "No saved settings found or failed to load settings!")
+            messagebox.showwarning("Load Settings", "Failed to load settings!")
     
     def apply_settings_to_gui(self):
         """Apply loaded settings to the GUI components"""
@@ -918,7 +972,7 @@ class BotGUI:
         
         # Initialize root window with customtkinter
         self.root = ctk.CTk()
-        self.root.title("Kathana Helper v3.0.0")
+        self.root.title(config.APP_TITLE)
         self.root.geometry("655x800")
         self.root.resizable(True, True)
         
@@ -993,13 +1047,17 @@ class BotGUI:
         self.window_combo = ctk.CTkComboBox(window_frame, variable=self.window_var, state="readonly", width=400, height=32)
         self.window_combo.grid(row=1, column=0, sticky="ew", padx=(10, 5), pady=(0, 8))
         
-        # Refresh button
+        self.connect_button = ctk.CTkButton(
+            window_frame, text="Connect", command=self.connect_window, width=100, height=32,
+        )
+        self.connect_button.grid(row=1, column=1, padx=5, pady=(0, 8))
+
         self.refresh_button = ctk.CTkButton(window_frame, text="Refresh", command=self.refresh_windows, width=100, height=32)
-        self.refresh_button.grid(row=1, column=1, padx=5, pady=(0, 8))
-        
-        # Rename button
-        self.rename_button = ctk.CTkButton(window_frame, text="Rename", command=self.rename_window, width=100, height=32)
-        self.rename_button.grid(row=1, column=2, padx=(5, 10), pady=(0, 8))
+        self.refresh_button.grid(row=1, column=2, padx=(5, 10), pady=(0, 8))
+        create_tooltip(
+            self.connect_button,
+            "Refresh the window list and connect to the selected game window.",
+        )
         
         # Configure window frame grid
         window_frame.columnconfigure(0, weight=1)
@@ -1026,27 +1084,57 @@ class BotGUI:
         # Set minimum height to prevent frame from expanding
         bot_frame.grid_rowconfigure(0, weight=0)  # Don't allow row to expand
         
-        # Connect button
-        self.connect_button = ctk.CTkButton(bot_frame, text="Connect", command=self.connect_window, width=120, height=32, corner_radius=6)
-        self.connect_button.grid(row=0, column=0, padx=(10, 5), pady=5)
-        create_tooltip(self.connect_button, "Connect to the game window. Select a window from the dropdown and click Connect.")
-        
-        # Start/Stop toggle button
         self.toggle_bot_button = ctk.CTkButton(bot_frame, text="Start", command=self.toggle_bot, state="disabled", width=100, height=32, corner_radius=6, fg_color="green", hover_color="darkgreen")
-        self.toggle_bot_button.grid(row=0, column=1, padx=5, pady=5)
-        create_tooltip(self.toggle_bot_button, "Start or stop the bot. Pick HP + MP regions in the Regions tab first.")
+        self.toggle_bot_button.grid(row=0, column=0, padx=(10, 5), pady=5)
+        create_tooltip(self.toggle_bot_button, "Start or stop the bot. Set HP + MP in Region Editor first.")
+
+        self.regions_button = ctk.CTkButton(
+            bot_frame, text="Regions", command=self.open_region_editor,
+            state="disabled", width=120, height=32, corner_radius=6,
+            fg_color="#2563eb", hover_color="#1d4ed8",
+        )
+        self.regions_button.grid(row=0, column=1, padx=5, pady=5)
+        create_tooltip(
+            self.regions_button,
+            "Open the Region Editor to pick HP/MP, enemy UI, skills, buffs, and chat areas.",
+        )
         
         # Separator frame (using a thin frame as separator) - fixed height to match buttons
         separator = ctk.CTkFrame(bot_frame, width=2, height=40, fg_color="gray50")
-        separator.grid(row=0, column=4, padx=6, pady=5)
+        separator.grid(row=0, column=2, padx=6, pady=5)
         
         # Save Settings button
-        self.save_settings_button = ctk.CTkButton(bot_frame, text="Save Settings", command=self.save_settings_gui, width=110, height=32, corner_radius=6)
-        self.save_settings_button.grid(row=0, column=5, padx=5, pady=5)
-        
-        # Load Settings button
-        self.load_settings_button = ctk.CTkButton(bot_frame, text="Load Settings", command=self.load_settings_gui, width=110, height=32, corner_radius=6)
-        self.load_settings_button.grid(row=0, column=6, padx=(5, 10), pady=5)
+        self.save_settings_button = ctk.CTkButton(
+            bot_frame, text="Save", command=self.save_settings_gui,
+            width=72, height=32, corner_radius=6,
+        )
+        self.save_settings_button.grid(row=0, column=3, padx=5, pady=5)
+        create_tooltip(self.save_settings_button, "Save all settings to the current profile file.")
+
+        self.save_settings_as_button = ctk.CTkButton(
+            bot_frame, text="Save As…", command=self.save_settings_as_gui,
+            width=82, height=32, corner_radius=6,
+        )
+        self.save_settings_as_button.grid(row=0, column=4, padx=5, pady=5)
+        create_tooltip(self.save_settings_as_button, "Save settings to a new profile file.")
+
+        self.load_settings_button = ctk.CTkButton(
+            bot_frame, text="Load…", command=self.load_settings_gui,
+            width=72, height=32, corner_radius=6,
+        )
+        self.load_settings_button.grid(row=0, column=5, padx=(5, 10), pady=5)
+        create_tooltip(self.load_settings_button, "Load settings from a profile file.")
+
+        self.settings_profile_label = ctk.CTkLabel(
+            bot_frame,
+            text="",
+            font=ctk.CTkFont(size=11),
+            text_color=("gray35", "gray65"),
+            anchor="w",
+        )
+        self.settings_profile_label.grid(
+            row=1, column=0, columnspan=6, sticky="w", padx=(10, 10), pady=(0, 6),
+        )
         
         # Create tabview for all sections
         tabview = ctk.CTkTabview(main_frame, corner_radius=8)
@@ -1056,7 +1144,6 @@ class BotGUI:
         main_frame.rowconfigure(3, weight=1)
         
         # Create tabs
-        regions_tab = tabview.add("Regions")
         status_tab = tabview.add("Status")
         settings_tab = tabview.add("Settings")
         skill_sequence_tab = tabview.add("Skill Sequence")
@@ -1064,8 +1151,6 @@ class BotGUI:
         skills_tab = tabview.add("Skill Interval")
         mouse_clicker_tab = tabview.add("Mouse Clicker")
 
-        build_regions_panel(regions_tab, self)
-        
         # Action slots frame - moved to Status tab (wrap in scrollable frame)
         status_scroll = ctk.CTkScrollableFrame(status_tab)
         status_scroll.pack(fill="both", expand=True)
@@ -1377,6 +1462,7 @@ class BotGUI:
         self.repair_key_var.trace_add('write', lambda *_: self.repair_key_btn.configure(
             text=key_button_label(self.repair_key_var.get()),
         ))
+        bind_key_button_clear(self.repair_key_btn, self.clear_repair_key)
 
         assist_row = ctk.CTkFrame(left_body, fg_color="transparent")
         assist_row.pack(fill="x", pady=(0, 2))
@@ -1408,6 +1494,7 @@ class BotGUI:
         self.assist_key_var.trace_add('write', lambda *_: self.assist_key_btn.configure(
             text=key_button_label(self.assist_key_var.get()),
         ))
+        bind_key_button_clear(self.assist_key_btn, self.clear_assist_key)
         
         # If assist_only is enabled on startup, disable dependent features
         if config.assist_only_enabled:
@@ -1513,8 +1600,7 @@ class BotGUI:
         mp_key_button.pack(side="left", padx=(10, 0))
         update_mp_key_button_text(btn=mp_key_button)
         self.mp_key_var.trace_add('write', lambda *args: update_mp_key_button_text(btn=mp_key_button))
-        mp_key_button.bind('<Button-3>', lambda e: self.clear_mp_key())
-        create_tooltip(mp_key_button, "Click to set key. Right-click to clear.")
+        bind_key_button_clear(mp_key_button, self.clear_mp_key)
         
         # MP bar area input (x, y, width, height) - hidden, only used internally
         self.mp_x_var = tk.StringVar(value=str(config.mp_bar_area['x']))
@@ -1567,7 +1653,7 @@ class BotGUI:
         self.mob_checkbox.grid(row=8, column=0, columnspan=2, sticky="w", padx=15, pady=(0, 6))
         create_tooltip(
             self.mob_checkbox,
-            "Only attack mobs that match learned templates. Pick Enemy Name on the Regions tab, then Learn.",
+            "Only attack mobs that match learned templates. Set Enemy Name in Region Editor, then Learn.",
         )
 
         self.mob_elite_skip_var = tk.BooleanVar(value=config.mob_elite_skip_enabled)
@@ -1672,7 +1758,7 @@ class BotGUI:
 
         self.mob_filter_help = ctk.CTkLabel(
             settings_frame,
-            text='Pick Enemy Name on the Regions tab (full width of the name/level bar). '
+            text='Set Enemy Name in Region Editor (full width of the name/level bar). '
                  'Learn saves that exact region. Matching uses name text shape, not OCR. '
                  'Re-learn templates if you change the region.',
             font=ctk.CTkFont(size=10), text_color=("gray40", "gray60"), anchor='w',
@@ -1725,7 +1811,7 @@ class BotGUI:
                                 text="1. Click the skill image to select a skill icon\n"
                                      "2. Assign a hotkey for each skill (pressed instead of clicking)\n"
                                      "3. Enable the checkbox to include the skill in the sequence\n"
-                                     "4. Skills run in order when an enemy is found (pick Skill Area on Regions tab)",
+                                     "4. Skills run in order when an enemy is found (set Skill Bar in Region Editor)",
                                 font=ctk.CTkFont(size=12),
                                 justify="left", anchor="w")
         info_text.grid(row=1, column=0, sticky="w", padx=10, pady=(0, 10))
@@ -1792,6 +1878,7 @@ class BotGUI:
             )
             if config.skill_sequence_config[i].get('key'):
                 key_btn.configure(text=key_button_label(config.skill_sequence_config[i]['key']))
+            bind_key_button_clear(key_btn, lambda idx=i: self.clear_skill_sequence_key(idx))
 
             # Skip if on cooldown (icon not visible in Skill Area)
             self.skill_sequence_bypass_vars[i] = tk.BooleanVar(value=config.skill_sequence_config[i].get('bypass', False))
@@ -1942,7 +2029,7 @@ class BotGUI:
         buffs_info_title.grid(row=0, column=0, sticky="w", padx=10, pady=(10, 5))
         
         buffs_info_text = ctk.CTkLabel(buffs_info_frame, 
-                                      text="1. Pick the Buff Area on the Regions tab (active buff icons)\n"
+                                      text="1. Set Buff Strip in Region Editor (active buff icons)\n"
                                            "2. Click a buff image to detect when it is already active\n"
                                            "3. Assign a hotkey — pressed when the buff is missing",
                                       font=ctk.CTkFont(size=12),
@@ -2009,7 +2096,8 @@ class BotGUI:
             )
             if config.buffs_config[i].get('key'):
                 buff_key_btn.configure(text=key_button_label(config.buffs_config[i]['key']))
-            
+            bind_key_button_clear(buff_key_btn, lambda idx=i: self.clear_buff_key(idx))
+
             # Initialize buff state
             self.buffs_state.append({
                 'image_path': config.buffs_config[i]['image_path'],
@@ -2102,8 +2190,9 @@ class BotGUI:
         # Provide GUI overlay snapshot to settings_manager (no GUI import in settings_manager).
         settings_manager.register_gui_overlay_provider(lambda: collect_gui_overlay(self))
         
-        # Load settings on startup
-        if settings_manager.load_settings():
+        # Load default profile on startup (changes are not written until Save)
+        settings_manager.reset_settings_path()
+        if settings_manager.load_settings(config.SETTINGS_FILE):
             self.apply_settings_to_gui()
             print("Settings loaded on startup")
         else:
@@ -2111,8 +2200,9 @@ class BotGUI:
             mob_template_store.sync_templates_after_load()
             if hasattr(self, 'mob_listbox'):
                 self._refresh_mob_list()
+        self._update_settings_profile_label()
         
-        # Update Start/Stop button state based on calibration
+        self.update_regions_button_state()
         self.update_toggle_bot_button_state()
         # Refresh mob list once the window is mapped (listbox updates can be dropped during __init__).
         self.root.after(0, self._refresh_mob_list)
@@ -2160,45 +2250,6 @@ class BotGUI:
             print(f"Error refreshing windows with selection: {e}")
             self.window_combo.set("Error loading windows")
     
-    def rename_window(self):
-        """Rename the selected window"""
-        try:
-            selected_window_title = self.window_var.get()
-            if not selected_window_title or selected_window_title == "No windows found" or selected_window_title == "Error loading windows":
-                print("Please select a valid window to rename")
-                return
-            
-            # Create a simple input dialog
-            new_name = simpledialog.askstring("Rename Window", 
-                                            f"Enter new name for window:\n'{selected_window_title}'",
-                                            initialvalue=selected_window_title)
-            
-            if new_name and new_name.strip() and new_name != selected_window_title:
-                # Find the window handle for the selected window
-                windows = window_utils.get_open_windows()
-                target_hwnd = None
-                for hwnd, title in windows:
-                    if title == selected_window_title:
-                        target_hwnd = hwnd
-                        break
-                
-                if target_hwnd:
-                    # Rename the window using win32gui
-                    win32gui.SetWindowText(target_hwnd, new_name.strip())
-                    print(f"Window renamed from '{selected_window_title}' to '{new_name.strip()}'")
-                    
-                    # Refresh the window list and select the renamed window
-                    self.refresh_windows_with_selection(new_name.strip())
-                else:
-                    print(f"Could not find window handle for '{selected_window_title}'")
-            elif new_name == selected_window_title:
-                print("New name is the same as current name")
-            else:
-                print("Rename cancelled or invalid name")
-                
-        except Exception as e:
-            print(f"Error renaming window: {e}")
-    
     def on_window_change(self, *args):
         """Called when window selection changes - reset connection"""
         import frame_cache
@@ -2207,17 +2258,46 @@ class BotGUI:
         if config.connected_window:
             config.connected_window = None
             self.connect_button.configure(text="Connect", state="normal")
+            self.update_regions_button_state()
             self.toggle_bot_button.configure(state="disabled")
             self.connection_label.configure(text="Window: Not Connected")
             self.status_label.configure(text="Status: Disconnected")
             print("Window changed - connection reset")
             self.update_mob_filter_ui_state()
 
+    def open_region_editor(self):
+        """Open the visual region editor popup."""
+        from ui.region_editor import open_region_editor
+        open_region_editor(self.root, self)
+
+    def refresh_region_pick_labels(self):
+        """Refresh region button state after editor save or settings load."""
+        self.update_regions_button_state()
+        self.update_toggle_bot_button_state()
+
+    def update_regions_button_state(self):
+        if not hasattr(self, 'regions_button'):
+            return
+        if not config.connected_window:
+            self.regions_button.configure(state='disabled', text='Regions')
+            return
+        self.regions_button.configure(state='normal')
+        if config.bot_regions_ready():
+            self.regions_button.configure(text='✓ Regions')
+        else:
+            self.regions_button.configure(text='Regions')
+
     def connect_window(self):
-        """Connect to the selected window"""
+        """Refresh the window list, then connect to the selected window."""
         selected_window_title = self.window_var.get()
-        
-        if not selected_window_title or selected_window_title == "No windows found" or selected_window_title == "Error loading windows":
+        invalid = ("", "No windows found", "Error loading windows")
+        if selected_window_title and selected_window_title not in invalid:
+            self.refresh_windows_with_selection(selected_window_title)
+        else:
+            self.refresh_windows()
+        selected_window_title = self.window_var.get()
+
+        if not selected_window_title or selected_window_title in invalid:
             print("Please select a valid window")
             return
         
@@ -2242,6 +2322,7 @@ class BotGUI:
             self.update_mob_filter_ui_state()
         else:
             self.connect_button.configure(text="Connect")
+            self.update_regions_button_state()
             self.toggle_bot_button.configure(state="disabled")
             self.connection_label.configure(text="Window: Connection Failed")
             self.status_label.configure(text="Status: Connection Failed")
@@ -2537,10 +2618,12 @@ class BotGUI:
             if not config.connected_window:
                 print("Please connect to a window first")
                 return
-            if not config.bot_regions_ready():
+            import region_helpers
+            preflight = region_helpers.bot_start_preflight_issues()
+            if preflight:
                 messagebox.showwarning(
                     "Regions Required",
-                    "Pick HP and MP bar regions on the Regions tab before starting.",
+                    "Before starting:\n\n• " + "\n• ".join(preflight),
                 )
                 return
             
@@ -3074,7 +3157,8 @@ class BotGUI:
             key_button.grid(row=0, column=4, padx=5, pady=5)
             update_key_button_text(btn=key_button)
             key_var.trace_add('write', lambda *args: update_key_button_text(btn=key_button))
-            
+            bind_key_button_clear(key_button, lambda var=key_var: var.set(''))
+
             # Delete button
             delete_button = ctk.CTkButton(row_frame, text="×", width=30, height=28,
                                          command=lambda: remove_threshold_row(row_frame, widget_data),
@@ -3275,8 +3359,27 @@ class BotGUI:
     def clear_mp_key(self):
         """Clear MP key"""
         self.mp_key_var.set('')
-        config.mp_key = '9'  # Reset to default
-        print("MP key cleared, reset to default: 9")
+        config.mp_key = ''
+
+    def clear_repair_key(self):
+        """Clear repair key"""
+        self.repair_key_var.set('')
+        config.repair_key = ''
+
+    def clear_assist_key(self):
+        """Clear assist key"""
+        self.assist_key_var.set('')
+        config.assist_key = ''
+
+    def clear_skill_sequence_key(self, idx):
+        """Clear skill sequence hotkey for a slot"""
+        self.skill_sequence_key_vars[idx].set('')
+        config.skill_sequence_config[idx]['key'] = ''
+
+    def clear_buff_key(self, idx):
+        """Clear buff hotkey for a slot"""
+        self.buffs_key_vars[idx].set('')
+        config.buffs_config[idx]['key'] = ''
 
     def register_repair_key(self):
         def set_value(value: str):
@@ -4710,7 +4813,7 @@ class BotGUI:
         if not config.connected_window:
             return 'Scan area: connect to game first'
         if not mob_filter.scan_area_available():
-            return 'Scan area: pick Enemy Name on Regions tab'
+            return 'Scan area: set Enemy Name in Region Editor'
         area = mob_filter.get_scan_area()
         return f"Scan area: ({area['x']},{area['y']}) {area['width']}×{area['height']}"
 
@@ -4841,19 +4944,26 @@ class BotGUI:
         if not self._mob_filter_ready():
             messagebox.showwarning(
                 'Learn',
-                'Connect to the game and pick Enemy Name on the Regions tab first.',
+                'Connect to the game and set Enemy Name in Region Editor first.',
             )
             return
         print('Switch to game, target mob — capturing in 2s…')
-        self.root.after(2000, self._capture_mob_template)
+        self.root.after(2000, self._start_mob_template_capture_thread)
 
-    def _capture_mob_template(self):
+    def _start_mob_template_capture_thread(self):
+        threading.Thread(target=self._capture_mob_template_worker, daemon=True).start()
+
+    def _capture_mob_template_worker(self):
         if not config.connected_window:
-            messagebox.showerror('Learn', 'No window connected.')
+            config.safe_update_gui(
+                lambda: messagebox.showerror('Learn', 'No window connected.'),
+            )
             return
         hwnd = window_utils.resolve_hwnd()
         if not hwnd:
-            messagebox.showerror('Learn', 'Could not get game window handle.')
+            config.safe_update_gui(
+                lambda: messagebox.showerror('Learn', 'Could not get game window handle.'),
+            )
             return
         window_utils.focus_game_window(hwnd)
         bgr = mob_filter.capture_scan_area(hwnd)
@@ -4872,20 +4982,25 @@ class BotGUI:
             normalized=getattr(config, 'mob_normalize_match', True),
         )
         if entry is None:
-            messagebox.showerror('Learn', 'Could not save template image to disk.')
+            config.safe_update_gui(
+                lambda: messagebox.showerror('Learn', 'Could not save template image to disk.'),
+            )
             return
         mob_filter.invalidate_cache()
         new_idx = len(config.mob_templates) - 1
-        self._refresh_mob_list(select_index=new_idx, update_preview=False)
-        caption = self._mob_preview_caption(entry, w, h)
-        if not hp_profile:
-            caption += " — no HP numbers detected"
-        preview = mob_filter.preview_bgr_for_entry(entry)
-        if preview is not None:
-            self._show_mob_preview_bgr(preview, caption)
-        hp_note = self._mob_hp_profile_caption(entry).strip(' —') or "no HP profile"
-        print(f"Learned {entry['name']} ({w}×{h}), {hp_note}")
-        self._autosave_settings_silent()
+
+        def _finish_ui():
+            self._refresh_mob_list(select_index=new_idx, update_preview=False)
+            caption = self._mob_preview_caption(entry, w, h)
+            if not hp_profile:
+                caption += " — no HP numbers detected"
+            preview = mob_filter.preview_bgr_for_entry(entry)
+            if preview is not None:
+                self._show_mob_preview_bgr(preview, caption)
+            hp_note = self._mob_hp_profile_caption(entry).strip(' —') or "no HP profile"
+            print(f"Learned {entry['name']} ({w}×{h}), {hp_note}")
+
+        config.safe_update_gui(_finish_ui)
 
     def _remove_mob_template(self):
         sel = self.mob_listbox.curselection()
@@ -4900,13 +5015,12 @@ class BotGUI:
             self._refresh_mob_list(select_index=min(sel_idx, len(config.mob_templates) - 1))
         else:
             self._refresh_mob_list()
-        self._autosave_settings_silent()
 
     def _test_mob_match(self):
         if not self._mob_filter_ready():
             messagebox.showwarning(
                 'Test match',
-                'Connect to the game and pick Enemy Name on the Regions tab first.',
+                'Connect to the game and set Enemy Name in Region Editor first.',
             )
             return
         if not config.mob_templates:
@@ -4970,7 +5084,7 @@ class BotGUI:
         if not self._mob_filter_ready():
             messagebox.showwarning(
                 'Compare',
-                'Connect to the game and pick Enemy Name on the Regions tab first.',
+                'Connect to the game and set Enemy Name in Region Editor first.',
             )
             return
         if not config.mob_templates:
@@ -4980,20 +5094,32 @@ class BotGUI:
         if not sel or sel[0] >= len(config.mob_templates):
             messagebox.showinfo('Compare', 'Select a template from the list first.')
             return
+        entry = config.mob_templates[sel[0]]
+        threading.Thread(
+            target=self._compare_mob_template_worker,
+            args=(entry,),
+            daemon=True,
+        ).start()
 
+    def _compare_mob_template_worker(self, entry):
         hwnd = window_utils.resolve_hwnd()
         if not hwnd:
-            messagebox.showerror('Compare', 'Could not get game window handle.')
+            config.safe_update_gui(
+                lambda: messagebox.showerror('Compare', 'Could not get game window handle.'),
+            )
             return
         window_utils.focus_game_window(hwnd)
         time.sleep(0.15)
 
-        entry = config.mob_templates[sel[0]]
         result = mob_filter.compare_live_to_entry(hwnd, entry)
         if result.get('error'):
-            messagebox.showerror('Compare', result['error'])
+            config.safe_update_gui(
+                lambda: messagebox.showerror('Compare', result['error']),
+            )
             return
+        config.safe_update_gui(lambda: self._show_mob_compare_window(entry, result))
 
+    def _show_mob_compare_window(self, entry, result):
         def to_bgr(img):
             if img is None:
                 return None
@@ -5214,7 +5340,7 @@ class BotGUI:
         
         # Create new window for minimized view
         self.minimized_window = ctk.CTkToplevel(self.root)
-        self.minimized_window.title("Kathana Helper v3.0.0")
+        self.minimized_window.title(config.APP_TITLE)
         
         # Position minimized window at the same location as main window
         if self.saved_window_position:
@@ -5351,6 +5477,4 @@ class BotGUI:
         self.root.mainloop()
 
     def _on_app_close(self):
-        """Save settings when the app closes."""
-        self._autosave_settings_silent()
         self.root.destroy()

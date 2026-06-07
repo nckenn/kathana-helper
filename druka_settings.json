@@ -1,0 +1,313 @@
+{
+  "skill_slots": {
+    "1": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "2": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "3": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "4": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "5": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "6": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "7": {
+      "enabled": false,
+      "interval": 10.0,
+      "last_used": 0
+    },
+    "8": {
+      "enabled": false,
+      "interval": 103.0,
+      "last_used": 0
+    },
+    "f1": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "f2": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "f3": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "f4": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "f5": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "f6": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "f7": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "f8": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "f9": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "f10": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "9": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    },
+    "0": {
+      "enabled": false,
+      "interval": 1.0,
+      "last_used": 0
+    }
+  },
+  "action_slots": {
+    "pick": {
+      "enabled": true,
+      "interval": 1,
+      "last_used": 0,
+      "key": "f"
+    }
+  },
+  "mob_detection_enabled": true,
+  "mob_scan_area": {
+    "x": 701,
+    "y": 893,
+    "width": 214,
+    "height": 17
+  },
+  "mob_match_threshold": 0.8,
+  "mob_match_margin": 0.03,
+  "mob_elite_skip_enabled": false,
+  "mob_templates": [
+    {
+      "id": "bc7b9208",
+      "name": "Monster 1",
+      "file": "mob_bc7b9208.png"
+    }
+  ],
+  "auto_attack_enabled": true,
+  "auto_hp_enabled": true,
+  "hp_thresholds": [
+    {
+      "threshold": 80.0,
+      "key": "2"
+    },
+    {
+      "threshold": 70.0,
+      "key": "7"
+    },
+    {
+      "threshold": 50.0,
+      "key": "0"
+    }
+  ],
+  "auto_mp_enabled": true,
+  "mp_threshold": 50,
+  "mp_key": "9",
+  "mouse_clicker_enabled": false,
+  "mouse_clicker_interval": 5.0,
+  "mouse_clicker_use_cursor": true,
+  "mouse_clicker_coords": {
+    "x": 0,
+    "y": 0
+  },
+  "looting_duration": 2.0,
+  "auto_repair_enabled": false,
+  "repair_key": "f10",
+  "break_warning_trigger_count": 10,
+  "auto_change_target_enabled": true,
+  "unstuck_timeout": 15.0,
+  "is_mage": false,
+  "assist_only_enabled": false,
+  "assist_key": "",
+  "selected_window": "Kathana - The Reign of Shadow",
+  "buffs_config": {
+    "0": {
+      "enabled": true,
+      "image_path": "jobs\\Druka\\103.BMP",
+      "key": "8"
+    },
+    "1": {
+      "enabled": false,
+      "image_path": null,
+      "key": ""
+    },
+    "2": {
+      "enabled": false,
+      "image_path": null,
+      "key": ""
+    },
+    "3": {
+      "enabled": false,
+      "image_path": null,
+      "key": ""
+    },
+    "4": {
+      "enabled": false,
+      "image_path": null,
+      "key": ""
+    },
+    "5": {
+      "enabled": false,
+      "image_path": null,
+      "key": ""
+    },
+    "6": {
+      "enabled": false,
+      "image_path": null,
+      "key": ""
+    },
+    "7": {
+      "enabled": false,
+      "image_path": null,
+      "key": ""
+    }
+  },
+  "skill_sequence_config": {
+    "0": {
+      "enabled": true,
+      "image_path": "jobs\\Druka\\1.BMP",
+      "key": "1",
+      "bypass": true
+    },
+    "1": {
+      "enabled": true,
+      "image_path": "jobs\\Druka\\2.bmp",
+      "key": "3",
+      "bypass": false
+    },
+    "2": {
+      "enabled": false,
+      "image_path": null,
+      "key": "",
+      "bypass": false
+    },
+    "3": {
+      "enabled": false,
+      "image_path": null,
+      "key": "",
+      "bypass": false
+    },
+    "4": {
+      "enabled": false,
+      "image_path": null,
+      "key": "",
+      "bypass": false
+    },
+    "5": {
+      "enabled": false,
+      "image_path": null,
+      "key": "",
+      "bypass": false
+    },
+    "6": {
+      "enabled": false,
+      "image_path": null,
+      "key": "",
+      "bypass": false
+    },
+    "7": {
+      "enabled": false,
+      "image_path": null,
+      "key": "",
+      "bypass": false
+    }
+  },
+  "hp_bar_area": {
+    "x": 700,
+    "y": 856,
+    "width": 215,
+    "height": 14
+  },
+  "mp_bar_area": {
+    "x": 701,
+    "y": 871,
+    "width": 215,
+    "height": 16
+  },
+  "target_name_area": {
+    "x": 701,
+    "y": 893,
+    "width": 214,
+    "height": 17
+  },
+  "target_hp_bar_area": {
+    "x": 699,
+    "y": 907,
+    "width": 217,
+    "height": 21
+  },
+  "system_message_area": {
+    "x": 24,
+    "y": 847,
+    "width": 387,
+    "height": 98
+  },
+  "skill_area": {
+    "x": 934,
+    "y": 827,
+    "width": 452,
+    "height": 139
+  },
+  "buff_area": {
+    "x": 952,
+    "y": 789,
+    "width": 395,
+    "height": 38
+  },
+  "low_cpu_mode": true,
+  "mob_match_shift_px": 3,
+  "mob_combat_shift_px": 1,
+  "mob_elite_sig_threshold": 0.82,
+  "mob_verify_attempts": 3,
+  "mob_verify_required": 2,
+  "mob_verify_delay_s": 0.06,
+  "mob_combat_miss_required": 2,
+  "mob_combat_match_grace_seconds": 0.3,
+  "enemy_name_missing_streak_threshold": 3,
+  "enemy_name_missing_grace_seconds": 0.6,
+  "buff_match_threshold": 0.7,
+  "skill_match_threshold": 0.7,
+  "template_match_margin": 0.05
+}

@@ -9,8 +9,8 @@ kathana_helper/
 ├── config.py                    # Global variables and configuration
 ├── window_utils.py              # Window capture and management
 ├── input_handler.py             # Input sending (keys, mouse)
-├── auto_attack.py               # Auto-attack system: enemy HP bar detection, name detection, and mob filtering
-├── ocr_utils.py                 # OCR functions for text reading
+├── auto_attack.py               # Auto-attack system: enemy HP bar detection and mob filtering (OpenCV)
+├── mob_filter.py                # Mob whitelist via template matching on name/level bar
 ├── auto_repair.py               # Auto repair functionality
 ├── auto_unstuck.py              # Auto unstuck functionality
 ├── auto_pots.py                 # Auto potion usage
@@ -41,13 +41,12 @@ python main.py
 
 #### Using the spec file (Recommended)
 ```bash
-python tools/download_easyocr_models.py
 pyinstaller kathana_helper.spec
 ```
 
 #### Using command line
 ```bash
-pyinstaller --name "Kathana Helper" --onefile --windowed --hidden-import=win32api --hidden-import=win32con --hidden-import=win32gui --hidden-import=win32ui --hidden-import=pydirectinput --hidden-import=pyautogui --hidden-import=customtkinter --hidden-import=easyocr main.py
+pyinstaller --name "Kathana Helper" --onefile --windowed --hidden-import=win32api --hidden-import=win32con --hidden-import=win32gui --hidden-import=win32ui --hidden-import=pydirectinput --hidden-import=pyautogui --hidden-import=customtkinter main.py
 ```
 
 The executable will be created in the `dist` folder.
@@ -57,8 +56,8 @@ The executable will be created in the `dist` folder.
 - **config.py**: All global variables, constants, and configuration
 - **window_utils.py**: Window capture, connection, and management
 - **input_handler.py**: Keyboard and mouse input functions (reusable across all features)
-- **auto_attack.py**: Auto-attack system including enemy HP bar detection, name detection using OCR, and mob filtering
-- **ocr_utils.py**: EasyOCR integration for text reading
+- **auto_attack.py**: Auto-attack system including enemy HP bar detection and mob filtering
+- **mob_filter.py**: OpenCV template matching on the enemy name/level bar (no OCR)
 - **auto_repair.py**: Damage monitoring and auto repair
 - **auto_unstuck.py**: Stuck detection and unstuck mechanism
 - **auto_pots.py**: Automatic potion usage based on HP/MP thresholds

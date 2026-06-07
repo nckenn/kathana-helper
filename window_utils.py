@@ -11,6 +11,9 @@ import pywinauto
 
 PW_RENDERFULLCONTENT = 0x00000002
 
+# Per-hwnd preferred full-window capture method (printwindow / bitblt / screen_grab).
+_full_capture_method_cache = {}
+
 
 def get_window_rect(hwnd):
     """Return (left, top, right, bottom) for the window including borders."""
@@ -125,6 +128,18 @@ def capture_window_bgr(hwnd):
         ('bitblt', _capture_bitblt),
         ('screen_grab', _capture_screen_grab),
     )
+    cached_method = _full_capture_method_cache.get(hwnd)
+    if cached_method:
+        fn_by_name = {name: fn for name, fn in attempts}
+        fn = fn_by_name.get(cached_method)
+        if fn is not None:
+            try:
+                img = fn(hwnd, width, height)
+                if img is not None and capture_has_content(img):
+                    return img, cached_method
+            except Exception:
+                _full_capture_method_cache.pop(hwnd, None)
+
     best = None
     best_method = 'empty'
     for name, fn in attempts:
@@ -136,6 +151,7 @@ def capture_window_bgr(hwnd):
         if img is None:
             continue
         if capture_has_content(img):
+            _full_capture_method_cache[hwnd] = name
             return img, name
         if best is None or capture_stats(img)['mean'] > capture_stats(best)['mean']:
             best = img
@@ -152,18 +168,6 @@ def capture_window_region_bgr(hwnd, x, y, width, height):
     import numpy as np
     if width <= 0 or height <= 0:
         return None
-    try:
-        full, method = capture_window_bgr(hwnd)
-        if full is not None and capture_has_content(full):
-            fh, fw = full.shape[:2]
-            x2 = min(fw, x + width)
-            y2 = min(fh, y + height)
-            x1 = max(0, min(x, fw - 1))
-            y1 = max(0, min(y, fh - 1))
-            if x2 > x1 and y2 > y1:
-                return full[y1:y2, x1:x2].copy()
-    except Exception:
-        pass
 
     try:
         img = _capture_bitblt_region(hwnd, x, y, width, height)
@@ -178,10 +182,27 @@ def capture_window_region_bgr(hwnd, x, y, width, height):
             bbox=(left + x, top + y, left + x + width, top + y + height),
             all_screens=True,
         )
-        return cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
+        if pil is not None:
+            grab = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
+            if capture_has_content(grab):
+                return grab
     except Exception as e:
         print(f'Error capturing window region BGR (screen): {e}')
-        return None
+
+    try:
+        full, _method = capture_window_bgr(hwnd)
+        if full is not None and capture_has_content(full):
+            fh, fw = full.shape[:2]
+            x2 = min(fw, x + width)
+            y2 = min(fh, y + height)
+            x1 = max(0, min(x, fw - 1))
+            y1 = max(0, min(y, fh - 1))
+            if x2 > x1 and y2 > y1:
+                return full[y1:y2, x1:x2].copy()
+    except Exception:
+        pass
+
+    return None
 
 
 def _capture_bitblt_region(hwnd, x, y, width, height):

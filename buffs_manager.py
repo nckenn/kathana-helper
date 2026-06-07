@@ -8,6 +8,7 @@ import input_handler
 import debug_io
 import debug_utils
 import template_cache
+import match_utils
 try:
     import cv2
     CV2_AVAILABLE = True
@@ -51,26 +52,31 @@ class BuffsManager:
         if (area_buffs_activos.shape[0] < template.shape[0]
                 or area_buffs_activos.shape[1] < template.shape[1]):
             return False
-        res = cv2.matchTemplate(area_buffs_activos, template, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, _ = cv2.minMaxLoc(res)
-        return max_val > 0.7
+        threshold = float(getattr(config, 'buff_match_threshold', 0.7))
+        margin = float(getattr(config, 'template_match_margin', 0.05))
+        matched, _, _ = match_utils.template_match_with_margin(
+            area_buffs_activos, template, threshold, margin,
+        )
+        return matched
 
-    def _match_in_skills_with_hint(self, area_skills, template, resolved_path, threshold=0.7):
+    def _match_in_skills_with_hint(self, area_skills, template, resolved_path, threshold=None):
         """
         Try to match template in a small ROI around the cached position first,
         then fall back to full-area template matching.
         Returns (found: bool, loc: (x,y) top-left in area_skills coords, confidence: float).
         """
+        if threshold is None:
+            threshold = float(getattr(config, 'buff_match_threshold', 0.7))
+        margin = float(getattr(config, 'template_match_margin', 0.05))
         if area_skills is None or template is None or area_skills.size == 0:
             return False, None, 0.0
         if area_skills.shape[0] < template.shape[0] or area_skills.shape[1] < template.shape[1]:
             return False, None, 0.0
 
-        # 1) Fast path: cached location ROI
         hint = self._skills_loc_cache.get(resolved_path)
         if hint is not None:
             hx, hy = hint
-            pad = 30  # pixels around the last known position
+            pad = 30
             x0 = max(0, hx - pad)
             y0 = max(0, hy - pad)
             x1 = min(area_skills.shape[1], hx + template.shape[1] + pad)
@@ -78,20 +84,21 @@ class BuffsManager:
 
             roi = area_skills[y0:y1, x0:x1]
             if roi.shape[0] >= template.shape[0] and roi.shape[1] >= template.shape[1]:
-                res = cv2.matchTemplate(roi, template, cv2.TM_CCOEFF_NORMED)
-                _, max_val, _, max_loc = cv2.minMaxLoc(res)
-                if max_val >= threshold:
+                matched, conf, max_loc = match_utils.template_match_with_margin(
+                    roi, template, threshold, margin,
+                )
+                if matched and max_loc is not None:
                     loc = (x0 + max_loc[0], y0 + max_loc[1])
                     self._skills_loc_cache[resolved_path] = loc
-                    return True, loc, float(max_val)
+                    return True, loc, conf
 
-        # 2) Slow path: full scan
-        res = cv2.matchTemplate(area_skills, template, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, max_loc = cv2.minMaxLoc(res)
-        if max_val >= threshold:
+        matched, conf, max_loc = match_utils.template_match_with_margin(
+            area_skills, template, threshold, margin,
+        )
+        if matched and max_loc is not None:
             self._skills_loc_cache[resolved_path] = max_loc
-            return True, max_loc, float(max_val)
-        return False, None, float(max_val)
+            return True, max_loc, conf
+        return False, None, conf
 
     def update_and_activate_buffs(self, hwnd, screen, area_skills, area_buffs_activos, x1, y1, run_active=True):
         """

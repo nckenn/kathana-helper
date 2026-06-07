@@ -242,12 +242,9 @@ def _capture_matches_size(img, width, height):
 
 
 def capture_scan_area(hwnd):
-    """Capture the full configured scan rectangle (direct window crop, not union cache)."""
+    """Capture the configured scan rectangle (frame cache first, then direct crop)."""
     area = get_scan_area()
     x, y, w, h = area['x'], area['y'], area['width'], area['height']
-    img = window_utils.capture_window_region_bgr(hwnd, x, y, w, h)
-    if _capture_matches_size(img, w, h):
-        return img
     try:
         import frame_cache
         screen = frame_cache.get_frame(hwnd, config.calibrator)
@@ -259,6 +256,9 @@ def capture_scan_area(hwnd):
                 return crop
     except Exception:
         pass
+    img = window_utils.capture_window_region_bgr(hwnd, x, y, w, h)
+    if _capture_matches_size(img, w, h):
+        return img
     return img
 
 
@@ -409,9 +409,43 @@ def _masked_ccoeff(scan_gray, template_gray, mask, min_coverage=None):
     return float(raw * (0.55 + 0.45 * coverage))
 
 
+def _effective_shift_px():
+    shift_px = int(getattr(config, 'mob_match_shift_px', 2))
+    if config.enemy_target_time > 0:
+        shift_px = min(shift_px, int(getattr(config, 'mob_combat_shift_px', 1)))
+    return shift_px
+
+
+def _get_template_shift_variants(tmpl_cmp, tmpl_raw, entry, shift_px):
+    """Precomputed template shifts (avoids per-frame scan warping)."""
+    if entry is None:
+        return [(tmpl_cmp, tmpl_raw)]
+    cache_key = f'shifts_{entry.get("id")}_{shift_px}'
+    if cache_key in _template_cache:
+        return _template_cache[cache_key]
+
+    variants = []
+    h, w = tmpl_cmp.shape[:2]
+    for dy in range(-shift_px, shift_px + 1):
+        for dx in range(-shift_px, shift_px + 1):
+            if dx == 0 and dy == 0:
+                variants.append((tmpl_cmp, tmpl_raw))
+                continue
+            M = np.float32([[1, 0, -dx], [0, 1, -dy]])
+            shifted_cmp = cv2.warpAffine(
+                tmpl_cmp, M, (w, h), borderMode=cv2.BORDER_CONSTANT, borderValue=0,
+            )
+            shifted_raw = cv2.warpAffine(
+                tmpl_raw, M, (w, h), borderMode=cv2.BORDER_CONSTANT, borderValue=0,
+            )
+            variants.append((shifted_cmp, shifted_raw))
+    _template_cache[cache_key] = variants
+    return variants
+
+
 def _match_score_gray(scan_gray, template_gray, hwnd=None, entry=None, screen=None):
     """Compare normalized name-bar signatures (foreground pixels only)."""
-    _ = (hwnd, entry, screen)  # elite check runs after match via apply_elite_filter
+    _ = (hwnd, screen)  # elite check runs after match via apply_elite_filter
     if scan_gray is None or template_gray is None:
         return 0.0
     if scan_gray.size == 0 or template_gray.size == 0:
@@ -419,7 +453,7 @@ def _match_score_gray(scan_gray, template_gray, hwnd=None, entry=None, screen=No
 
     scan_name = _crop_name_bar(scan_gray)
     tmpl_name = _align_width(_crop_name_bar(template_gray), scan_name.shape[1])
-    shift_px = int(getattr(config, 'mob_match_shift_px', 2))
+    shift_px = _effective_shift_px()
 
     def _combined_score(scan_img, tmpl_img):
         scan_cmp = _signature_for_compare(scan_img)
@@ -430,22 +464,10 @@ def _match_score_gray(scan_gray, template_gray, hwnd=None, entry=None, screen=No
         def _score(s_cmp, t_cmp, s_raw, t_raw):
             return _bidirectional_name_score(s_cmp, t_cmp, s_raw, t_raw)
 
-        best_local = _score(scan_cmp, tmpl_cmp, scan_img, tmpl_img)
-        h, w = scan_cmp.shape[:2]
-        for dy in range(-shift_px, shift_px + 1):
-            for dx in range(-shift_px, shift_px + 1):
-                if dx == 0 and dy == 0:
-                    continue
-                M = np.float32([[1, 0, dx], [0, 1, dy]])
-                shifted_cmp = cv2.warpAffine(
-                    scan_cmp, M, (w, h), borderMode=cv2.BORDER_CONSTANT, borderValue=0,
-                )
-                shifted_raw = cv2.warpAffine(
-                    scan_img, M, (w, h), borderMode=cv2.BORDER_CONSTANT, borderValue=0,
-                )
-                best_local = max(
-                    best_local, _score(shifted_cmp, tmpl_cmp, shifted_raw, tmpl_img),
-                )
+        variants = _get_template_shift_variants(tmpl_cmp, tmpl_img, entry, shift_px)
+        best_local = 0.0
+        for t_cmp, t_raw in variants:
+            best_local = max(best_local, _score(scan_cmp, t_cmp, scan_img, t_raw))
         return float(np.clip(best_local, 0.0, 1.0))
 
     return _combined_score(scan_name, tmpl_name)
@@ -564,7 +586,7 @@ def probe(hwnd):
     Returns dict with match info and best score for UI feedback.
     """
     if not scan_area_available():
-        return {'error': 'Pick Enemy Name on the Regions tab (or calibrate) for the mob scan area'}
+        return {'error': 'Set Enemy Name in Region Editor for the mob scan area'}
     if not config.mob_templates:
         return {'error': 'Learn at least one mob template first'}
 
@@ -610,7 +632,7 @@ def compare_live_to_entry(hwnd, entry, screen=None):
     if entry is None:
         return {'error': 'No template selected'}
     if not scan_area_available():
-        return {'error': 'Pick Enemy Name on the Regions tab first'}
+        return {'error': 'Set Enemy Name in Region Editor first'}
 
     scan_bgr = capture_scan_area(hwnd)
     if scan_bgr is None or scan_bgr.size == 0:
@@ -649,9 +671,19 @@ def compare_live_to_entry(hwnd, entry, screen=None):
 
 def clear_match():
     """Clear mob filter match state (e.g. when no enemy is targeted)."""
+    lock = getattr(config, 'mob_detection_lock', None)
+    if lock is not None:
+        with lock:
+            _clear_match_unlocked()
+        return
+    _clear_match_unlocked()
+
+
+def _clear_match_unlocked():
     config.current_mob_match = None
     config.current_target_mob = None
     config.current_enemy_name = None
+    config.mob_match_miss_streak = 0
 
 
 def _apply_match(match):
@@ -728,25 +760,93 @@ def refresh_scan_stable(hwnd, *, attempts=None, required=None, delay_s=None):
     return stable
 
 
-def refresh_scan(hwnd):
-    """Capture scan region and update config.current_mob_match."""
-    if not is_active():
-        clear_match()
-        return None
-    if not hwnd:
-        clear_match()
+def _run_scan(hwnd):
+    """Capture and match without updating config."""
+    if not is_active() or not hwnd:
         return None
     sync_scan_area_from_calibration()
     scan_bgr = capture_scan_area(int(hwnd))
     if scan_bgr is None or scan_bgr.size == 0:
-        clear_match()
         return None
     raw_match = match_in_image(scan_bgr, hwnd=int(hwnd))
     match = apply_elite_filter(int(hwnd), raw_match)
     if raw_match and not match:
         print("[Mob Filter] Elite mob skipped (higher max HP than learned normal)")
-    _apply_match(match)
     return match
+
+
+def _with_mob_lock(fn, hwnd):
+    lock = getattr(config, 'mob_detection_lock', None)
+    if lock is not None:
+        with lock:
+            return fn(hwnd)
+    return fn(hwnd)
+
+
+def refresh_scan(hwnd):
+    """Capture scan region and update config.current_mob_match."""
+    def _do(hwnd):
+        if not is_active():
+            _clear_match_unlocked()
+            return None
+        if not hwnd:
+            _clear_match_unlocked()
+            return None
+        match = _run_scan(hwnd)
+        if match is None:
+            _clear_match_unlocked()
+            return None
+        config.mob_match_miss_streak = 0
+        _apply_match(match)
+        return match
+
+    return _with_mob_lock(_do, hwnd)
+
+
+def refresh_scan_combat(hwnd):
+    """
+    Combat mob scan: tolerate brief single-frame misses when a match was established.
+    """
+    import time as _time
+
+    def _do(hwnd):
+        if not is_active():
+            _clear_match_unlocked()
+            return None
+        if not hwnd:
+            _clear_match_unlocked()
+            return None
+
+        prev_match = config.current_mob_match
+        had_match = prev_match is not None
+        engaged = config.enemy_target_time > 0
+        grace_s = float(getattr(config, 'mob_combat_match_grace_seconds', 0.3))
+        match_time = float(getattr(config, 'current_mob_match_time', 0) or 0)
+        in_grace = (
+            engaged and had_match and match_time > 0
+            and (_time.time() - match_time) < grace_s
+        )
+
+        match = _run_scan(hwnd)
+        if match:
+            config.mob_match_miss_streak = 0
+            _apply_match(match)
+            return match
+
+        if in_grace and prev_match:
+            return prev_match
+
+        if engaged and had_match:
+            required = int(getattr(config, 'mob_combat_miss_required', 2))
+            config.mob_match_miss_streak = int(getattr(config, 'mob_match_miss_streak', 0)) + 1
+            if config.mob_match_miss_streak < required:
+                return prev_match
+
+        config.mob_match_miss_streak = 0
+        _apply_match(None)
+        return None
+
+    return _with_mob_lock(_do, hwnd)
 
 
 def scan(hwnd):

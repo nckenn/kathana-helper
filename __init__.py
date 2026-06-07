@@ -3,4 +3,4 @@ Kathana Bot Package
 Refactored modular bot framework
 """
 
-__version__ = "3.0.0"
+from config import APP_VERSION as __version__

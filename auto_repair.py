@@ -192,6 +192,18 @@ class WarningTextDetector:
         if bounds is None:
             return None
         left, top, width, height = bounds
+        try:
+            import frame_cache
+            screen = frame_cache.get_frame(hwnd, config.calibrator)
+            if screen is not None:
+                crop = frame_cache.crop_rect(
+                    screen, left, top, left + width, top + height,
+                    frame_cache.get_origin(),
+                )
+                if crop is not None and crop.size > 0:
+                    return crop
+        except Exception:
+            pass
         return window_utils.capture_window_region_bgr(hwnd, left, top, width, height)
 
     def detect_break_warning(self, hwnd):

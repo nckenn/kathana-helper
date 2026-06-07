@@ -19,22 +19,33 @@ class AutoPots:
         self.last_rohati_heal_time = 0
         self.rohati_heal_cooldown = 3.0
 
+    def _is_capture_stale(self, current_time, last_success_time, interval):
+        if last_success_time <= 0:
+            return False
+        return (current_time - last_success_time) > (interval * 2)
+
     def check_auto_pots(self):
         """Check and use potions if necessary - HP and MP are checked separately."""
         try:
             if not config.bot_regions_ready():
                 return
 
+            if not config.connected_window:
+                return
+
             hwnd = config.connected_window.handle
             current_time = time.time()
 
+            hp_interval = config.get_hp_capture_interval()
+            mp_interval = config.get_mp_capture_interval()
+
             should_check_hp = (
                 config.auto_hp_enabled
-                and current_time - config.last_hp_capture_time >= config.get_hp_capture_interval()
+                and current_time - config.last_hp_capture_time >= hp_interval
             )
             should_check_mp = (
                 config.auto_mp_enabled
-                and current_time - config.last_mp_capture_time >= config.get_mp_capture_interval()
+                and current_time - config.last_mp_capture_time >= mp_interval
             )
 
             if not should_check_hp and not should_check_mp:
@@ -42,17 +53,36 @@ class AutoPots:
 
             hp_percent = config.current_hp_percentage
             mp_percent = config.current_mp_percentage
+            hp_stale = False
+            mp_stale = False
 
             if should_check_hp:
                 read_hp = bar_reader.read_hp_percent(hwnd)
                 if read_hp is not None:
                     hp_percent = read_hp
                     config.last_hp_capture_time = current_time
+                    config.last_successful_hp_capture_time = current_time
+                else:
+                    hp_stale = self._is_capture_stale(
+                        current_time,
+                        getattr(config, 'last_successful_hp_capture_time', 0),
+                        hp_interval,
+                    )
             if should_check_mp:
                 read_mp = bar_reader.read_mp_percent(hwnd)
                 if read_mp is not None:
                     mp_percent = read_mp
                     config.last_mp_capture_time = current_time
+                    config.last_successful_mp_capture_time = current_time
+                else:
+                    mp_stale = self._is_capture_stale(
+                        current_time,
+                        getattr(config, 'last_successful_mp_capture_time', 0),
+                        mp_interval,
+                    )
+
+            if hp_stale or mp_stale:
+                return
 
             hp_percent = max(0, min(100, hp_percent))
             mp_percent = max(0, min(100, mp_percent))

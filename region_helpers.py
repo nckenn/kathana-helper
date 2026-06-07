@@ -97,3 +97,41 @@ def combat_detection_ready():
     if cal is not None and cal.mp_position is not None:
         return True
     return False
+
+
+def bot_start_preflight_issues():
+    """
+    Return a list of human-readable issues that block or warn before starting the bot.
+    Empty list means all required regions for enabled features are configured.
+    """
+    issues = []
+    if not bot_regions_ready():
+        issues.append('Set HP and MP bars in Region Editor (Connect → Regions).')
+
+    if config.mob_detection_enabled:
+        if not config.bar_area_configured(config.mob_scan_area) and not config.bar_area_configured(
+            config.target_name_area,
+        ):
+            issues.append('Mob filter is enabled — set Enemy Name in Region Editor.')
+        if not config.mob_templates:
+            issues.append('Mob filter is enabled — learn at least one mob template.')
+
+    if config.auto_repair_enabled and not config.bar_area_configured(config.system_message_area):
+        issues.append('Auto repair is enabled — set System Message in Region Editor.')
+
+    buffs_enabled = any(
+        config.buffs_config[i]['enabled'] and config.buffs_config[i].get('image_path')
+        for i in range(8)
+    )
+    if buffs_enabled and not config.bar_area_configured(config.buff_area):
+        issues.append('Buffs are enabled — set Buff Strip in Region Editor.')
+
+    skills_enabled = any(
+        config.skill_sequence_config[i]['enabled']
+        and config.skill_sequence_config[i].get('image_path')
+        for i in range(8)
+    )
+    if skills_enabled and not config.bar_area_configured(config.skill_area):
+        issues.append('Skill sequence is enabled — set Skill Bar in Region Editor.')
+
+    return issues
