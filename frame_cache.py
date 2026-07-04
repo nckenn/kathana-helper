@@ -14,6 +14,7 @@ class FrameCache:
         self._hwnd = None
         self._timestamp = 0.0
         self._origin = (0, 0)
+        self._foreground = None
 
     @property
     def origin(self):
@@ -24,6 +25,7 @@ class FrameCache:
         self._hwnd = None
         self._timestamp = 0.0
         self._origin = (0, 0)
+        self._foreground = None
 
     def get_frame(self, hwnd, calibrator=None):
         """Return a cached BGR frame (full window or union region)."""
@@ -34,16 +36,26 @@ class FrameCache:
         if calibrator is None and not config.bot_regions_ready():
             return None
 
+        foreground = window_utils.is_game_foreground(hwnd)
+        if (
+            self._frame is not None
+            and self._hwnd == hwnd
+            and self._foreground is not None
+            and self._foreground != foreground
+        ):
+            self.invalidate()
+
         ttl = config.get_frame_cache_ttl()
         now = time.time()
         if (
             self._frame is not None
             and self._hwnd == hwnd
+            and self._foreground == foreground
             and (now - self._timestamp) < ttl
         ):
             return self._frame
 
-        frame, origin = self._capture(hwnd, calibrator)
+        frame, origin = self._capture(hwnd, calibrator, foreground)
         if frame is None:
             return None
 
@@ -51,9 +63,15 @@ class FrameCache:
         self._hwnd = hwnd
         self._timestamp = now
         self._origin = origin
+        self._foreground = foreground
         return self._frame
 
-    def _capture(self, hwnd, calibrator):
+    def _capture(self, hwnd, calibrator, foreground):
+        # Union BitBlt is fast but unreliable when another window covers the game (alt-tab).
+        if not foreground:
+            screen = window_utils.capture_window_bgr(hwnd)[0]
+            return screen, (0, 0)
+
         rects = capture_regions.compute_capture_rects(calibrator)
         union = capture_regions.union_rect(rects)
         if union is None:

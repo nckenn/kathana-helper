@@ -34,6 +34,10 @@ def sync_gui_to_config(gui):
         config.mob_detection_enabled = bool(gui.mob_detection_var.get())
     if hasattr(gui, 'mob_elite_skip_var'):
         config.mob_elite_skip_enabled = bool(gui.mob_elite_skip_var.get())
+    if hasattr(gui, 'self_target_key_var'):
+        config.self_target_key = gui.self_target_key_var.get().strip() or '`'
+    if hasattr(gui, 'mob_safe_buffs_var'):
+        config.mob_filter_safe_buffs = bool(gui.mob_safe_buffs_var.get())
 
     if hasattr(gui, 'auto_attack_var'):
         config.auto_attack_enabled = bool(gui.auto_attack_var.get())

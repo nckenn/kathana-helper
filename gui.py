@@ -767,6 +767,10 @@ class BotGUI:
             self.mob_detection_var.set(config.mob_detection_enabled)
             if hasattr(self, 'mob_elite_skip_var'):
                 self.mob_elite_skip_var.set(config.mob_elite_skip_enabled)
+            if hasattr(self, 'self_target_key_var'):
+                self.self_target_key_var.set(config.self_target_key)
+            if hasattr(self, 'mob_safe_buffs_var'):
+                self.mob_safe_buffs_var.set(config.mob_filter_safe_buffs)
             self.mob_coords_var.set(f"{config.target_name_area['x']},{config.target_name_area['y']}")
             print(f"  Applied mob detection: enabled={config.mob_detection_enabled}, coords={config.target_name_area['x']},{config.target_name_area['y']}")
             
@@ -1073,6 +1077,12 @@ class BotGUI:
         # Connection status label
         self.connection_label = ctk.CTkLabel(status_info_frame, text="Window: Not Connected", font=ctk.CTkFont(size=11))
         self.connection_label.grid(row=0, column=1, padx=(10, 10), pady=6)
+
+        self.bars_status_label = ctk.CTkLabel(
+            status_info_frame, text="", font=ctk.CTkFont(size=10),
+            text_color=("gray40", "gray60"),
+        )
+        self.bars_status_label.grid(row=0, column=3, padx=(0, 10), pady=6, sticky="w")
         
         # Minimize/Maximize button
         self.minimize_button = ctk.CTkButton(status_info_frame, text="−", command=self.toggle_minimize, width=30, height=25, font=ctk.CTkFont(size=16, weight="bold"))
@@ -1671,8 +1681,41 @@ class BotGUI:
             "Learn templates from normal mobs only. Elites with the same name but larger HP numbers are skipped.",
         )
 
+        self_target_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
+        self_target_row.grid(row=10, column=0, columnspan=2, sticky="ew", padx=15, pady=(0, 6))
+        ctk.CTkLabel(
+            self_target_row, text="Self-target key", font=ctk.CTkFont(size=11),
+        ).pack(side="left")
+        self.self_target_key_var = tk.StringVar(value=config.self_target_key)
+        self.self_target_entry = ctk.CTkEntry(
+            self_target_row, textvariable=self.self_target_key_var, width=44, height=28,
+        )
+        self.self_target_entry.pack(side="left", padx=(10, 0))
+        self.self_target_entry.bind('<FocusOut>', lambda _e: self.update_self_target_key())
+        create_tooltip(
+            self.self_target_entry,
+            "In-game key that focuses your character (default `). "
+            "Pressed before retarget and before buffs when mob filter is on.",
+        )
+
+        self.mob_safe_buffs_var = tk.BooleanVar(value=config.mob_filter_safe_buffs)
+        self.mob_safe_buffs_checkbox = ctk.CTkCheckBox(
+            settings_frame,
+            text="Buffs only when not fighting",
+            variable=self.mob_safe_buffs_var,
+            command=self.update_mob_safe_buffs,
+            font=ctk.CTkFont(size=11),
+            state="disabled",
+        )
+        self.mob_safe_buffs_checkbox.grid(row=11, column=0, columnspan=2, sticky="w", padx=15, pady=(0, 6))
+        create_tooltip(
+            self.mob_safe_buffs_checkbox,
+            "Skip auto-buffs while a mob is targeted. HP/MP pots always work in combat. "
+            "Uses self-target key before buffs when safe.",
+        )
+
         mob_btn_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        mob_btn_row.grid(row=10, column=0, columnspan=2, sticky="ew", padx=15, pady=(0, 8))
+        mob_btn_row.grid(row=12, column=0, columnspan=2, sticky="ew", padx=15, pady=(0, 8))
         self.mob_scan_label = ctk.CTkLabel(
             mob_btn_row, text=self._mob_scan_status_text(),
             font=ctk.CTkFont(size=10), text_color=("gray40", "gray60"), anchor='w',
@@ -1709,7 +1752,7 @@ class BotGUI:
         mob_body = ctk.CTkFrame(
             settings_frame, fg_color=("gray92", "gray20"), corner_radius=8,
         )
-        mob_body.grid(row=11, column=0, columnspan=2, sticky="ew", padx=15, pady=(0, 6))
+        mob_body.grid(row=13, column=0, columnspan=2, sticky="ew", padx=15, pady=(0, 6))
         mob_body.columnconfigure(1, weight=1)
         mob_body.rowconfigure(0, weight=1)
 
@@ -1764,7 +1807,7 @@ class BotGUI:
             font=ctk.CTkFont(size=10), text_color=("gray40", "gray60"), anchor='w',
             justify='left',
         )
-        self.mob_filter_help.grid(row=12, column=0, columnspan=2, sticky='ew', padx=15, pady=(0, 15))
+        self.mob_filter_help.grid(row=14, column=0, columnspan=2, sticky='ew', padx=15, pady=(0, 15))
 
         def _sync_mob_help_wrap(_event=None):
             if not hasattr(self, 'mob_filter_help'):
@@ -2196,6 +2239,7 @@ class BotGUI:
             self.apply_settings_to_gui()
             print("Settings loaded on startup")
         else:
+            config.set_profile_mob_templates_dir(config.SETTINGS_FILE)
             import mob_template_store
             mob_template_store.sync_templates_after_load()
             if hasattr(self, 'mob_listbox'):
@@ -2274,6 +2318,16 @@ class BotGUI:
         """Refresh region button state after editor save or settings load."""
         self.update_regions_button_state()
         self.update_toggle_bot_button_state()
+        self._update_bars_status_label()
+
+    def _update_bars_status_label(self):
+        if not hasattr(self, 'bars_status_label'):
+            return
+        import bar_color_calibration
+        hp = config.current_hp_percentage if config.bot_running else None
+        mp = config.current_mp_percentage if config.bot_running else None
+        text = bar_color_calibration.bars_status_text(hp_pct=hp, mp_pct=mp)
+        self.bars_status_label.configure(text=text)
 
     def update_regions_button_state(self):
         if not hasattr(self, 'regions_button'):
@@ -2317,6 +2371,15 @@ class BotGUI:
             self.connection_label.configure(text=f"Window: {selected_window_title}")
             self.status_label.configure(text="Status: Connected")
             print(f"Successfully connected to: {selected_window_title}")
+            try:
+                import bar_color_calibration
+                migrated = bar_color_calibration.migrate_saved_calibrations(
+                    config.connected_window.handle,
+                )
+                if migrated:
+                    print(f"[Connect] Auto-calibrated bar colors: {', '.join(migrated)}")
+            except Exception as exc:
+                print(f"[Connect] Bar color migration skipped: {exc}")
             if hasattr(self, 'refresh_region_pick_labels'):
                 self.refresh_region_pick_labels()
             self.update_mob_filter_ui_state()
@@ -3501,6 +3564,19 @@ class BotGUI:
         status = "enabled" if config.mob_elite_skip_enabled else "disabled"
         print(f"Elite mob skip {status}")
 
+    def update_self_target_key(self):
+        """Update self-target key used with mob filter."""
+        key = self.self_target_key_var.get().strip()
+        config.self_target_key = key or '`'
+        if not key:
+            self.self_target_key_var.set('`')
+
+    def update_mob_safe_buffs(self):
+        """Update whether buffs wait until not in combat."""
+        config.mob_filter_safe_buffs = bool(self.mob_safe_buffs_var.get())
+        status = "enabled" if config.mob_filter_safe_buffs else "disabled"
+        print(f"Mob filter safe buffs {status}")
+
     def update_mob_detection(self):
         """Update mob filter enabled status"""
         config.mob_detection_enabled = self.mob_detection_var.get()
@@ -4665,13 +4741,8 @@ class BotGUI:
                     if height < 5:
                         height = 5
                     
-                    # Calculate center coordinates
-                    center_x = rel_x + (width // 2)
-                    center_y = rel_y + (height // 2)
-                    
-                    # Update global variable (using center point for x,y)
-                    config.system_message_area['x'] = center_x
-                    config.system_message_area['y'] = center_y
+                    config.system_message_area['x'] = rel_x
+                    config.system_message_area['y'] = rel_y
                     config.system_message_area['width'] = width
                     config.system_message_area['height'] = height
                     
@@ -4679,9 +4750,11 @@ class BotGUI:
                     picker_window.destroy()
                     self.root.deiconify()
                     
-                    print(f"System message area set to: Center ({center_x}, {center_y}), Size {width}x{height}")
-                    messagebox.showinfo("System Message Area", 
-                                      f"Center: ({center_x}, {center_y})\nSize: {width}x{height} pixels")
+                    print(f"System message area set to: ({rel_x}, {rel_y}) {width}x{height}")
+                    messagebox.showinfo(
+                        "System Message Area",
+                        f"Top-left: ({rel_x}, {rel_y})\nSize: {width}x{height} pixels",
+                    )
                     
                     # Update button text to show it's been set
                     self.update_toggle_bot_button_state()
@@ -4827,6 +4900,10 @@ class BotGUI:
             self.mob_checkbox.configure(state=state)
             if hasattr(self, 'mob_elite_skip_checkbox'):
                 self.mob_elite_skip_checkbox.configure(state=state)
+            if hasattr(self, 'mob_safe_buffs_checkbox'):
+                self.mob_safe_buffs_checkbox.configure(state=state)
+            if hasattr(self, 'self_target_entry'):
+                self.self_target_entry.configure(state='normal' if state == 'normal' else 'disabled')
             self.mob_learn_btn.configure(state=state)
             self.mob_remove_btn.configure(state=state)
             self.mob_test_btn.configure(state=state)
@@ -5204,6 +5281,7 @@ class BotGUI:
             self.hp_percent_label.configure(text=f"{int(hp_percent)}%")
             self.mp_progress_bar.set(mp_percent / 100.0)
             self.mp_percent_label.configure(text=f"{int(mp_percent)}%")
+            self._update_bars_status_label()
             
             # Read enemy HP percentage from config (updated by auto_attack in separate thread)
             # Reset enemy HP bar when auto attack is disabled

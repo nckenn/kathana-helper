@@ -18,6 +18,22 @@ MP_HSV_LOW = np.array([108, 65, 85])
 MP_HSV_HIGH = np.array([128, 255, 255])
 
 
+def build_enemy_red_mask(bgr, sat_min=90, val_min=80, hue_max=12):
+    """
+    Strict red mask for enemy/target HP bars over transparent game-world backgrounds.
+
+    Skips the R-dominant fallback used for player bars — floor bleed through empty
+    bar slots is desaturated and must not count as filled HP.
+    """
+    if bgr is None or bgr.size == 0:
+        return np.zeros((0, 0), dtype=np.uint8)
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    hue, sat, val = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
+    primary = (hue <= hue_max) & (sat >= sat_min) & (val >= val_min)
+    wrap = (hue >= 165) & (sat >= sat_min) & (val >= val_min)
+    return (primary | wrap).astype(np.uint8) * 255
+
+
 def build_red_mask(bgr):
     """Red HP bar mask — tuned HSV from game bars plus R-dominant fallback for highlights."""
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
@@ -142,6 +158,64 @@ def find_bar_bands(mask_u8):
     return bands, merged
 
 
+def band_mean_saturation(bgr, band):
+    bx, by, bw, bh = band
+    crop = bgr[by:by + bh, bx:bx + bw]
+    if crop.size == 0:
+        return 0.0
+    return float(cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)[:, :, 1].mean())
+
+
+def filter_detection_bands(bands, bgr, kind='hp'):
+    """Drop desaturated floor bleed and full-width false strips."""
+    if not bands:
+        return []
+    ew = bgr.shape[1]
+    min_sat = 70 if kind in ('hp', 'enemy_hp') else 45
+    filtered = []
+    for band in bands:
+        _bx, _by, bw, bh = band
+        if bw < 35 or bh < 4 or bh > BAR_MAX_HEIGHT + 8:
+            continue
+        if band_mean_saturation(bgr, band) < min_sat:
+            continue
+        if bw >= int(ew * 0.94) and band_mean_saturation(bgr, band) < 120:
+            continue
+        filtered.append(band)
+    return filtered
+
+
+def probe_red_bands(bgr, strict_sat=72, strict_val=58):
+    """
+    Red HP bar bands — strict saturated mask first, loose fallback if empty.
+
+    Ignores reddish floor tones that fooled the legacy loose mask.
+    """
+    strict = build_enemy_red_mask(bgr, sat_min=strict_sat, val_min=strict_val, hue_max=14)
+    bands, merged = find_bar_bands(strict)
+    bands = filter_detection_bands(bands, bgr, 'hp')
+    if bands:
+        return bands, merged
+    loose_bands, loose_merged = find_bar_bands(build_red_mask(bgr))
+    filtered = filter_detection_bands(loose_bands, bgr, 'hp')
+    if filtered:
+        return filtered, loose_merged
+    if loose_bands:
+        return loose_bands, loose_merged
+    return [], loose_merged
+
+
+def probe_blue_bands(bgr):
+    """Blue MP bar bands with saturation filter."""
+    bands, merged = find_bar_bands(build_blue_mask(bgr))
+    filtered = filter_detection_bands(bands, bgr, 'mp')
+    if filtered:
+        return filtered, merged
+    if bands:
+        return bands, merged
+    return [], merged
+
+
 def _x_overlap_ratio(red, blue):
     rx, _, rw, _ = red
     bx, _, bw, _ = blue
@@ -214,10 +288,8 @@ def find_player_hp_mp(bgr):
     Returns (hp_rect, mp_rect) as (x, y, w, h) or (None, None).
     """
     h, w = bgr.shape[:2]
-    red_mask = build_red_mask(bgr)
-    blue_mask = build_blue_mask(bgr)
-    red_bands, red_merged = find_bar_bands(red_mask)
-    blue_bands, blue_merged = find_bar_bands(blue_mask)
+    red_bands, red_merged = probe_red_bands(bgr)
+    blue_bands, blue_merged = probe_blue_bands(bgr)
 
     hp, mp = pair_player_hp_mp(red_bands, blue_bands, h, w)
     if hp and mp:

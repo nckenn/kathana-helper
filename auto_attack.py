@@ -19,6 +19,7 @@ import frame_cache
 import hp_number_reader
 import region_helpers
 import ui_bar_detection
+import loot_helpers
 
 
 # Initialize lock for thread-safe mob detection
@@ -161,7 +162,7 @@ def _detect_enemy_from_target_strip(hwnd, screen=None):
         )
         if hp_only:
             import bar_reader
-            hp_percentage = bar_reader.hp_percent_from_bgr(search_area)
+            hp_percentage = bar_reader.enemy_hp_percent_from_bgr(search_area)
             found = hp_percentage > 0.5
             cx = search_x + search_area.shape[1] // 2
             cy = search_y + search_area.shape[0] // 2
@@ -188,10 +189,12 @@ def _detect_enemy_from_target_strip(hwnd, screen=None):
         if bw < MIN_HP_BAR_WIDTH:
             return EnemyDetectionResult(found=False, screen=screen).to_dict()
 
+        import bar_reader
+        bar_crop = search_area[by:by + bh, :]
+        hp_percentage = float(bar_reader.enemy_hp_percent_from_bgr(bar_crop))
+
         enemy_x = search_x + int(bx)
         enemy_y = search_y + int(by) + int(bh // 2)
-        bar_width = max(strip_w, 1)
-        hp_percentage = float(max(0, min(100, (bw / bar_width) * 100)))
         return EnemyDetectionResult(
             found=True,
             hp=hp_percentage,
@@ -234,6 +237,7 @@ class EnemyStateManager:
         """Reset all enemy-related state variables"""
         config.enemy_target_time = 0
         config.enemy_hp_readings.clear()
+        config.enemy_hp_raw_recent.clear()
         config.last_damage_value = None
         config.last_enemy_hp_for_unstuck = None
         config.enemy_hp_stagnant_time = 0
@@ -366,7 +370,44 @@ class EnemyHpBarDetector:
 
 class EnemyHpProcessor:
     """Processes and smooths enemy HP readings"""
-    
+
+    @staticmethod
+    def temporal_filter_raw(raw_hp):
+        """2-of-3 style filter — reject single-frame HP spikes in combat."""
+        recent = config.enemy_hp_raw_recent
+        tol = float(getattr(config, 'enemy_hp_temporal_tolerance', 2.0))
+        required = int(getattr(config, 'enemy_hp_temporal_required', 2))
+        recent.append(float(raw_hp))
+        window = 3
+        if len(recent) > window:
+            recent.pop(0)
+        if len(recent) < required:
+            return float(raw_hp)
+        agree = sum(1 for v in recent if abs(v - raw_hp) <= tol)
+        if agree >= required:
+            return float(raw_hp)
+        if len(recent) >= 2:
+            return float(np.median(recent[:-1]))
+        return float(raw_hp)
+
+    @staticmethod
+    def should_treat_stale_bar_as_kill(name_present, raw_hp, current_time):
+        """Name row gone but HP pixels linger — treat as kill when streak + grace met."""
+        if name_present is not False:
+            return False
+        if float(getattr(config, 'enemy_target_time', 0) or 0) <= 0:
+            return False
+        streak_th = int(getattr(config, 'enemy_name_missing_streak_threshold', 3))
+        grace_s = float(getattr(config, 'enemy_name_missing_grace_seconds', 0.6))
+        if config.enemy_name_missing_streak < streak_th:
+            return False
+        if (current_time - config.enemy_target_time) < grace_s:
+            return False
+        stale_hp_max = float(getattr(config, 'enemy_stale_bar_hp_max', 40.0))
+        if raw_hp <= stale_hp_max:
+            return True
+        return config.enemy_name_missing_streak >= streak_th + 1
+
     @staticmethod
     def detect_enemy_death(raw_hp, hp_readings):
         """Detect if enemy died based on HP jump or low HP"""
@@ -388,11 +429,14 @@ class EnemyHpProcessor:
     
     @staticmethod
     def update_hp_readings(raw_hp, hp_readings):
-        """Update HP readings with smoothing"""
-        hp_readings.append(raw_hp)
-        if len(hp_readings) > config.HP_MP_SMOOTHING_WINDOW:
+        """Update HP readings with median smoothing (matches player HP pots)."""
+        hp_readings.append(float(raw_hp))
+        window = int(getattr(config, 'HP_MP_SMOOTHING_WINDOW', 3))
+        if len(hp_readings) > window:
             hp_readings.pop(0)
-        return sum(hp_readings) / len(hp_readings)
+        if not hp_readings:
+            return float(raw_hp)
+        return round(float(np.median(hp_readings)), 1)
     
     @staticmethod
     def update_stagnant_tracking(current_time, hp_percentage):
@@ -441,7 +485,7 @@ def detect_enemy_for_auto_attack(hwnd, screen=None):
                     hwnd, area['x'], area['y'], area['width'], area['height'],
                 )
             if region is not None and region.size > 0:
-                hp_percentage = bar_reader.hp_percent_from_bgr(region)
+                hp_percentage = bar_reader.enemy_hp_percent_from_bgr(region)
                 found = hp_percentage > 0.5
                 cx = area['x'] + area['width'] // 2
                 cy = area['y'] + area['height'] // 2
@@ -514,26 +558,21 @@ def _detect_enemy_name_presence(hwnd, screen=None):
 
 
 def _enemy_hp_red_mask(bgr):
-    """
-    Red mask for enemy HP bar detection.
-
-    Uses the general red mask but suppresses low-saturation bright pixels that show up
-    as "pink/red-ish" on light backgrounds and can linger after kills.
-    """
+    """Strict red mask for enemy HP — ignores desaturated floor bleed in empty bar slots."""
     if bgr is None or bgr.size == 0:
         return np.zeros((0, 0), dtype=np.uint8)
-    base = ui_bar_detection.build_red_mask(bgr)
-    try:
-        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-        sat = hsv[:, :, 1]
-        val = hsv[:, :, 2]
-        sat_min = int(getattr(config, 'enemy_hp_red_sat_min', 55))
-        val_min = int(getattr(config, 'enemy_hp_red_val_min', 70))
-        # Keep pixels that are sufficiently saturated and not too dim.
-        keep = (sat >= sat_min) & (val >= val_min)
-        return cv2.bitwise_and(base, keep.astype(np.uint8) * 255)
-    except Exception:
-        return base
+    import bar_color_calibration
+    cal = getattr(config, 'target_hp_bar_color_cal', None)
+    if bar_color_calibration.is_enabled(cal):
+        custom = bar_color_calibration.build_mask(bgr, cal)
+        if custom is not None:
+            return custom
+    return ui_bar_detection.build_enemy_red_mask(
+        bgr,
+        sat_min=int(getattr(config, 'enemy_hp_red_sat_min', 90)),
+        val_min=int(getattr(config, 'enemy_hp_red_val_min', 80)),
+        hue_max=int(getattr(config, 'enemy_hp_red_hue_max', 12)),
+    )
 
 # ============================================================================
 # Assist Only Mode Logic
@@ -661,7 +700,7 @@ class RetargetManager:
                 'max_recursion_reached': False
             }
 
-        if config.is_looting:
+        if config.is_looting or config.is_buffing:
             return {
                 'success': False,
                 'mob_name': None,
@@ -678,10 +717,12 @@ class RetargetManager:
                 'max_recursion_reached': True
             }
         
+        mob_filter_enabled = mob_filter.is_active()
+        if config.mob_detection_enabled:
+            mob_filter.focus_self_before_retarget()
+
         target_key = config.action_slots['target']['key']
         input_handler.send_input(target_key)
-        
-        mob_filter_enabled = mob_filter.is_active()
         
         # Trigger attack action after target action (sequence: target -> attack)
         # Only if mob filter is NOT enabled (if enabled, attack will be triggered after mob filter check)
@@ -789,8 +830,7 @@ class AutoTargetManager:
         if config.assist_only_enabled:
             return False
         
-        # Don't auto-target if we're currently looting
-        if config.is_looting:
+        if config.is_looting or config.is_buffing:
             return False
         
         if config.auto_attack_enabled:
@@ -837,6 +877,37 @@ def _mob_match_lost_during_combat(prev_match):
     )
 
 
+def _should_defer_retarget_for_buffs(hwnd):
+    """True when mob-filter safe buffs should run before retargeting a whitelisted mob."""
+    if not config.buffs_manager:
+        return False
+    if not config.mob_detection_enabled or not getattr(config, 'mob_filter_safe_buffs', True):
+        return False
+    if not config.buffs_manager._enabled_buff_indices():
+        return False
+    try:
+        screen = frame_cache.get_frame(hwnd, config.calibrator)
+        if screen is None:
+            return True
+        area = bot_logic._capture_buff_active_area(hwnd, screen, frame_cache.get_origin())
+        if area is None:
+            return True
+        return config.buffs_manager.needs_buff_refresh(area)
+    except Exception:
+        return True
+
+
+def _try_retarget_unless_buffs_pending(reason, hwnd=None):
+    """Retarget unless looting, buffing, or buff refresh should run first."""
+    if config.is_looting or config.is_buffing:
+        return False
+    if hwnd is None and config.connected_window:
+        hwnd = config.connected_window.handle
+    if hwnd and _should_defer_retarget_for_buffs(hwnd):
+        return False
+    return _auto_target_manager.try_auto_target(reason)
+
+
 def _finish_kill_with_loot(reason):
     """Trigger loot and reset combat state after a kill."""
     print(f"[Auto Attack] {reason} - triggering smart loot")
@@ -873,13 +944,17 @@ def check_auto_attack():
         return
     
     config.last_enemy_hp_capture_time = current_time
-    
-    # Block retarget / mob-filter scans while loot window is active
-    if config.is_looting:
-        if current_time - config.looting_start_time >= config.LOOTING_DURATION:
-            config.is_looting = False
-        else:
-            return
+
+    if loot_helpers.clear_expired_loot_lockout(current_time):
+        EnemyStateManager.reset_enemy_state()
+        _auto_target_manager.reset_search_timer()
+        _try_retarget_unless_buffs_pending(
+            "loot finished", config.connected_window.handle,
+        )
+        return
+
+    if config.is_looting or config.is_buffing:
+        return
 
     # Require enemy detection regions (manual pick or legacy calibrator)
     if not region_helpers.combat_detection_ready():
@@ -896,8 +971,8 @@ def check_auto_attack():
         result = detect_enemy_for_auto_attack(hwnd)
         
         if result['found']:
-            raw_enemy_hp_percentage = result['hp']
-            has_red_bar = True
+            raw_enemy_hp_percentage = EnemyHpProcessor.temporal_filter_raw(float(result['hp']))
+            has_red_bar = raw_enemy_hp_percentage > 0.5
             config.last_enemy_seen_time = current_time
             
         else:
@@ -961,9 +1036,8 @@ def check_auto_attack():
                     config.skill_sequence_manager.reset_sequence()
                 
                 # smart_loot() now handles timing and clears is_looting when done
-                # Retarget immediately if looting is complete
-                if not config.is_looting:
-                    _auto_target_manager.try_auto_target("enemy killed")
+                # Retarget immediately if looting is complete (defer if buffs pending)
+                _try_retarget_unless_buffs_pending("enemy killed", hwnd)
                 return
             
             EnemyStateManager.reset_enemy_state()
@@ -977,25 +1051,17 @@ def check_auto_attack():
             # Try auto-targeting if not looting and interval has passed
             if not config.is_looting:
                 if _auto_target_manager.should_search_for_target(current_time):
-                    _auto_target_manager.try_auto_target("no enemy detected")
-                    _auto_target_manager.update_search_timer(current_time)
+                    if _try_retarget_unless_buffs_pending("no enemy detected", hwnd):
+                        _auto_target_manager.update_search_timer(current_time)
         else:
-            # Stale HP bar case: name row is gone but red pixels linger (common right after kill).
-            # If this persists for a few frames, treat target as lost and retarget (no loot trigger).
-            streak_threshold = int(getattr(config, 'enemy_name_missing_streak_threshold', 3))
-            grace_s = float(getattr(config, 'enemy_name_missing_grace_seconds', 0.6))
-            if (name_present is False
-                    and config.enemy_target_time > 0
-                    and (current_time - config.enemy_target_time) >= grace_s
-                    and config.enemy_name_missing_streak >= streak_threshold):
+            # Stale HP bar: name row gone first; lingering bar pixels are not a live target.
+            if EnemyHpProcessor.should_treat_stale_bar_as_kill(
+                    name_present, raw_enemy_hp_percentage, current_time):
                 print(
-                    f"[Auto Attack] Target name missing for {config.enemy_name_missing_streak} frames "
-                    f"while HP bar still visible — forcing retarget"
+                    f"[Auto Attack] Target name missing ({config.enemy_name_missing_streak} frames) "
+                    f"with stale HP bar ({raw_enemy_hp_percentage:.1f}%) — treating as kill"
                 )
-                EnemyStateManager.reset_enemy_state()
-                _auto_target_manager.reset_search_timer()
-                if not config.is_looting:
-                    _auto_target_manager.try_auto_target("target name missing (stale HP)")
+                _finish_kill_with_loot("target name missing (stale HP bar)")
                 return
 
             # After a kill the mob name often clears before the HP bar.
@@ -1030,8 +1096,7 @@ def check_auto_attack():
                     _trigger_smart_loot_safe()
                     _auto_target_manager.reset_search_timer()
                     # smart_loot() now handles timing and clears is_looting when done
-                    if not config.is_looting:
-                        _auto_target_manager.try_auto_target("enemy died")
+                    _try_retarget_unless_buffs_pending("enemy died", hwnd)
                     # Reset skill sequence when enemy dies
                     if config.skill_sequence_manager:
                         config.skill_sequence_manager.reset_sequence()
@@ -1110,8 +1175,7 @@ def check_auto_attack():
                         EnemyStateManager.reset_enemy_state()
                         _auto_target_manager.reset_search_timer()
                         # smart_loot() now handles timing and clears is_looting when done
-                        if not config.is_looting:
-                            _auto_target_manager.try_auto_target("enemy died")
+                        _try_retarget_unless_buffs_pending("enemy died", hwnd)
                         # Reset skill sequence when enemy dies
                         if config.skill_sequence_manager:
                             config.skill_sequence_manager.reset_sequence()
@@ -1132,8 +1196,7 @@ def check_auto_attack():
                     EnemyStateManager.reset_enemy_state()
                     _auto_target_manager.reset_search_timer()
                     # smart_loot() now handles timing and clears is_looting when done
-                    if not config.is_looting:
-                        _auto_target_manager.try_auto_target("enemy died (low HP)")
+                    _try_retarget_unless_buffs_pending("enemy died (low HP)", hwnd)
                     if config.skill_sequence_manager:
                         config.skill_sequence_manager.reset_sequence()
                     return

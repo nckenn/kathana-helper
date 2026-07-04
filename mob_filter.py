@@ -857,6 +857,67 @@ def scan(hwnd):
     return refresh_scan(hwnd)
 
 
+_COMBAT_ENEMY_HP_MIN = 3.0
+
+
+def is_engaged_in_combat():
+    """True while fighting, looting, or enemy HP bar is still tracked."""
+    if config.is_looting:
+        return True
+    if float(getattr(config, 'enemy_target_time', 0) or 0) > 0:
+        return True
+    if len(getattr(config, 'enemy_hp_readings', [])) > 0:
+        return True
+    hp = float(getattr(config, 'current_enemy_hp_percentage', 0) or 0)
+    return hp > _COMBAT_ENEMY_HP_MIN
+
+
+def should_allow_buffs():
+    """Buffs when mob filter is on — only between kills / with no target (pots are always allowed)."""
+    if not is_active():
+        return True
+    if not getattr(config, 'mob_filter_safe_buffs', True):
+        return True
+    return not is_engaged_in_combat()
+
+
+def _clear_combat_target_state():
+    """Drop CV mob match and enemy tracking after focusing self."""
+    clear_match()
+    config.enemy_target_time = 0
+    config.enemy_hp_readings.clear()
+    config.current_enemy_hp_percentage = 0.0
+    config.current_target_mob = None
+    config.current_enemy_name = None
+    config.enemy_name_missing_streak = 0
+
+
+def focus_self_target():
+    """Press the self-target key so heals/buffs hit your character, not the mob."""
+    if not getattr(config, 'mob_detection_enabled', False):
+        return False
+    key = (getattr(config, 'self_target_key', '') or '').strip()
+    if not key:
+        return False
+    import input_handler
+    import time
+    input_handler.send_input(key)
+    delay = float(getattr(config, 'SELF_TARGET_DELAY', 0.2))
+    if delay > 0:
+        time.sleep(delay)
+    _clear_combat_target_state()
+    return True
+
+
+def focus_self_before_retarget():
+    """Clear mob target before pressing the target key (mob filter)."""
+    if not getattr(config, 'mob_detection_enabled', False):
+        return False
+    if not getattr(config, 'self_target_before_retarget', True):
+        return False
+    return focus_self_target()
+
+
 def should_allow_combat(hwnd):
     """Skills and attack only when a whitelisted mob matches."""
     if not is_active():

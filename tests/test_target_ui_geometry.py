@@ -1,7 +1,7 @@
 """Tests for enemy target strip detection (new stacked HP/MP UI)."""
 import os
 import cv2
-from calibration import Calibrator
+from calibration import Calibrator, detect_regions_from_bgr
 import hp_number_reader as hr
 
 
@@ -37,3 +37,16 @@ def test_calibration_sets_enemy_name_on_new_ui():
     x, y, w, h = rect
     assert h == hr.NAME_AREA_HEIGHT
     assert y == ncy - nh // 2
+
+
+def test_detect_regions_from_bgr_on_new_ui_fixture():
+    img = cv2.imread(FIXTURE)
+    assert img is not None
+    ok, areas, _cal = detect_regions_from_bgr(img)
+    assert ok is True
+    assert 'hp_bar_area' in areas
+    assert 'mp_bar_area' in areas
+    assert areas['hp_bar_area']['width'] >= 100
+    assert areas['mp_bar_area']['width'] >= 100
+    assert 'target_name_area' in areas
+    assert 'target_hp_bar_area' in areas

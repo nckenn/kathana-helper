@@ -33,6 +33,7 @@ def set_settings_path(path):
     """Remember which profile file Save Settings writes to."""
     global _current_settings_path
     _current_settings_path = os.path.normpath(path) if path else None
+    config.set_profile_mob_templates_dir(_current_settings_path or config.SETTINGS_FILE)
 
 
 def reset_settings_path():
@@ -106,6 +107,9 @@ def build_settings_snapshot(gui_overlay=None):
         'mob_match_threshold': config.mob_match_threshold,
         'mob_match_margin': config.mob_match_margin,
         'mob_elite_skip_enabled': config.mob_elite_skip_enabled,
+        'self_target_key': config.self_target_key,
+        'self_target_before_retarget': config.self_target_before_retarget,
+        'mob_filter_safe_buffs': config.mob_filter_safe_buffs,
         'mob_templates': [dict(entry) for entry in config.mob_templates],
         'auto_attack_enabled': config.auto_attack_enabled,
         'auto_hp_enabled': config.auto_hp_enabled,
@@ -146,8 +150,11 @@ def build_settings_snapshot(gui_overlay=None):
         },
         'hp_bar_area': dict(config.hp_bar_area),
         'mp_bar_area': dict(config.mp_bar_area),
+        'hp_bar_color_cal': dict(config.hp_bar_color_cal),
+        'mp_bar_color_cal': dict(config.mp_bar_color_cal),
         'target_name_area': dict(config.target_name_area),
         'target_hp_bar_area': dict(config.target_hp_bar_area),
+        'target_hp_bar_color_cal': dict(config.target_hp_bar_color_cal),
         'mob_scan_area': dict(config.mob_scan_area),
         'system_message_area': dict(config.system_message_area),
         'skill_area': dict(config.skill_area),
@@ -210,6 +217,14 @@ def apply_settings_dict(settings):
         config.mob_match_margin = float(settings['mob_match_margin'])
     if 'mob_elite_skip_enabled' in settings:
         config.mob_elite_skip_enabled = bool(settings['mob_elite_skip_enabled'])
+    if 'self_target_key' in settings:
+        config.self_target_key = str(settings['self_target_key'] or '`')
+    if 'self_target_before_retarget' in settings:
+        config.self_target_before_retarget = bool(settings['self_target_before_retarget'])
+    if 'mob_filter_safe_buffs' in settings:
+        config.mob_filter_safe_buffs = bool(settings['mob_filter_safe_buffs'])
+    elif 'mob_filter_safe_self_care' in settings:
+        config.mob_filter_safe_buffs = bool(settings['mob_filter_safe_self_care'])
     if 'mob_templates' in settings:
         config.mob_templates = [dict(entry) for entry in settings['mob_templates']]
 
@@ -319,7 +334,8 @@ def apply_settings_dict(settings):
                 continue
 
     for key in (
-        'hp_bar_area', 'mp_bar_area', 'target_name_area', 'target_hp_bar_area',
+        'hp_bar_area', 'mp_bar_area', 'hp_bar_color_cal', 'mp_bar_color_cal',
+        'target_name_area', 'target_hp_bar_area', 'target_hp_bar_color_cal',
         'mob_scan_area', 'system_message_area', 'skill_area', 'buff_area',
     ):
         if key in settings and isinstance(settings[key], dict):
@@ -350,11 +366,22 @@ def save_settings(gui_overlay=None, path=None):
         target_path = os.path.normpath(path) if path else get_settings_path()
         os.makedirs(os.path.dirname(target_path) or '.', exist_ok=True)
 
+        previous_path = get_settings_path()
+        previous_mob_dir = config.mob_templates_dir_for_settings(
+            previous_path or config.SETTINGS_FILE,
+        )
+
         settings = build_settings_snapshot(gui_overlay=gui_overlay)
         with open(target_path, 'w', encoding='utf-8') as f:
             json.dump(settings, f, indent=2)
 
         set_settings_path(target_path)
+
+        import mob_template_store
+        if os.path.normpath(previous_mob_dir) != os.path.normpath(config.MOB_TEMPLATES_DIR):
+            mob_template_store.copy_profile_templates(previous_mob_dir)
+        mob_template_store.materialize_templates_for_profile()
+
         logger.info(f"Settings saved to {target_path}", "Settings")
         return True
     except Exception as e:
@@ -373,8 +400,8 @@ def load_settings(path=None):
         with open(target_path, 'r', encoding='utf-8') as f:
             settings = json.load(f)
 
-        apply_settings_dict(settings)
         set_settings_path(target_path)
+        apply_settings_dict(settings)
         logger.info(f"Settings loaded from {target_path}", "Settings")
         return True
     except Exception as e:

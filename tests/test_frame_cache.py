@@ -8,12 +8,13 @@ import frame_cache
 def test_frame_cache_ttl_reuses_frame(monkeypatch):
     calls = {'n': 0}
 
-    def fake_capture(hwnd, calibrator):
+    def fake_capture(hwnd, calibrator, foreground):
         calls['n'] += 1
         import numpy as np
         return np.zeros((10, 10, 3), dtype=np.uint8), (0, 0)
 
     monkeypatch.setattr(frame_cache._frame_cache, '_capture', fake_capture)
+    monkeypatch.setattr('frame_cache.window_utils.is_game_foreground', lambda hwnd: True)
     monkeypatch.setattr(config, 'get_frame_cache_ttl', lambda: 1.0)
 
     frame_cache.invalidate()
@@ -32,17 +33,46 @@ def test_frame_cache_expires_after_ttl(monkeypatch):
 
     calls = {'n': 0}
 
-    def fake_capture(hwnd, calibrator):
+    def fake_capture(hwnd, calibrator, foreground):
         calls['n'] += 1
         import numpy as np
         return np.ones((8, 8, 3), dtype=np.uint8), (1, 2)
 
     monkeypatch.setattr(frame_cache._frame_cache, '_capture', fake_capture)
+    monkeypatch.setattr('frame_cache.window_utils.is_game_foreground', lambda hwnd: True)
     frame_cache.invalidate()
 
     frame_cache.get_frame(7, None)
     clock['t'] += 0.1
     frame_cache.get_frame(7, None)
+    assert calls['n'] == 2
+
+
+def test_frame_cache_invalidates_on_focus_change(monkeypatch):
+    import numpy as np
+
+    calls = {'n': 0}
+
+    def fake_capture(hwnd, calibrator, foreground):
+        calls['n'] += 1
+        val = 1 if foreground else 2
+        return np.full((4, 4, 3), val, dtype=np.uint8), (0, 0)
+
+    monkeypatch.setattr(frame_cache._frame_cache, '_capture', fake_capture)
+    monkeypatch.setattr(
+        'frame_cache.window_utils.is_game_foreground',
+        lambda hwnd: hwnd == 1,
+    )
+    frame_cache.invalidate()
+
+    frame_cache.get_frame(1, None)
+    assert calls['n'] == 1
+
+    monkeypatch.setattr(
+        'frame_cache.window_utils.is_game_foreground',
+        lambda hwnd: False,
+    )
+    frame_cache.get_frame(1, None)
     assert calls['n'] == 2
 
 
@@ -52,8 +82,9 @@ def test_invalidate_clears_cached_frame(monkeypatch):
     monkeypatch.setattr(
         frame_cache._frame_cache,
         '_capture',
-        lambda hwnd, calibrator: (np.zeros((4, 4, 3), dtype=np.uint8), (0, 0)),
+        lambda hwnd, calibrator, foreground: (np.zeros((4, 4, 3), dtype=np.uint8), (0, 0)),
     )
+    monkeypatch.setattr('frame_cache.window_utils.is_game_foreground', lambda hwnd: True)
     frame_cache.get_frame(1, None)
     frame_cache.invalidate()
     assert frame_cache._frame_cache._frame is None

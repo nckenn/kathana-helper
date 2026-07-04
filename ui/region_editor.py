@@ -7,6 +7,8 @@ from tkinter import messagebox
 
 import customtkinter as ctk
 
+import bar_color_calibration
+import calibration
 import config
 import region_helpers
 import window_utils
@@ -28,6 +30,13 @@ REGION_DEFS = (
     ('skill_area', 'Skill Bar', False, '#1abc9c'),
     ('buff_area', 'Buff Strip', False, '#e91e63'),
 )
+
+# region config key -> bar color calibration kind
+COLOR_CAL_BY_REGION = {
+    'hp_bar_area': bar_color_calibration.KIND_HP,
+    'mp_bar_area': bar_color_calibration.KIND_MP,
+    'target_hp_bar_area': bar_color_calibration.KIND_ENEMY_HP,
+}
 
 HANDLE_SIZE = 7
 MIN_W, MIN_H = 10, 5
@@ -77,6 +86,17 @@ class RegionEditorWindow:
         self._rect_ids = {}
         self._handle_ids = []
         self._hover_region = None
+        self._show_mask_preview = False  # auto-on while a bar row is selected
+        self._color_cals = {
+            kind: bar_color_calibration.copy_calibration(
+                getattr(config, bar_color_calibration.CONFIG_KEYS[kind]),
+            )
+            for kind in (
+                bar_color_calibration.KIND_HP,
+                bar_color_calibration.KIND_MP,
+                bar_color_calibration.KIND_ENEMY_HP,
+            )
+        }
 
         self.win = ctk.CTkToplevel(parent)
         self.win.title('Region Editor')
@@ -103,42 +123,43 @@ class RegionEditorWindow:
             pass
 
     def _build_ui(self):
-        top = ctk.CTkFrame(self.win, fg_color='transparent')
-        top.pack(fill='x', padx=12, pady=(12, 6))
+        toolbar = ctk.CTkFrame(self.win, fg_color='transparent')
+        toolbar.pack(fill='x', padx=10, pady=(8, 4))
 
-        ctk.CTkLabel(
-            top,
-            text='Click any row in the list or draw on the image. Arrow keys nudge the selected box '
-                 '(Shift = faster). Up/Down with no box selected changes list selection.',
-            font=ctk.CTkFont(size=12),
-            anchor='w',
-            wraplength=720,
-            justify='left',
-        ).pack(side='left', fill='x', expand=True)
-
-        btn_row = ctk.CTkFrame(top, fg_color='transparent')
-        btn_row.pack(side='right')
+        zoom_grp = ctk.CTkFrame(toolbar, fg_color='transparent')
+        zoom_grp.pack(side='left')
+        ctk.CTkButton(zoom_grp, text='−', width=32, height=28, command=self._zoom_out).pack(
+            side='left', padx=(0, 2),
+        )
+        self._zoom_label = ctk.CTkLabel(
+            zoom_grp, text='100%', width=48, font=ctk.CTkFont(size=11),
+        )
+        self._zoom_label.pack(side='left')
+        ctk.CTkButton(zoom_grp, text='+', width=32, height=28, command=self._zoom_in).pack(
+            side='left', padx=2,
+        )
+        ctk.CTkButton(zoom_grp, text='Fit', width=40, height=28, command=self._zoom_fit).pack(
+            side='left', padx=(6, 2),
+        )
         ctk.CTkButton(
-            btn_row, text='Refresh Capture', width=120,
+            zoom_grp, text='Refresh Capture', width=120, height=28,
             command=self._refresh_capture,
-        ).pack(side='left', padx=4)
+        ).pack(side='left', padx=(8, 2))
         ctk.CTkButton(
-            btn_row, text='Save', width=80, fg_color='#2d6a4f',
-            command=self._on_save,
-        ).pack(side='left', padx=4)
-        ctk.CTkButton(
-            btn_row, text='Cancel', width=80, fg_color=('gray70', 'gray35'),
-            command=self._on_cancel,
-        ).pack(side='left', padx=4)
+            zoom_grp, text='Auto Calibrate', width=120, height=28,
+            fg_color='#1565c0', command=self._on_auto_calibrate_all,
+        ).pack(side='left', padx=2)
 
-        zoom_row = ctk.CTkFrame(self.win, fg_color='transparent')
-        zoom_row.pack(fill='x', padx=12, pady=(0, 6))
-        ctk.CTkButton(zoom_row, text='−', width=36, command=self._zoom_out).pack(side='left')
-        self._zoom_label = ctk.CTkLabel(zoom_row, text='100%', width=64, font=ctk.CTkFont(size=12))
-        self._zoom_label.pack(side='left', padx=4)
-        ctk.CTkButton(zoom_row, text='+', width=36, command=self._zoom_in).pack(side='left')
-        ctk.CTkButton(zoom_row, text='Fit', width=48, command=self._zoom_fit).pack(side='left', padx=(8, 0))
-        ctk.CTkButton(zoom_row, text='100%', width=48, command=self._zoom_reset).pack(side='left', padx=4)
+        actions = ctk.CTkFrame(toolbar, fg_color='transparent')
+        actions.pack(side='right')
+        ctk.CTkButton(
+            actions, text='Save', width=80, height=28, fg_color='#2d6a4f',
+            command=self._on_save,
+        ).pack(side='left', padx=2)
+        ctk.CTkButton(
+            actions, text='Cancel', width=80, height=28, fg_color=('gray70', 'gray35'),
+            command=self._on_cancel,
+        ).pack(side='left', padx=2)
 
         body = ctk.CTkFrame(self.win, fg_color='transparent')
         body.pack(fill='both', expand=True, padx=12, pady=(0, 12))
@@ -151,41 +172,55 @@ class RegionEditorWindow:
             title = f'{label} *' if required else label
 
             row = ctk.CTkFrame(sidebar, fg_color='transparent')
-            row.pack(fill='x', pady=2, padx=2)
+            row.pack(fill='x', pady=1, padx=1)
 
             card = ctk.CTkFrame(row, corner_radius=6, fg_color=('gray92', 'gray22'))
             card.pack(side='left', fill='x', expand=True)
 
             inner = ctk.CTkFrame(card, fg_color='transparent')
-            inner.pack(fill='x', padx=4, pady=4)
+            inner.pack(fill='x', padx=3, pady=2)
 
-            swatch = tk.Canvas(inner, width=14, height=14, highlightthickness=0, bd=0, cursor='hand2')
-            swatch.pack(side='left', padx=(2, 6))
-            swatch_id = swatch.create_rectangle(1, 1, 13, 13, fill=color, outline=color)
+            header = ctk.CTkFrame(inner, fg_color='transparent')
+            header.pack(fill='x', anchor='w')
 
-            text_col = ctk.CTkFrame(inner, fg_color='transparent')
-            text_col.pack(side='left', fill='x', expand=True)
+            swatch = tk.Canvas(header, width=12, height=12, highlightthickness=0, bd=0, cursor='hand2')
+            swatch.pack(side='left', padx=(0, 5), pady=1)
+            swatch_id = swatch.create_rectangle(1, 1, 11, 11, fill=color, outline=color)
 
             name_lbl = ctk.CTkLabel(
-                text_col,
+                header,
                 text=title,
                 anchor='w',
                 font=ctk.CTkFont(size=11, weight='bold'),
                 text_color=('gray10', 'gray90'),
             )
-            name_lbl.pack(fill='x', anchor='w')
+            name_lbl.pack(side='left', anchor='w')
+
+            details = ctk.CTkFrame(inner, fg_color='transparent')
+            details.pack(fill='x', anchor='w', padx=(17, 0))
 
             status_lbl = ctk.CTkLabel(
-                text_col,
+                details,
                 text='○ Not set',
                 anchor='w',
                 font=ctk.CTkFont(size=10),
                 text_color=('gray50', 'gray55'),
             )
-            status_lbl.pack(fill='x', anchor='w')
+            status_lbl.pack(fill='x', anchor='w', pady=(0, 0))
+
+            pct_lbl = None
+            if key in COLOR_CAL_BY_REGION:
+                pct_lbl = ctk.CTkLabel(
+                    details,
+                    text='Draw on bar → auto-fits',
+                    anchor='w',
+                    font=ctk.CTkFont(size=10, weight='bold'),
+                    text_color=('#1565c0', '#64b5f6'),
+                )
+                pct_lbl.pack(fill='x', anchor='w', pady=(0, 0))
 
             clr = ctk.CTkButton(
-                row, text='×', width=28, height=28,
+                row, text='×', width=26, height=26,
                 fg_color=('gray75', 'gray30'),
                 hover_color=('gray65', 'gray40'),
                 state='disabled',
@@ -193,7 +228,10 @@ class RegionEditorWindow:
             )
             clr.pack(side='right', padx=(4, 0))
 
-            for widget in (card, inner, swatch, text_col, name_lbl, status_lbl):
+            bind_widgets = [card, inner, header, details, swatch, name_lbl, status_lbl]
+            if pct_lbl is not None:
+                bind_widgets.append(pct_lbl)
+            for widget in bind_widgets:
                 self._bind_row_select(widget, key)
 
             self._region_rows[key] = {
@@ -201,6 +239,7 @@ class RegionEditorWindow:
                 'card': card,
                 'name': name_lbl,
                 'status': status_lbl,
+                'pct': pct_lbl,
                 'clear': clr,
                 'swatch': swatch,
                 'swatch_id': swatch_id,
@@ -324,12 +363,153 @@ class RegionEditorWindow:
             return 'break'
 
         self._nudge_selected(dx, dy)
+        if not self._cal_kind_for_key(self._selected_key):
+            pass
+        else:
+            self._auto_calibrate_region(self._selected_key)
         return 'break'
 
     def _on_delete_key(self, event):
         if self._area_is_set(self._selected_key):
             self._clear_region(self._selected_key)
         return 'break'
+
+    def _cal_kind_for_key(self, key):
+        return COLOR_CAL_BY_REGION.get(key)
+
+    def _auto_calibrate_region(self, key):
+        """Derive bar color profile from the current region crop."""
+        kind = self._cal_kind_for_key(key)
+        if not kind:
+            return
+        crop = self._crop_region_bgr(key)
+        if crop is None:
+            self._color_cals[kind] = bar_color_calibration.empty_calibration()
+            return
+        self._color_cals[kind] = bar_color_calibration.auto_calibrate_from_region(
+            crop, kind,
+        )
+
+    def _auto_calibrate_all_bar_regions(self):
+        for key in COLOR_CAL_BY_REGION:
+            if self._area_is_set(key):
+                self._auto_calibrate_region(key)
+
+    def _auto_fit_and_calibrate_all_bar_regions(self):
+        """Re-snap rough boxes and refresh color profiles for every set bar region."""
+        if self._bgr is None:
+            return [], []
+        fitted = []
+        skipped = []
+        for key in COLOR_CAL_BY_REGION:
+            label = self._label_for(key)
+            if self._area_is_set(key):
+                self._fit_bar_region(key)
+                fitted.append(label)
+            else:
+                skipped.append(label)
+        return fitted, skipped
+
+    def _on_auto_calibrate_all(self):
+        if self._bgr is None:
+            self._set_status('Capture not ready — wait for capture or click Refresh Capture.')
+            return
+        ok, detected, _cal = calibration.detect_regions_from_bgr(self._bgr)
+        if not ok:
+            messagebox.showerror(
+                'Auto Calibrate failed',
+                'Could not find player HP/MP bars on this capture.\n\n'
+                'Try:\n'
+                '• Refresh Capture with the game visible\n'
+                '• Windowed mode (not minimized)\n'
+                '• Player HP/MP bars on screen\n'
+                '• Target a mob for enemy regions',
+                parent=self.win,
+            )
+            self._set_status('Auto Calibrate failed — HP/MP bars not found.')
+            return
+        found_labels = []
+        for key, area in detected.items():
+            self._areas[key] = _copy_area(area)
+            found_labels.append(self._label_for(key))
+        self._auto_fit_and_calibrate_all_bar_regions()
+        if self._cal_kind_for_key(self._selected_key):
+            self._show_mask_preview = True
+        self._render_image()
+        self._refresh_sidebar()
+        parts = [f'Found: {", ".join(found_labels)}.']
+        missing = [
+            self._label_for(key)
+            for key, *_ in REGION_DEFS
+            if key not in detected
+        ]
+        if missing:
+            parts.append(f'Not on capture: {", ".join(missing)}.')
+        parts.append('Adjust any box, then Save.')
+        self._set_status(' '.join(parts))
+
+    def _crop_region_bgr(self, key):
+        if self._bgr is None or not self._area_is_set(key):
+            return None
+        area = self._areas[key]
+        return self._bgr[
+            area['y']:area['y'] + area['height'],
+            area['x']:area['x'] + area['width'],
+        ]
+
+    def _preview_bar_percent(self, key, kind):
+        area = self._areas.get(key)
+        if area is None:
+            return None
+        cal = self._color_cals.get(kind)
+        return bar_color_calibration.preview_percent_for_area(
+            self._bgr, area, cal, kind,
+        )
+
+    def _fit_bar_region(self, key):
+        """Auto-snap a rough box onto the bar strip, then calibrate colors."""
+        kind = self._cal_kind_for_key(key)
+        if not kind or not self._area_is_set(key) or self._bgr is None:
+            return False
+        area = self._areas[key]
+        snapped = bar_color_calibration.snap_area_to_bar(self._bgr, area, kind)
+        if snapped:
+            self._areas[key] = snapped
+        self._auto_calibrate_region(key)
+        return snapped is not None
+
+    def _display_bgr(self):
+        if self._bgr is None:
+            return None
+        kind = self._cal_kind_for_key(self._selected_key)
+        if not self._show_mask_preview or not kind or not self._area_is_set(self._selected_key):
+            return self._bgr
+        out = self._bgr.copy()
+        area = self._areas[self._selected_key]
+        x, y, w, h = int(area['x']), int(area['y']), int(area['width']), int(area['height'])
+        crop = out[y:y + h, x:x + w]
+        if crop.size == 0:
+            return self._bgr
+        cal = self._color_cals.get(kind)
+        out[y:y + h, x:x + w] = bar_color_calibration.fill_mask_overlay(crop, cal, kind)
+        return out
+
+    def _refresh_bar_previews(self):
+        for key, kind in COLOR_CAL_BY_REGION.items():
+            widgets = self._region_rows.get(key)
+            if not widgets:
+                continue
+            pct_lbl = widgets.get('pct')
+            if pct_lbl is None:
+                continue
+            if not self._area_is_set(key) or self._bgr is None:
+                pct_lbl.configure(text='Draw on bar → auto-fits')
+                continue
+            pct = self._preview_bar_percent(key, kind)
+            if pct is None:
+                pct_lbl.configure(text='Could not read % — redraw on the bar')
+            else:
+                pct_lbl.configure(text=f'Reading: {pct:.1f}%')
 
     def _refresh_sidebar(self):
         for key, widgets in self._region_rows.items():
@@ -372,6 +552,8 @@ class RegionEditorWindow:
             else:
                 card.configure(fg_color=('gray92', 'gray22'), border_width=0)
                 name.configure(text_color=('gray45', 'gray60'))
+
+        self._refresh_bar_previews()
 
     @property
     def _scale(self):
@@ -416,8 +598,10 @@ class RegionEditorWindow:
 
     def _select_region(self, key):
         self._selected_key = key
+        self._show_mask_preview = bool(self._cal_kind_for_key(key))
         self._redraw_regions()
         self._refresh_sidebar()
+        self._render_image()
         try:
             self._canvas.focus_set()
         except tk.TclError:
@@ -427,6 +611,9 @@ class RegionEditorWindow:
         if not self._area_is_set(key):
             return
         self._areas[key] = {'x': 0, 'y': 0, 'width': 0, 'height': 0}
+        kind = self._cal_kind_for_key(key)
+        if kind:
+            self._color_cals[kind] = bar_color_calibration.empty_calibration()
         self._redraw_regions()
         self._refresh_sidebar()
         self._set_status(f'Cleared {self._label_for(key)}')
@@ -463,20 +650,22 @@ class RegionEditorWindow:
         self._img_h, self._img_w = bgr.shape[:2]
         if self._zoom == DEFAULT_ZOOM:
             self._zoom = DEFAULT_ZOOM
+        self._auto_fit_and_calibrate_all_bar_regions()
         self._render_image()
         note = f' ({method})' if method else ''
         self._set_status(
-            f'Capture {self._img_w}×{self._img_h}{note} at {int(self._zoom * 100)}% — '
-            f'click a list row, draw or drag boxes; arrow keys to nudge.',
+            f'{self._img_w}×{self._img_h}{note} · {int(self._zoom * 100)}% — '
+            f'Auto Cal or draw · arrows nudge',
         )
 
     def _render_image(self):
-        if self._bgr is None:
+        display = self._display_bgr()
+        if display is None:
             return
         disp_w = max(1, int(self._img_w * self._zoom))
         disp_h = max(1, int(self._img_h * self._zoom))
 
-        rgb = cv2.cvtColor(self._bgr, cv2.COLOR_BGR2RGB)
+        rgb = cv2.cvtColor(display, cv2.COLOR_BGR2RGB)
         if abs(self._zoom - 1.0) > 0.01:
             interp = cv2.INTER_LINEAR if self._zoom > 1.0 else cv2.INTER_AREA
             rgb = cv2.resize(rgb, (disp_w, disp_h), interpolation=interp)
@@ -742,21 +931,54 @@ class RegionEditorWindow:
             self._canvas.delete(self._preview_id)
             self._preview_id = None
 
+        finished_mode = self._drag_mode
         self._drag_mode = None
         self._drag_start = None
         self._resize_corner = None
+        key = self._selected_key
+        kind = self._cal_kind_for_key(key)
+        fitted = False
+        if self._area_is_set(key):
+            if kind and finished_mode in ('draw', 'resize', 'move'):
+                fitted = self._fit_bar_region(key)
+            elif kind:
+                self._auto_calibrate_region(key)
         self._redraw_regions()
+        if kind:
+            self._show_mask_preview = True
+        self._render_image()
         self._refresh_sidebar()
         self._on_hover(event)
 
-        area = self._areas[self._selected_key]
+        area = self._areas[key]
         if area.get('width', 0) > 0:
+            pct_txt = ''
+            if kind:
+                pct = self._preview_bar_percent(key, kind)
+                if pct is not None:
+                    pct_txt = f' — reads {pct:.1f}%'
+            fit_note = ' (auto-fitted)' if fitted else ''
             self._set_status(
-                f'{self._label_for(self._selected_key)}: ({area["x"]}, {area["y"]}) '
-                f'{area["width"]}×{area["height"]}',
+                f'{self._label_for(key)}{fit_note}: {area["width"]}×{area["height"]}'
+                f' @ ({area["x"]}, {area["y"]}){pct_txt}',
+            )
+        elif kind:
+            self._set_status(
+                f'{self._label_for(key)}: draw a rough box on the bar — auto-fits on release.',
             )
 
     def _on_save(self):
+        self._auto_calibrate_all_bar_regions()
+        warnings = bar_color_calibration.collect_region_warnings(
+            self._areas, self._bgr, self._color_cals, self._label_for,
+        )
+        if warnings:
+            body = 'Some bar regions look suspicious:\n\n' + '\n'.join(f'• {w}' for w in warnings)
+            body += '\n\nSave anyway?'
+            if not messagebox.askyesno('Check bar regions', body):
+                self._set_status('Save cancelled — adjust regions and try again.')
+                return
+
         for key, area in self._areas.items():
             target = getattr(config, key)
             if area.get('width', 0) > 0 and area.get('height', 0) > 0:
@@ -768,6 +990,13 @@ class RegionEditorWindow:
 
         region_helpers.sync_mob_scan_from_enemy_name()
         region_helpers.sync_skill_area_tuple()
+
+        for kind, cfg_key in bar_color_calibration.CONFIG_KEYS.items():
+            target = getattr(config, cfg_key)
+            target.clear()
+            target.update(bar_color_calibration.copy_calibration(
+                self._color_cals.get(kind),
+            ))
 
         try:
             import mob_filter

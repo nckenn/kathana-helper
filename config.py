@@ -3,6 +3,7 @@ Configuration file for Kathana Bot
 Contains all global variables, constants, and default settings
 """
 import os
+import re
 import sys
 
 APP_VERSION = "3.1.0"
@@ -42,8 +43,10 @@ repair_key = 'f10'  # Default repair key
 # Thresholds should be ordered from highest to lowest
 hp_thresholds = [{'threshold': 70, 'key': '0'}]  # Default single threshold
 hp_bar_area = {'x': 152, 'y': 69, 'width': 0, 'height': 0}
+hp_bar_color_cal = {'enabled': False}
 mp_threshold = 50  # Default MP threshold percentage (0-100)
 mp_bar_area = {'x': 428, 'y': 139, 'width': 0, 'height': 0}
+mp_bar_color_cal = {'enabled': False}
 
 # Bar detection settings
 BAR_DETECTION_DEBUG = False
@@ -53,7 +56,7 @@ SAVE_DEBUG_IMAGES = False
 low_cpu_mode = True
 
 # Idle + focus optimizations
-pause_when_unfocused = False  # If True, pauses vision when game isn't focused (off for multitasking/alt-tab)
+pause_when_unfocused = False  # If True, pauses bot loop when game isn't focused (optional; capture works in background)
 unfocused_sleep_seconds = 0.6
 idle_mode_enabled = True
 idle_after_seconds = 5.0  # Enter idle mode after this many seconds without an enemy
@@ -148,9 +151,16 @@ mob_verify_attempts = 3
 mob_verify_required = 2
 mob_verify_delay_s = 0.06
 last_mob_scan_time = 0
-MOB_TEMPLATES_DIR = os.path.join(app_dir(), 'mob_templates')
+# Grave/backtick — focus your character (clear mob target) before retarget/buffs when mob filter is on.
+self_target_key = '`'
+self_target_before_retarget = True
+mob_filter_safe_buffs = True  # Buffs only when not engaged in combat (pots always active)
+SELF_TARGET_DELAY = 0.2
+MOB_TEMPLATES_ROOT = os.path.join(app_dir(), 'mob_templates')
+MOB_TEMPLATES_DIR = MOB_TEMPLATES_ROOT
 target_name_area = {'x': 381, 'y': 161, 'width': 0, 'height': 0}
 target_hp_bar_area = {'x': 381, 'y': 183, 'width': 0, 'height': 0}
+target_hp_bar_color_cal = {'enabled': False}
 current_target_mob = None
 mob_images = {}
 MOB_LIST_FILE = "saved_mobs.json"
@@ -183,6 +193,32 @@ MOB_DETECTION_INTERVAL = 1.0
 # Settings file (next to exe / project root via app_dir())
 SETTINGS_FILE = os.path.join(app_dir(), "bot_settings.json")
 
+
+def profile_slug_from_settings_path(settings_path):
+    """Filesystem-safe folder name derived from a profile JSON filename."""
+    base = os.path.basename(settings_path or SETTINGS_FILE)
+    name, _ext = os.path.splitext(base)
+    safe = re.sub(r'[^\w\-.]+', '_', name).strip('._')
+    return safe or 'default'
+
+
+def mob_templates_dir_for_settings(settings_path=None):
+    """Per-profile folder for learned mob template images."""
+    path = settings_path or SETTINGS_FILE
+    return os.path.join(MOB_TEMPLATES_ROOT, profile_slug_from_settings_path(path))
+
+
+def legacy_mob_templates_dir():
+    """Old flat mob_templates folder (pre per-profile layout)."""
+    return MOB_TEMPLATES_ROOT
+
+
+def set_profile_mob_templates_dir(settings_path=None):
+    """Point MOB_TEMPLATES_DIR at the folder for the active settings profile."""
+    global MOB_TEMPLATES_DIR
+    MOB_TEMPLATES_DIR = mob_templates_dir_for_settings(settings_path)
+
+
 # HP/MP check optimization
 last_hp_log_time = 0
 last_mp_log_time = 0
@@ -202,6 +238,9 @@ SMART_LOOT_COOLDOWN = 0.2  # Cooldown between loot attempts (reduced for faster 
 is_looting = False  # Flag to prevent auto-targeting during looting
 looting_start_time = 0
 LOOTING_DURATION = 1  # Duration to prevent auto-targeting after looting starts (reduced for faster retargeting)
+is_buffing = False  # Hold retarget while refreshing buffs on self
+buffing_start_time = 0
+BUFFING_SESSION_TIMEOUT = 45.0  # Safety cap so buff session cannot block combat forever
 unstuck_timeout = 8.0
 # Min enemy HP change in percentage points (damage down or heal/bar up vs reference) resets auto-unstuck countdown.
 # Lower = slow boss chip damage still refreshes the timer; too low may flutter from bar read noise.
@@ -226,7 +265,12 @@ last_mob_verification_time = 0
 hp_readings = []
 mp_readings = []
 enemy_hp_readings = []
+enemy_hp_raw_recent = []  # Short window for temporal combat filter
 HP_MP_SMOOTHING_WINDOW = 3
+enemy_hp_temporal_tolerance = 2.0
+enemy_hp_temporal_required = 2
+enemy_hp_text_blend_weight = 0.3
+enemy_stale_bar_hp_max = 40.0
 
 # Mouse clicker system
 mouse_clicker_interval = 5.0
@@ -291,11 +335,11 @@ current_enemy_name = None
 enemy_name_missing_streak_threshold = 3
 enemy_name_missing_grace_seconds = 0.6
 
-# Enemy HP bar color guardrails (helps on light backgrounds).
-# Higher saturation threshold rejects pale/pink highlights that can look "red-ish".
+# Enemy HP bar color guardrails (transparent bars over game-world floors).
+# Floor bleed is desaturated; real bar fill is highly saturated glossy red.
 enemy_hp_red_sat_min = 90
-# Keep fairly permissive value: the bar can be dark in some scenes, but should not be near-black.
-enemy_hp_red_val_min = 70
+enemy_hp_red_val_min = 80
+enemy_hp_red_hue_max = 12
 
 # Assist Only mode (party leader determines target, only attack when enemy HP decreases)
 assist_only_enabled = False
@@ -362,6 +406,10 @@ def get_mob_scan_interval():
 buff_match_threshold = 0.7
 skill_match_threshold = 0.7
 template_match_margin = 0.05
+# Avoid buff hotkey spam when a single capture miss or cast delay hides the active icon.
+buff_inactive_miss_required = 2
+buff_press_cooldown = 4.0
+buff_activation_grace_seconds = 4.0
 
 
 def safe_update_gui(update_func):

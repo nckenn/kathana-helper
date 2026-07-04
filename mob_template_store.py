@@ -1,5 +1,6 @@
 """Save and manage mob template images on disk."""
 import os
+import shutil
 import uuid
 import cv2
 import config
@@ -124,8 +125,49 @@ def prune_missing_files():
     config.mob_templates = valid
 
 
+def _template_filenames(entry):
+    for key in ('file', 'hp_max_file'):
+        fname = entry.get(key)
+        if fname:
+            yield fname
+
+
+def copy_profile_templates(from_dir, entries=None):
+    """Copy referenced template PNGs from another profile folder into the active one."""
+    ensure_dir()
+    if not from_dir or not os.path.isdir(from_dir):
+        return
+    entries = entries if entries is not None else config.mob_templates
+    for entry in entries:
+        for fname in _template_filenames(entry):
+            src = os.path.join(from_dir, fname)
+            dest = resolve_path(fname)
+            if os.path.isfile(src) and not os.path.isfile(dest):
+                shutil.copy2(src, dest)
+
+
+def migrate_entry_from_legacy(entry):
+    """Copy a template from the legacy flat mob_templates folder into the profile folder."""
+    ensure_dir()
+    legacy_root = config.legacy_mob_templates_dir()
+    for fname in _template_filenames(entry):
+        dest = resolve_path(fname)
+        if os.path.isfile(dest):
+            continue
+        legacy = os.path.join(legacy_root, fname)
+        if os.path.isfile(legacy) and os.path.dirname(os.path.normpath(legacy)) == os.path.normpath(legacy_root):
+            shutil.copy2(legacy, dest)
+
+
+def materialize_templates_for_profile():
+    """Ensure JSON-referenced templates exist in the active profile folder."""
+    for entry in config.mob_templates:
+        migrate_entry_from_legacy(entry)
+
+
 def sync_templates_after_load():
-    """Recover orphan PNGs and renumber list order. Keeps JSON entries even if PNG is missing."""
+    """Materialize profile templates, recover orphans in this profile only, renumber."""
+    materialize_templates_for_profile()
     recover_untracked_files()
     renumber_templates()
 

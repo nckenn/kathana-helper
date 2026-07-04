@@ -25,46 +25,68 @@ def _search_origin(mp_x, mp_y):
     )
 
 
-def locate_enemy_target_strip(screen_bgr, mp_x, mp_y, mp_bar_h=None):
+def locate_enemy_target_strip(screen_bgr, mp_x, mp_y, mp_bar_h=None, mp_bar_w=None):
     """
     Detect the enemy target strip (name row + red HP bar) below the player's MP bar.
 
-    New UI stacks player (name+HP+MP) above enemy (name+HP). A fixed pixel offset from MP
-    drifts when bar heights change — scan for the next wide red HP bar instead.
+    Anchors horizontally to the player MP bar and uses strict red detection so
+    floor color behind transparent bars does not shift the search window.
     """
     if screen_bgr is None or screen_bgr.size == 0:
         return None
     if mp_bar_h is None:
         mp_bar_h = PLAYER_MP_BAR_HEIGHT
+    if mp_bar_w is None or mp_bar_w <= 0:
+        mp_bar_w = SEARCH_AREA_WIDTH
 
     screen_h, screen_w = screen_bgr.shape[:2]
-    scan_y1 = max(0, int(mp_y + mp_bar_h))
+    mp_bottom = int(mp_y + mp_bar_h)
+    scan_y1 = max(0, mp_bottom)
     scan_y2 = min(screen_h, scan_y1 + ENEMY_STRIP_SCAN_BELOW_MP)
     if scan_y2 <= scan_y1 + NAME_AREA_HEIGHT:
         return None
 
     strip_x = max(0, int(mp_x + SEARCH_AREA_OFFSET_X))
-    strip_w = min(SEARCH_AREA_WIDTH, screen_w - strip_x)
+    if mp_bar_w >= 80:
+        strip_x = max(0, int(mp_x))
+        strip_w = min(int(mp_bar_w), screen_w - strip_x)
+    else:
+        strip_w = min(SEARCH_AREA_WIDTH, screen_w - strip_x)
     if strip_w <= 0:
         return None
 
-    band = screen_bgr[scan_y1:scan_y2, strip_x:strip_x + strip_w]
-    if band.size == 0:
+    crop = screen_bgr[scan_y1:scan_y2, strip_x:strip_x + strip_w]
+    if crop.size == 0:
         return None
 
-    red_bands, _ = ui_bar_detection.find_bar_bands(ui_bar_detection.build_red_mask(band))
+    red_bands, _ = ui_bar_detection.probe_red_bands(crop, strict_sat=78, strict_val=55)
+    mp_band = (0, 0, strip_w, mp_bar_h)
+    best = None
+    best_key = None
     for bx, by, bw, bh in red_bands:
+        local = (bx, by, bw, bh)
+        overlap = ui_bar_detection._x_overlap_ratio(mp_band, local)
+        if overlap < 0.35:
+            continue
+        gap = by
+        key = (overlap, -gap, bw)
+        if best_key is None or key > best_key:
+            best_key, best = key, (bx, by, bw, bh)
+
+    if best is not None:
+        bx, by, bw, bh = best
         hp_y = scan_y1 + by
         name_y = max(0, hp_y - NAME_AREA_HEIGHT)
+        bar_left = strip_x + bx
         return {
             'name_area': (
-                strip_x + strip_w // 2,
+                bar_left + bw // 2,
                 name_y + NAME_AREA_HEIGHT // 2,
-                strip_w,
+                bw,
                 NAME_AREA_HEIGHT,
             ),
-            'hp_area': (strip_x + bx + bw // 2, hp_y + bh // 2, bw, bh),
-            'search_origin': (strip_x, name_y),
+            'hp_area': (bar_left + bw // 2, hp_y + bh // 2, bw, bh),
+            'search_origin': (bar_left, name_y),
         }
 
     name_y = max(0, int(mp_y + mp_bar_h + 5))
@@ -182,6 +204,46 @@ def _focus_red_bar(strip_bgr):
     if len(rows) == 0:
         return strip_bgr
     return strip_bgr[rows.min():rows.max() + 1, :]
+
+
+def hp_percent_from_text_anchor(strip_bgr, fill_mask=None):
+    """
+    Estimate HP% using the on-bar number overlay as the width anchor.
+
+    The right edge of the max-HP digits marks ~100%; fill mask end is current HP.
+    Returns None when overlay text is not visible.
+    """
+    if strip_bgr is None or strip_bgr.size == 0:
+        return None
+    hp_text = extract_hp_text_gray(strip_bgr)
+    if hp_text is None:
+        return None
+    bright_cols = (hp_text > 170).sum(axis=0)
+    active = np.where(bright_cols > 0)[0]
+    if len(active) < 4:
+        return None
+    anchor_right = int(active[-1]) + 1
+    if anchor_right < 8:
+        return None
+
+    bar = _focus_red_bar(strip_bgr)
+    if bar is None or bar.size == 0:
+        return None
+    h, w = bar.shape[:2]
+    if fill_mask is None:
+        fill_mask = ui_bar_detection.build_enemy_red_mask(bar, sat_min=90, val_min=80, hue_max=12)
+    if fill_mask.shape[:2] != bar.shape[:2]:
+        return None
+    min_px = max(1, int(h * 0.5))
+    col_counts = (fill_mask > 0).sum(axis=0)
+    filled = np.where(col_counts >= min_px)[0]
+    if len(filled) == 0:
+        return 0.0
+    fill_end = int(filled[-1]) + 1
+    scale = w / float(max(anchor_right, w))
+    effective_anchor = max(anchor_right, int(w * 0.85))
+    pct = fill_end / effective_anchor * 100.0 * scale
+    return round(float(max(0.0, min(100.0, pct))), 1)
 
 
 def extract_hp_text_gray(strip_bgr):

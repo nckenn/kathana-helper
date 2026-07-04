@@ -68,15 +68,15 @@ def smart_loot():
             return
 
         action_key = loot_helpers.begin_loot(current_time)
-        num_attempts = 4
-        attempt_delay = 0.1
+        num_attempts = 3
+        attempt_delay = 0.05
 
         for attempt in range(num_attempts):
             input_handler.send_input(action_key)
             if attempt < num_attempts - 1:
                 time.sleep(attempt_delay)
 
-        # Keep is_looting True until LOOTING_DURATION expires in check_auto_attack.
+        # is_looting stays True until LOOTING_DURATION expires; check_auto_attack retargets then.
 
     except Exception as e:
         logger.error(f"Smart loot error: {e}", "Loot")
@@ -84,42 +84,27 @@ def smart_loot():
 
 
 def _extract_buff_active_area(screen, origin):
-    """Legacy crop above system message when buff_area is not manually set."""
+    """Crop above system message when buff_area is not manually set."""
     import frame_cache
+    import region_helpers
+
     if screen is None:
         return None
-    sys_msg_x = config.system_message_area.get('x', 0)
-    sys_msg_y = config.system_message_area.get('y', 0)
-    sys_msg_width = config.system_message_area.get('width', 0)
-    sys_msg_height = config.system_message_area.get('height', 0)
-    if sys_msg_width <= 0 or sys_msg_height <= 0:
+    derived = region_helpers.derive_buff_area_from_system_message(
+        config.system_message_area,
+    )
+    if not derived:
         return None
-
     fh, fw = screen.shape[:2]
     full_h = fh + origin[1]
     full_w = fw + origin[0]
-    # Top-left stored regions (manual pick)
-    sys_msg_left = sys_msg_x
-    sys_msg_right = sys_msg_x + sys_msg_width
-    sys_msg_top = sys_msg_y
-    sys_msg_left = max(0, min(full_w, sys_msg_left))
-    sys_msg_right = max(0, min(full_w, sys_msg_right))
-    sys_msg_top = max(0, min(full_h, sys_msg_top))
-    buff_height_start = max(0, sys_msg_top - 44)
-    buff_height_end = sys_msg_top - 4
-    buff_width_start = sys_msg_left - 14
-    buff_width_end = sys_msg_right + 10
-    if (buff_height_start < 0 or buff_height_end > full_h
-            or buff_width_start < 0 or buff_width_end > full_w
-            or buff_height_start >= buff_height_end
-            or buff_width_start >= buff_width_end):
+    x1 = max(0, min(full_w, derived['x']))
+    y1 = max(0, min(full_h, derived['y']))
+    x2 = max(0, min(full_w, derived['x'] + derived['width']))
+    y2 = max(0, min(full_h, derived['y'] + derived['height']))
+    if x1 >= x2 or y1 >= y2:
         return None
-    return frame_cache.crop_rect(
-        screen,
-        buff_width_start, buff_height_start,
-        buff_width_end, buff_height_end,
-        origin,
-    )
+    return frame_cache.crop_rect(screen, x1, y1, x2, y2, origin)
 
 
 def _crop_buff_active_area(screen, origin):
@@ -134,6 +119,27 @@ def _crop_buff_active_area(screen, origin):
             origin,
         )
     return _extract_buff_active_area(screen, origin)
+
+
+def _capture_buff_active_area(hwnd, screen, origin):
+    """Crop buff strip from cache; fall back to direct capture when cache crop is empty."""
+    import window_utils
+
+    area = _crop_buff_active_area(screen, origin)
+    if area is not None and area.size > 0 and window_utils.capture_has_content(area):
+        return area
+
+    if config.bar_area_configured(config.buff_area):
+        a = config.buff_area
+        direct = window_utils.capture_window_region_bgr(
+            hwnd, a['x'], a['y'], a['width'], a['height'],
+        )
+        if direct is not None and direct.size > 0 and window_utils.capture_has_content(direct):
+            return direct
+
+    if area is not None and area.size > 0:
+        return area
+    return None
 
 
 def check_buffs():
@@ -151,18 +157,22 @@ def check_buffs():
 
     has_active_area = (
         config.bar_area_configured(config.buff_area)
-        or (
-            config.system_message_area
-            and config.system_message_area.get('width', 0) > 0
-        )
+        or config.bar_area_configured(config.system_message_area)
     )
     if not has_active_area:
+        return
+
+    if mob_filter.is_active() and not mob_filter.should_allow_buffs():
+        if config.buffs_manager:
+            config.buffs_manager.end_buffing_session()
         return
 
     current_time = time.time()
     if not hasattr(check_buffs, 'last_check_time'):
         check_buffs.last_check_time = 0
     buff_interval = config.get_buff_check_interval()
+    if config.is_buffing:
+        buff_interval = min(buff_interval, 0.35)
     if current_time - check_buffs.last_check_time < buff_interval:
         return
     check_buffs.last_check_time = current_time
@@ -178,13 +188,15 @@ def check_buffs():
         if screen is None:
             return
         origin = frame_cache.get_origin()
-        area_buffs_activos = _crop_buff_active_area(screen, origin)
+        area_buffs_activos = _capture_buff_active_area(hwnd, screen, origin)
         if area_buffs_activos is None:
             return
 
+        config.buffs_manager.manage_buffing_session(area_buffs_activos)
         config.buffs_manager.update_and_activate_buffs(
             hwnd, screen, None, area_buffs_activos,
             0, 0, run_active=config.bot_running)
+        config.buffs_manager.manage_buffing_session(area_buffs_activos)
     except Exception as e:
         print(f"[Buffs] Error checking buffs: {e}")
         import traceback
@@ -240,6 +252,8 @@ def reset_bot_state():
     config.last_smart_loot_time = 0
     config.is_looting = False
     config.looting_start_time = 0
+    config.is_buffing = False
+    config.buffing_start_time = 0
     config.last_repair_time = 0
     config.last_auto_repair_check_time = 0
     
@@ -289,7 +303,7 @@ def bot_loop():
                 and vs.calibrator.hp_position is not None
                 and vs.calibrator.mp_position is not None
             ):
-                if mob_filter.is_active() and vs.connected_window and not config.is_looting:
+                if mob_filter.is_active() and vs.connected_window and not config.is_looting and not config.is_buffing:
                     hwnd = vs.connected_window.handle
                     engaged = (
                         config.enemy_target_time > 0

@@ -41,6 +41,32 @@ def clear_area(area_dict):
     area_dict['height'] = 0
 
 
+def derive_buff_area_from_system_message(area):
+    """
+    Active buff icons sit in a strip directly above the system message panel.
+
+    area uses top-left x, y, width, height (Region Editor format).
+    """
+    if not config.bar_area_configured(area):
+        return None
+    left = int(area['x'])
+    top = int(area['y'])
+    width = int(area['width'])
+    buff_top = max(0, top - 44)
+    buff_bottom = top - 4
+    buff_height = buff_bottom - buff_top
+    buff_left = left
+    buff_width = width
+    if buff_width <= 0 or buff_height <= 0:
+        return None
+    return {
+        'x': buff_left,
+        'y': buff_top,
+        'width': buff_width,
+        'height': buff_height,
+    }
+
+
 def sync_mob_scan_from_enemy_name():
     """Copy enemy name pick into mob_scan_area (same size as Regions pick)."""
     if not config.bar_area_configured(config.target_name_area):
@@ -124,7 +150,10 @@ def bot_start_preflight_issues():
         for i in range(8)
     )
     if buffs_enabled and not config.bar_area_configured(config.buff_area):
-        issues.append('Buffs are enabled — set Buff Strip in Region Editor.')
+        if not config.bar_area_configured(config.system_message_area):
+            issues.append(
+                'Buffs are enabled — set Buff Strip or System Message in Region Editor.',
+            )
 
     skills_enabled = any(
         config.skill_sequence_config[i]['enabled']

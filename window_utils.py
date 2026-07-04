@@ -20,6 +20,16 @@ def get_window_rect(hwnd):
     return win32gui.GetWindowRect(hwnd)
 
 
+def is_game_foreground(hwnd):
+    """True when the game window is the active foreground window."""
+    if not hwnd:
+        return False
+    try:
+        return win32gui.GetForegroundWindow() == hwnd
+    except Exception:
+        return True
+
+
 def capture_has_content(bgr, min_mean=6.0, min_std=4.0):
     """False when capture is empty/black (common with BitBlt on DirectX games)."""
     if bgr is None or bgr.size == 0:
@@ -162,6 +172,39 @@ def capture_window_bgr(hwnd):
     return None, 'failed'
 
 
+def _capture_print_window_region(hwnd, x, y, width, height):
+    """Crop a sub-region from a PrintWindow full-window capture (works in background)."""
+    left, top, right, bottom = get_window_rect(hwnd)
+    full_w = right - left
+    full_h = bottom - top
+    if full_w <= 0 or full_h <= 0:
+        return None
+    full = _capture_print_window(hwnd, full_w, full_h)
+    if full is None:
+        return None
+    fh, fw = full.shape[:2]
+    x2 = min(fw, x + width)
+    y2 = min(fh, y + height)
+    x1 = max(0, min(x, fw - 1))
+    y1 = max(0, min(y, fh - 1))
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return full[y1:y2, x1:x2].copy()
+
+
+def _crop_region_from_full(full, x, y, width, height):
+    if full is None or not capture_has_content(full):
+        return None
+    fh, fw = full.shape[:2]
+    x2 = min(fw, x + width)
+    y2 = min(fh, y + height)
+    x1 = max(0, min(x, fw - 1))
+    y1 = max(0, min(y, fh - 1))
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return full[y1:y2, x1:x2].copy()
+
+
 def capture_window_region_bgr(hwnd, x, y, width, height):
     """Capture a window sub-region as BGR (window-image coordinates)."""
     import cv2
@@ -169,36 +212,45 @@ def capture_window_region_bgr(hwnd, x, y, width, height):
     if width <= 0 or height <= 0:
         return None
 
-    try:
-        img = _capture_bitblt_region(hwnd, x, y, width, height)
-        if img is not None and capture_has_content(img):
-            return img
-    except Exception as e:
-        print(f'Error capturing window region BGR (bitblt): {e}')
+    foreground = is_game_foreground(hwnd)
 
-    try:
-        left, top, _, _ = get_window_rect(hwnd)
-        pil = ImageGrab.grab(
-            bbox=(left + x, top + y, left + x + width, top + y + height),
-            all_screens=True,
-        )
-        if pil is not None:
-            grab = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
-            if capture_has_content(grab):
-                return grab
-    except Exception as e:
-        print(f'Error capturing window region BGR (screen): {e}')
+    if foreground:
+        try:
+            img = _capture_bitblt_region(hwnd, x, y, width, height)
+            if img is not None and capture_has_content(img):
+                return img
+        except Exception as e:
+            print(f'Error capturing window region BGR (bitblt): {e}')
+
+        # Screen grab is only valid when the game is on top — otherwise it reads overlapping windows.
+        try:
+            left, top, _, _ = get_window_rect(hwnd)
+            pil = ImageGrab.grab(
+                bbox=(left + x, top + y, left + x + width, top + y + height),
+                all_screens=True,
+            )
+            if pil is not None:
+                grab = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
+                if capture_has_content(grab):
+                    return grab
+        except Exception as e:
+            print(f'Error capturing window region BGR (screen): {e}')
+    else:
+        # Alt-tab / background: PrintWindow reads the game; screen grab would read whatever covers it.
+        for name, fn in (
+            ('printwindow', _capture_print_window_region),
+            ('bitblt', _capture_bitblt_region),
+        ):
+            try:
+                img = fn(hwnd, x, y, width, height)
+                if img is not None and capture_has_content(img):
+                    return img
+            except Exception as e:
+                print(f'Error capturing window region BGR ({name}): {e}')
 
     try:
         full, _method = capture_window_bgr(hwnd)
-        if full is not None and capture_has_content(full):
-            fh, fw = full.shape[:2]
-            x2 = min(fw, x + width)
-            y2 = min(fh, y + height)
-            x1 = max(0, min(x, fw - 1))
-            y1 = max(0, min(y, fh - 1))
-            if x2 > x1 and y2 > y1:
-                return full[y1:y2, x1:x2].copy()
+        return _crop_region_from_full(full, x, y, width, height)
     except Exception:
         pass
 

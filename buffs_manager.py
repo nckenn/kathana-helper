@@ -23,6 +23,8 @@ class BuffsManager:
     def __init__(self, num_buffs=8):
         self.buffs = [None] * num_buffs
         self.last_click_times = [0.0] * num_buffs
+        self._inactive_streak = [0] * num_buffs
+        self._pending_activation_until = [0.0] * num_buffs
         self.ui_reference = None
         # Cache last seen icon positions in the skills area to avoid full-bar scans.
         # key: resolved template path -> (x, y) in area_skills coordinates (top-left match)
@@ -44,6 +46,16 @@ class BuffsManager:
         """Set reference to UI (kept for compatibility; keys are no longer used)"""
         self.ui_reference = ui
     
+    def _enabled_buff_indices(self):
+        indices = []
+        for idx, image_path in enumerate(self.buffs):
+            if not image_path or not config.buffs_config[idx]['enabled']:
+                continue
+            if not (config.buffs_config[idx].get('key') or '').strip():
+                continue
+            indices.append(idx)
+        return indices
+
     def _buff_active_in_area(self, template, area_buffs_activos):
         """Return True if buff template is visible in the active-buffs strip."""
         if (area_buffs_activos is None or area_buffs_activos.size == 0
@@ -58,6 +70,86 @@ class BuffsManager:
             area_buffs_activos, template, threshold, margin,
         )
         return matched
+
+    def _buff_template_for_index(self, idx):
+        image_path = self.buffs[idx]
+        if not image_path:
+            return None, None
+        resolved_path = config.resolve_resource_path(image_path)
+        if not resolved_path:
+            return None, None
+        template = template_cache.get_template(resolved_path, cv2.IMREAD_COLOR)
+        return resolved_path, template
+
+    def all_buffs_active(self, area_buffs_activos, now=None):
+        """True when every enabled buff icon is visible in the active strip."""
+        if now is None:
+            now = time.time()
+        for idx in self._enabled_buff_indices():
+            _, template = self._buff_template_for_index(idx)
+            if template is None:
+                continue
+            if not self._buff_active_in_area(template, area_buffs_activos):
+                grace_until = self._pending_activation_until[idx]
+                if grace_until and now < grace_until:
+                    continue
+                return False
+        return bool(self._enabled_buff_indices())
+
+    def needs_buff_refresh(self, area_buffs_activos, now=None):
+        """True while any buff is missing or still in post-cast grace."""
+        return not self.all_buffs_active(area_buffs_activos, now=now)
+
+    def begin_buffing_session(self):
+        if config.is_buffing:
+            return
+        if config.mob_detection_enabled:
+            import mob_filter
+            mob_filter.focus_self_target()
+        config.is_buffing = True
+        config.buffing_start_time = time.time()
+        print('[Buffs] Buff session started — holding retarget until buffs are active')
+
+    def end_buffing_session(self):
+        if not config.is_buffing:
+            return
+        config.is_buffing = False
+        print('[Buffs] Buff session finished — resuming retarget')
+
+    def _retarget_after_buffs(self):
+        """Resume mob targeting after a buff session (whitelisted mobs deferred until now)."""
+        if not config.auto_attack_enabled or config.assist_only_enabled:
+            return
+        if config.is_looting:
+            return
+        import auto_attack
+        auto_attack._auto_target_manager.reset_search_timer()
+        auto_attack._auto_target_manager.try_auto_target("buffs finished")
+
+    def manage_buffing_session(self, area_buffs_activos):
+        """Start/hold/end buff session; returns True while combat retarget should wait."""
+        now = time.time()
+        was_buffing = config.is_buffing
+        if not self._enabled_buff_indices():
+            self.end_buffing_session()
+            return False
+
+        if config.is_buffing:
+            timeout = float(getattr(config, 'BUFFING_SESSION_TIMEOUT', 45.0))
+            if now - config.buffing_start_time > timeout:
+                print('[Buffs] Buff session timed out — resuming retarget')
+                self.end_buffing_session()
+                self._retarget_after_buffs()
+                return False
+
+        if self.needs_buff_refresh(area_buffs_activos, now=now):
+            self.begin_buffing_session()
+            return True
+
+        self.end_buffing_session()
+        if was_buffing:
+            self._retarget_after_buffs()
+        return False
 
     def _match_in_skills_with_hint(self, area_skills, template, resolved_path, threshold=None):
         """
@@ -153,22 +245,43 @@ class BuffsManager:
             
             debug_utils.debug_print(f'Template loaded for buff {idx + 1}, dimensions: {template.shape}', 'BuffsManager')
             
-            # Search in area_buffs_activos to check if buff is already active
             found_in_buffs = self._buff_active_in_area(template, area_buffs_activos)
             if found_in_buffs:
+                self._inactive_streak[idx] = 0
+                self._pending_activation_until[idx] = 0.0
                 debug_utils.debug_print(f'Buff {idx + 1} already active', 'BuffsManager')
-            else:
+                continue
+
+            debug_utils.debug_print(
+                f'Buff {idx + 1} not seen in active strip',
+                'BuffsManager',
+            )
+
+            self._inactive_streak[idx] += 1
+            miss_required = int(getattr(config, 'buff_inactive_miss_required', 2))
+            if self._inactive_streak[idx] < miss_required:
                 debug_utils.debug_print(
-                    f'Buff {idx + 1} in active buffs - not found',
+                    f'Buff {idx + 1} miss {self._inactive_streak[idx]}/{miss_required} — waiting',
                     'BuffsManager',
                 )
-            
-            # Activate buff if NOT found in active buffs area
-            if not found_in_buffs:
-                debug_utils.debug_print(f'Buff {idx + 1} not active, pressing key {key!r}', 'BuffsManager')
-                if now - self.last_click_times[idx] >= 0.3:
-                    print(f'[BUFF] Buff {idx + 1} not active, pressing key {key!r}')
-                    input_handler.send_input(key)
-                    self.last_click_times[idx] = now
-            else:
-                print(f'[DEBUG] Buff {idx + 1} is already active, no action needed')
+                continue
+
+            grace_until = self._pending_activation_until[idx]
+            if grace_until and now < grace_until:
+                debug_utils.debug_print(
+                    f'Buff {idx + 1} activation grace until {grace_until:.1f}',
+                    'BuffsManager',
+                )
+                continue
+
+            press_cooldown = float(getattr(config, 'buff_press_cooldown', 4.0))
+            if now - self.last_click_times[idx] < press_cooldown:
+                continue
+
+            grace_s = float(getattr(config, 'buff_activation_grace_seconds', 4.0))
+            debug_utils.debug_print(f'Buff {idx + 1} not active, pressing key {key!r}', 'BuffsManager')
+            print(f'[BUFF] Buff {idx + 1} not active, pressing key {key!r}')
+            input_handler.send_input(key)
+            self.last_click_times[idx] = now
+            self._pending_activation_until[idx] = now + grace_s
+            self._inactive_streak[idx] = 0

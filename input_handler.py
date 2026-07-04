@@ -59,11 +59,20 @@ def get_virtual_key_code(key):
         'f5': 0x74, 'f6': 0x75, 'f7': 0x76, 'f8': 0x77,
         'f9': 0x78, 'f10': 0x79, 'f11': 0x7A, 'f12': 0x7B,
         'space': 0x20, 'enter': 0x0D, 'escape': 0x1B, 'tab': 0x09,
-        'shift': 0x10, 'ctrl': 0x11, 'alt': 0x12
+        'shift': 0x10, 'ctrl': 0x11, 'alt': 0x12,
+        # US keyboard OEM / punctuation (ord('`') is 96 — not a Windows VK)
+        '`': 0xC0, 'grave': 0xC0, 'backtick': 0xC0, '~': 0xC0,
+        '-': 0xBD, '=': 0xBB, '[': 0xDB, ']': 0xDD, '\\': 0xDC,
+        ';': 0xBA, "'": 0xDE, ',': 0xBC, '.': 0xBE, '/': 0xBF,
     }
     # Extract base key if there are modifiers
     _, base_key = parse_key_with_modifiers(key)
-    return key_mappings.get(base_key.lower(), ord(base_key.upper()) if len(base_key) == 1 else 0)
+    mapped = key_mappings.get(base_key.lower())
+    if mapped is not None:
+        return mapped
+    if len(base_key) == 1 and base_key.isalnum():
+        return ord(base_key.upper())
+    return 0
 
 
 def send_silent_key(hwnd, vk_code, use_scan_code=False, modifiers=None):
@@ -145,8 +154,11 @@ def send_input(key):
                 vk_code = get_virtual_key_code(base_key)
                 
                 if vk_code:
-                    # Use scan codes for function keys (F1-F12)
-                    use_scan_code = (vk_code >= 0x70 and vk_code <= 0x7B)
+                    # F-keys and OEM punctuation often need scan codes in games
+                    use_scan_code = (
+                        0x70 <= vk_code <= 0x7B
+                        or vk_code in (0xBA, 0xBB, 0xBC, 0xBD, 0xBE, 0xBF, 0xC0, 0xDB, 0xDC, 0xDD, 0xDE)
+                    )
                     if send_silent_key(hwnd, vk_code, use_scan_code=use_scan_code, modifiers=modifiers if modifiers else None):
                         return
             except Exception as e:

@@ -13,6 +13,97 @@ import window_utils
 import ui_bar_detection
 
 
+def _best_template_match(gray_screen, gray_template, roi=None, scales=None):
+    """Multi-scale template match; returns (score, (x, y), tw, th) in screen coords."""
+    if scales is None:
+        scales = (0.88, 0.94, 1.0, 1.06)
+    sh, sw = gray_screen.shape[:2]
+    if roi:
+        rx1, ry1, rx2, ry2 = roi
+        rx1, ry1 = max(0, int(rx1)), max(0, int(ry1))
+        rx2, ry2 = min(sw, int(rx2)), min(sh, int(ry2))
+        patch = gray_screen[ry1:ry2, rx1:rx2]
+        ox, oy = rx1, ry1
+    else:
+        patch = gray_screen
+        ox, oy = 0, 0
+    ph, pw = patch.shape[:2]
+    if ph < 8 or pw < 8:
+        return -1.0, (0, 0), 0, 0
+    th0, tw0 = gray_template.shape[:2]
+    best_val, best_xy, best_tw, best_th = -1.0, (0, 0), tw0, th0
+    for scale in scales:
+        tw = max(4, int(round(tw0 * scale)))
+        th = max(4, int(round(th0 * scale)))
+        templ = cv2.resize(
+            gray_template, (tw, th),
+            interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR,
+        )
+        if ph < th or pw < tw:
+            continue
+        res = cv2.matchTemplate(patch, templ, cv2.TM_CCOEFF_NORMED)
+        _, mv, _, ml = cv2.minMaxLoc(res)
+        if mv > best_val:
+            best_val = float(mv)
+            best_xy = (int(ml[0]) + ox, int(ml[1]) + oy)
+            best_tw, best_th = tw, th
+    return best_val, best_xy, best_tw, best_th
+
+
+_CHAT_MATCH_SCALES = (0.50, 0.62, 0.75, 0.88, 0.94, 1.0, 1.06)
+
+
+def _chat_search_rois(screen_h, screen_w):
+    """Chat panel is usually bottom-left; also try right side and full frame."""
+    return (
+        (0, int(screen_h * 0.38), int(screen_w * 0.62), screen_h),
+        (int(screen_w * 0.30), int(screen_h * 0.38), screen_w, screen_h),
+        None,
+    )
+
+
+def _match_chat_ui_template(gray_screen, gray_template):
+    """Best match across bottom chat ROIs with downscaling for small captures."""
+    screen_h, screen_w = gray_screen.shape[:2]
+    best = (-1.0, (0, 0), 0, 0)
+    for roi in _chat_search_rois(screen_h, screen_w):
+        score, loc, tw, th = _best_template_match(
+            gray_screen, gray_template, roi=roi, scales=_CHAT_MATCH_SCALES,
+        )
+        if score > best[0]:
+            best = (score, loc, tw, th)
+    return best
+
+
+def _system_message_rect_from_chat_anchors(
+    screen_h, screen_w, scroll_xy, scroll_wh, mode_xy=None, mode_wh=None,
+):
+    """
+    Upper chat pane (combat / system damage log) sits above guild chat.
+
+    scroll: double-scrollbar strip (chat_bar_1). mode: Mode1 button (chat_bar_2).
+    """
+    sx, sy = scroll_xy
+    sw, sh = scroll_wh
+    chat_left = max(0, min(screen_w, sx + sw))
+    upper_top = max(0, sy + 2)
+    upper_bottom = max(upper_top + 12, sy + sh // 2 - 2)
+
+    if mode_xy is not None and mode_wh is not None:
+        mx, _my = mode_xy
+        mw, _mh = mode_wh
+        # Text/combat log spans the full chat row — through the Mode1 button on the right.
+        chat_right = max(chat_left + 20, min(screen_w, mx + mw + 6))
+    else:
+        chat_right = min(screen_w, chat_left + 320)
+
+    chat_width = max(0, chat_right - chat_left)
+    chat_height = max(0, upper_bottom - upper_top)
+    if chat_width < 30 or chat_height < 12:
+        return None
+    return chat_left, upper_top, chat_width, chat_height
+
+
 class Calibrator:
     """Handles automatic detection of HP/MP bar positions"""
     
@@ -27,7 +118,7 @@ class Calibrator:
         self.skills_spacing = None  # Spacing between skill bars in pixels
         self.skills_orientation = None  # "horizontal" or "vertical" - orientation of skill bars
         self.area_skills = None  # (x_min, y_min, x_max, y_max) for skills area
-        self.system_message_area = None  # (x, y, width, height) for system message region
+        self.system_message_area = None  # (left, top, width, height) top-left coords
         self.enemy_hp_area = None  # (x, y, width, height) for enemy HP bar area
         self.enemy_name_area = None  # (x, y, width, height) for enemy name area
         self.last_capture_path = None
@@ -517,7 +608,10 @@ class Calibrator:
             import hp_number_reader as hr
             mp_x, mp_y = self.mp_position
             mp_h = self.mp_dimensions[1] if self.mp_dimensions else hr.PLAYER_MP_BAR_HEIGHT
-            found = hr.locate_enemy_target_strip(screen_img, mp_x, mp_y, mp_bar_h=mp_h)
+            mp_w = self.mp_dimensions[0] if self.mp_dimensions else hr.SEARCH_AREA_WIDTH
+            found = hr.locate_enemy_target_strip(
+                screen_img, mp_x, mp_y, mp_bar_h=mp_h, mp_bar_w=mp_w,
+            )
             if not found:
                 print('[Calibration] Could not locate enemy target strip')
                 return (None, None)
@@ -623,108 +717,85 @@ class Calibrator:
             # Save loaded template for debugging
             self.save_debug_image(scrollbar_template, 'chat_scrollbar_loaded')
             
-            # Convert to grayscale for template matching
             gray_screen = cv2.cvtColor(screen_img, cv2.COLOR_BGR2GRAY)
             gray_template = cv2.cvtColor(scrollbar_template, cv2.COLOR_BGR2GRAY)
-            
-            # Perform template matching
-            result = cv2.matchTemplate(gray_screen, gray_template, cv2.TM_CCOEFF_NORMED)
-            
-            # Get best match location
-            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
-            
+            screen_h, screen_w = screen_img.shape[:2]
+
+            max_val, max_loc, template_w, template_h = _match_chat_ui_template(
+                gray_screen, gray_template,
+            )
             print(f'[Calibration] Chat scrollbar match: {max_val:.4f} at {max_loc}')
-            
-            # Threshold for acceptable match
-            threshold = 0.65
-            
-            if max_val >= threshold:
-                scrollbar_x, scrollbar_y = max_loc
 
-                # Optional vertical offset to nudge the scrollbar reference + chat area downward
-                # (useful if the match is slightly above the actual text region)
-                vertical_offset_px = 4
-                scrollbar_y = max(0, scrollbar_y + vertical_offset_px)
-                
-                # Calculate system message area
-                # In your UI, the scrollbar sits on the LEFT edge of the chat panel.
-                # The actual system message/chat text region is to the RIGHT of the scrollbar
-                # and should have the SAME height as the scrollbar.
-                
-                screen_h, screen_w = screen_img.shape[:2]
-                
-                # Height is exactly the scrollbar height (clamped to screen)
-                # Can be reduced via SYSTEM_MESSAGE_HEIGHT_REDUCTION config
-                chat_top = max(0, scrollbar_y)
-                chat_bottom = min(screen_h, scrollbar_y + template_h)
-                chat_height = max(0, chat_bottom - chat_top)
-                
-                # Apply height reduction if configured (reduces from bottom)
-                if config.SYSTEM_MESSAGE_HEIGHT_REDUCTION > 0:
-                    chat_height = max(10, chat_height - config.SYSTEM_MESSAGE_HEIGHT_REDUCTION)  # Minimum 10px height
-                    chat_bottom = chat_top + chat_height
-                
-                # Calculate center Y position (after any height reduction)
-                chat_center_y = chat_top + chat_height // 2
+            scroll_threshold = 0.52
+            anchor_path = config.resolve_resource_path('chat_bar_2.png')
+            if anchor_path is None:
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                anchor_path = os.path.join(current_dir, 'chat_bar_2.png')
 
-                # Text region begins immediately to the right of the scrollbar (no gap)
-                gap_from_scrollbar = 0
-                chat_left = scrollbar_x + template_w + gap_from_scrollbar
-                chat_left = max(0, min(screen_w, chat_left))
-
-                # Determine the RIGHT boundary by locating a second UI anchor (`chat_bar_2.png`)
-                # This is more stable than scanning for dark pixels.
-                anchor_path = config.resolve_resource_path('chat_bar_2.png')
-                
-                if anchor_path is None:
-                    # Fallback to old method for development
-                    current_dir = os.path.dirname(os.path.abspath(__file__))
-                    anchor_path = os.path.join(current_dir, 'chat_bar_2.png')
-                
-                anchor_template = None
-                anchor_loc = None
-                anchor_w = 0
-                anchor_h = 0
-
-                if anchor_path and os.path.exists(anchor_path):
-                    anchor_template = cv2.imread(anchor_path)
-                    if anchor_template is not None:
-                        anchor_h, anchor_w = anchor_template.shape[:2]
-                        self.save_debug_image(anchor_template, 'chat_bar_2_loaded')
-
-                        gray_anchor = cv2.cvtColor(anchor_template, cv2.COLOR_BGR2GRAY)
-                        anchor_result = cv2.matchTemplate(gray_screen, gray_anchor, cv2.TM_CCOEFF_NORMED)
-                        _, anchor_max_val, _, anchor_max_loc = cv2.minMaxLoc(anchor_result)
-                        print(f'[Calibration] Char bar 2 match: {anchor_max_val:.4f} at {anchor_max_loc}')
-
-                        anchor_threshold = 0.60
-                        if anchor_max_val >= anchor_threshold:
-                            anchor_loc = anchor_max_loc
-                        else:
-                            print(f'[Calibration] Warning: chat_bar_2 match below threshold ({anchor_max_val:.4f} < {anchor_threshold})')
-                    else:
-                        print(f'[Calibration] ERROR: Could not load image {anchor_path}')
+            mode_loc = None
+            mode_wh = None
+            mode_score = -1.0
+            if anchor_path and os.path.exists(anchor_path):
+                anchor_template = cv2.imread(anchor_path)
+                if anchor_template is not None:
+                    self.save_debug_image(anchor_template, 'chat_bar_2_loaded')
+                    gray_anchor = cv2.cvtColor(anchor_template, cv2.COLOR_BGR2GRAY)
+                    mode_score, mode_loc, mode_w, mode_h = _match_chat_ui_template(
+                        gray_screen, gray_anchor,
+                    )
+                    mode_wh = (mode_w, mode_h)
+                    print(f'[Calibration] Mode1 anchor match: {mode_score:.4f} at {mode_loc}')
                 else:
-                    print(f'[Calibration] Warning: File {anchor_path} does not exist')
+                    print(f'[Calibration] ERROR: Could not load image {anchor_path}')
+            else:
+                print(f'[Calibration] Warning: File {anchor_path} does not exist')
 
-                # Compute width based on distance from scrollbar to the anchor
-                # If anchor is found, we use its RIGHT edge as the boundary (with a small margin).
-                right_margin_from_anchor = 2
-                if anchor_loc is not None:
-                    anchor_x, anchor_y = anchor_loc
-                    chat_right = max(chat_left, (anchor_x + anchor_w) - right_margin_from_anchor)
+            mode_threshold = 0.50
+            mode_ok = mode_score >= mode_threshold and mode_loc is not None
+            scroll_ok = max_val >= scroll_threshold
+
+            if scroll_ok or mode_ok:
+                if scroll_ok:
+                    scrollbar_x, scrollbar_y = max_loc
+                    scrollbar_y = max(0, scrollbar_y + 4)
+                    scroll_xy = (scrollbar_x, scrollbar_y)
+                    scroll_wh = (template_w, template_h)
                 else:
-                    # Fallback if anchor not found: keep a conservative width
-                    chat_right = min(screen_w, chat_left + 320)
+                    mx, my = mode_loc
+                    mw, mh = mode_wh
+                    est_h = max(80, min(220, int(screen_h * 0.35)))
+                    scroll_xy = (max(0, mx - mw - 300), max(0, my - est_h))
+                    scroll_wh = (template_w, est_h)
+                    print('[Calibration] Scrollbar weak — estimating from Mode1 anchor')
 
-                chat_width = max(0, chat_right - chat_left)
+                rect = _system_message_rect_from_chat_anchors(
+                    screen_h,
+                    screen_w,
+                    scroll_xy,
+                    scroll_wh,
+                    mode_loc if mode_ok else None,
+                    mode_wh if mode_ok else None,
+                )
+                if rect is None and scroll_ok:
+                    scrollbar_x, scrollbar_y = scroll_xy
+                    chat_left = scrollbar_x + scroll_wh[0]
+                    half_h = max(12, scroll_wh[1] // 2 - 2)
+                    rect = (
+                        chat_left,
+                        scrollbar_y + 2,
+                        min(screen_w, chat_left + 320) - chat_left,
+                        half_h,
+                    )
 
-                # Calculate center and dimensions for system_message_area format
-                chat_center_x = chat_left + chat_width // 2
-                # chat_center_y is already calculated above (after height reduction if any)
-                
-                # Store as (x, y, width, height) where x,y is center
-                self.system_message_area = (chat_center_x, chat_center_y, chat_width, chat_height)
+                if rect is None:
+                    print('[Calibration] Could not compute system message rect from anchors')
+                    return None
+
+                chat_left, chat_top, chat_width, chat_height = rect
+                chat_bottom = chat_top + chat_height
+                scrollbar_x, scrollbar_y = scroll_xy
+                template_w, template_h = scroll_wh
+                self.system_message_area = (chat_left, chat_top, chat_width, chat_height)
                 
                 # Create debug image showing found scrollbar and calculated area
                 debug_img = screen_img.copy()
@@ -752,15 +823,18 @@ class Calibrator:
                 except Exception:
                     pass
 
-                # Draw anchor location if found
-                if anchor_loc is not None and anchor_w > 0 and anchor_h > 0:
-                    ax, ay = anchor_loc
-                    cv2.rectangle(debug_img, (ax, ay), (ax + anchor_w, ay + anchor_h), (0, 255, 255), 2)
+                if mode_ok and mode_loc is not None and mode_wh is not None:
+                    ax, ay = mode_loc
+                    mw, mh = mode_wh
+                    cv2.rectangle(debug_img, (ax, ay), (ax + mw, ay + mh), (0, 255, 255), 2)
                 
                 self.save_debug_image(debug_img, 'system_message_area_found')
                 
                 print(f'[Calibration] Chat scrollbar found at: {max_loc}')
-                print(f'[Calibration] System message area calculated: center=({chat_center_x}, {chat_center_y}), size={chat_width}x{chat_height}')
+                print(
+                    f'[Calibration] System message area: top-left=({chat_left}, {chat_top}), '
+                    f'size={chat_width}x{chat_height}',
+                )
                 
                 return self.system_message_area
             else:
@@ -769,8 +843,13 @@ class Calibrator:
                 
                 # Create debug image showing failed match
                 debug_img = screen_img.copy()
-                cv2.rectangle(debug_img, max_loc, 
-                             (max_loc[0] + template_w, max_loc[1] + template_h), (0, 0, 255), 2)
+                sx, sy = max_loc
+                cv2.rectangle(
+                    debug_img,
+                    (sx, sy),
+                    (sx + template_w, sy + template_h),
+                    (0, 0, 255), 2,
+                )
                 self.save_debug_image(debug_img, 'system_message_area_not_found')
                 
                 return None
@@ -781,7 +860,69 @@ class Calibrator:
             traceback.print_exc()
             self.save_debug_image(screen_img, 'system_message_area_error')
             return None
-    
+
+    @staticmethod
+    def _center_rect_to_area(cx, cy, width, height):
+        w, h = int(width), int(height)
+        return {
+            'x': int(cx) - w // 2,
+            'y': int(cy) - h // 2,
+            'width': w,
+            'height': h,
+        }
+
+    def export_region_areas(self):
+        """Export detected regions as config-style {x, y, width, height} dicts."""
+        areas = {}
+        if self.hp_position and self.hp_dimensions:
+            x, y = self.hp_position
+            w, h = self.hp_dimensions
+            areas['hp_bar_area'] = {'x': int(x), 'y': int(y), 'width': int(w), 'height': int(h)}
+        if self.mp_position and self.mp_dimensions:
+            x, y = self.mp_position
+            w, h = self.mp_dimensions
+            areas['mp_bar_area'] = {'x': int(x), 'y': int(y), 'width': int(w), 'height': int(h)}
+        if self.enemy_name_area:
+            cx, cy, w, h = self.enemy_name_area
+            areas['target_name_area'] = self._center_rect_to_area(cx, cy, w, h)
+        if self.enemy_hp_area:
+            cx, cy, w, h = self.enemy_hp_area
+            areas['target_hp_bar_area'] = self._center_rect_to_area(cx, cy, w, h)
+        if self.area_skills:
+            x1, y1, x2, y2 = self.area_skills
+            areas['skill_area'] = {
+                'x': int(x1), 'y': int(y1),
+                'width': int(x2 - x1), 'height': int(y2 - y1),
+            }
+        if self.system_message_area:
+            x, y, w, h = self.system_message_area
+            areas['system_message_area'] = {
+                'x': int(x), 'y': int(y), 'width': int(w), 'height': int(h),
+            }
+        if areas.get('system_message_area'):
+            import region_helpers
+            buff = region_helpers.derive_buff_area_from_system_message(
+                areas['system_message_area'],
+            )
+            if buff:
+                areas['buff_area'] = buff
+        return areas
+
+    def calibrate_from_image(self, screen_img):
+        """
+        Run full region detection on an existing BGR capture (no window capture).
+
+        Returns True when player HP/MP bars are found (minimum for success).
+        """
+        if screen_img is None or screen_img.size == 0:
+            return False
+        if not self.find_bars(screen_img):
+            return False
+        self.find_skill_bars(screen_img)
+        self.find_enemy_hp_and_name_area(screen_img)
+        self.find_system_message_area(screen_img)
+        return True
+
     def calibrate(self, hwnd):
         """
         Perform calibration by capturing the window and finding bars
@@ -1119,3 +1260,19 @@ class Calibrator:
         except Exception as e:
             print(f'[Calibration] Error calculating MP percentage: {e}')
             return 0
+
+
+def detect_regions_from_bgr(bgr):
+    """
+    Auto-detect UI regions on a window capture.
+
+    Returns (success, areas_dict, calibrator). areas_dict maps config keys to
+    {x, y, width, height}; optional regions are omitted when not found.
+    """
+    import bar_color_calibration as bcc
+
+    cal = Calibrator()
+    if not cal.calibrate_from_image(bgr):
+        return False, {}, cal
+    areas = bcc.refine_detected_bar_areas(bgr, cal.export_region_areas())
+    return True, areas, cal
