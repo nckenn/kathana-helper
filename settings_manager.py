@@ -127,6 +127,12 @@ def build_settings_snapshot(gui_overlay=None):
         'break_warning_trigger_count': config.BREAK_WARNING_TRIGGER_COUNT,
         'auto_change_target_enabled': config.auto_change_target_enabled,
         'unstuck_timeout': config.unstuck_timeout,
+        'auto_rotate_enabled': config.auto_rotate_enabled,
+        'auto_rotate_interval': config.auto_rotate_interval,
+        'auto_rotate_drag_pixels': config.auto_rotate_drag_pixels,
+        'auto_rotate_step_pixels': config.auto_rotate_step_pixels,
+        'auto_rotate_move_delay': config.auto_rotate_move_delay,
+        'auto_rotate_direction': config.auto_rotate_direction,
         'is_mage': config.is_mage,
         'assist_only_enabled': config.assist_only_enabled,
         'assist_key': config.assist_key,
@@ -243,6 +249,19 @@ def apply_settings_dict(settings):
         config.auto_change_target_enabled = settings['auto_change_target_enabled']
     if 'unstuck_timeout' in settings:
         config.unstuck_timeout = settings['unstuck_timeout']
+
+    if 'auto_rotate_enabled' in settings:
+        config.auto_rotate_enabled = bool(settings['auto_rotate_enabled'])
+    if 'auto_rotate_interval' in settings:
+        config.auto_rotate_interval = float(settings['auto_rotate_interval'])
+    if 'auto_rotate_drag_pixels' in settings:
+        config.auto_rotate_drag_pixels = int(settings['auto_rotate_drag_pixels'])
+    if 'auto_rotate_step_pixels' in settings:
+        config.auto_rotate_step_pixels = int(settings['auto_rotate_step_pixels'])
+    if 'auto_rotate_move_delay' in settings:
+        config.auto_rotate_move_delay = float(settings['auto_rotate_move_delay'])
+    if 'auto_rotate_direction' in settings:
+        config.auto_rotate_direction = 1 if int(settings['auto_rotate_direction']) >= 0 else -1
 
     if 'auto_hp_enabled' in settings:
         config.auto_hp_enabled = settings['auto_hp_enabled']

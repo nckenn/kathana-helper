@@ -27,6 +27,18 @@ MOVEMENT_DELAY = 0.05  # Delay between movements
 COLOR_SAFE_THRESHOLD = 0.5  # Green when > 50% remaining
 COLOR_WARNING_THRESHOLD = 0.25  # Yellow when > 25% remaining, red otherwise
 
+# Background input is the default; if this many unstuck movements in a row fail to
+# clear the stuck state (background messages ignored by the game), escalate to
+# foreground real input for subsequent unstuck movement.
+FOREGROUND_ESCALATE_AFTER = 2
+_consecutive_unstucks = 0
+
+
+def reset_escalation():
+    """Reset the background→foreground movement escalation counter."""
+    global _consecutive_unstucks
+    _consecutive_unstucks = 0
+
 
 # ============================================================================
 # Helper Classes
@@ -104,20 +116,24 @@ class UnstuckExecutor:
     """Handles unstuck movement execution"""
     
     @staticmethod
-    def execute_movement_sequence():
-        """Execute random movement sequence to unstick character"""
+    def execute_movement_sequence(foreground=False):
+        """Execute random movement sequence to unstick character.
+
+        foreground=True routes movement through real focused input (the fallback for
+        games that ignore background/message movement)."""
         num_movements = random.randint(MOVEMENT_COUNT_MIN, MOVEMENT_COUNT_MAX)
-        
-        # Start movement sequence (sets foreground once)
-        input_handler.start_movement_sequence()
-        
+
+        # Start movement sequence (focuses the game once only in foreground mode)
+        input_handler.start_movement_sequence(foreground=foreground)
+
         try:
             for _ in range(num_movements):
                 key = random.choice(MOVEMENT_KEYS)
-                input_handler.send_movement_key(key, hold_duration=MOVEMENT_HOLD_DURATION)
+                input_handler.send_movement_key(
+                    key, hold_duration=MOVEMENT_HOLD_DURATION, foreground=foreground)
                 time.sleep(MOVEMENT_DELAY)
         finally:
-            # End movement sequence (restores foreground at end)
+            # End movement sequence (restores foreground at end, if it was taken)
             input_handler.end_movement_sequence()
     
     @staticmethod
@@ -136,14 +152,21 @@ class UnstuckExecutor:
     @staticmethod
     def execute_unstuck(current_hp, time_stagnant):
         """Execute complete unstuck sequence"""
+        global _consecutive_unstucks
+        _consecutive_unstucks += 1
+        # If background movement hasn't cleared the stuck state after a couple of tries,
+        # the game is likely ignoring message input — escalate to foreground real input.
+        foreground = _consecutive_unstucks >= FOREGROUND_ESCALATE_AFTER
+
         print(
             f"[Auto Unstuck] Enemy HP stagnant at {current_hp:.1f}% for "
-            f"{time_stagnant:.1f}s (timeout: {config.unstuck_timeout}s) - Unstucking..."
+            f"{time_stagnant:.1f}s (timeout: {config.unstuck_timeout}s) - Unstucking"
+            f"{' (foreground fallback)' if foreground else ''}..."
         )
-        
-        # Execute movement sequence
-        UnstuckExecutor.execute_movement_sequence()
-        
+
+        # Execute movement sequence (foreground fallback after repeated failures)
+        UnstuckExecutor.execute_movement_sequence(foreground=foreground)
+
         # Retarget after movement
         UnstuckExecutor.retarget_after_unstuck()
         
@@ -279,9 +302,11 @@ def check_auto_unstuck():
         current_hp = HpStagnantTracker.get_current_hp()
         if current_hp is None:
             return
-        
-        # Update HP tracking
-        HpStagnantTracker.update_tracking(current_time, current_hp)
+
+        # Update HP tracking. If HP moved meaningfully, combat is progressing again —
+        # reset the foreground-escalation streak.
+        if HpStagnantTracker.update_tracking(current_time, current_hp):
+            reset_escalation()
         
         # Check if HP has been stagnant for the timeout period
         is_stagnant, time_stagnant = HpStagnantTracker.is_stagnant(current_time)

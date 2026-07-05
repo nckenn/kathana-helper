@@ -7,6 +7,7 @@ import input_handler
 import auto_attack
 import auto_repair
 import auto_unstuck
+import auto_rotate
 import auto_pots
 import logger
 import state
@@ -249,6 +250,8 @@ def reset_bot_state():
     config.last_mob_detection_time = 0
     config.current_target_mob = None
     config.mouse_clicker_last_used = 0
+    auto_rotate.reset()
+    auto_unstuck.reset_escalation()
     config.last_smart_loot_time = 0
     config.is_looting = False
     config.looting_start_time = 0
@@ -342,6 +345,8 @@ def bot_loop():
                 
                 if config.auto_change_target_enabled:
                     auto_unstuck.check_auto_unstuck()
+                if config.auto_rotate_enabled:
+                    auto_rotate.check_auto_rotate()
                 check_skill_slots()  # Lightweight - just checks intervals
                 if config.auto_repair_enabled:
                     auto_repair.check_auto_repair()

@@ -278,6 +278,19 @@ mouse_clicker_use_cursor = True
 mouse_clicker_coords = {'x': 0, 'y': 0}
 mouse_clicker_last_used = 0
 
+# Auto Rotate Camera — hold right-click + drag to spin the view on a fixed
+# interval, so nameplate OCR / template matching isn't fooled by the background
+# behind it (and occluded mobs come into view). Interval-based (not target-based)
+# because a mis-read target can still register as "have target". See auto_rotate.py.
+auto_rotate_enabled = False
+auto_rotate_interval = 8.0         # Seconds between camera rotations
+auto_rotate_drag_pixels = 220      # Horizontal mouse travel per rotation (~turn amount)
+auto_rotate_step_pixels = 20       # Per-move increment (smaller = smoother drag)
+auto_rotate_move_delay = 0.02      # Pause between steps (smooth, steady rotation)
+auto_rotate_direction = 1          # 1 = spin right/clockwise, -1 = left
+last_auto_rotate_time = 0
+_auto_rotate_accum_pixels = 0      # Accumulated travel, for ~360° sweep logging
+
 # Thread-safe GUI update queue
 import queue
 gui_update_queue = queue.Queue(maxsize=200)
@@ -400,6 +413,22 @@ def get_mob_scan_interval():
     if is_idle():
         return 0.80
     return 0.65 if low_cpu_mode else 0.50
+
+
+# High-Precision Input — key press hold time (keydown → keyup) in milliseconds.
+# Applies to every key the bot sends, including numeric 1–0 and F1–F10. Fixed
+# internal default (not shown in the UI); tune here if a game misses fast presses
+# (higher = more reliable registration; lower = snappier, lower-latency input).
+key_press_delay_ms = 20
+
+
+def get_key_press_delay_seconds():
+    """Configured key hold time as seconds, clamped to a sane 0–500 ms range."""
+    try:
+        ms = float(key_press_delay_ms)
+    except (TypeError, ValueError):
+        ms = 20.0
+    return max(0.0, min(500.0, ms)) / 1000.0
 
 
 # Template matching thresholds (buffs, skills, skill bar icons)

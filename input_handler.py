@@ -12,6 +12,7 @@ import debug_utils
 
 # Movement sequence state tracking
 _movement_sequence_active = False
+_movement_sequence_foreground = False
 _previous_foreground_hwnd = None
 
 
@@ -93,15 +94,21 @@ def send_silent_key(hwnd, vk_code, use_scan_code=False, modifiers=None):
             'Shift': 0x10,  # VK_SHIFT
             'Alt': 0x12     # VK_MENU (Alt)
         }
-        
-        # Press modifier keys first
+
+        # High-precision, user-configurable key hold time (keydown -> keyup).
+        hold = config.get_key_press_delay_seconds()
+        # Ctrl/Alt/Shift + key: settle the modifier for the same configured time,
+        # with a small floor so the combo still registers even at a 0 ms hold.
+        mod_settle = max(hold, 0.005)
+
+        # Press modifier keys first (Ctrl/Alt/Shift) and let them register.
         if modifiers:
             for mod in modifiers:
                 if mod in modifier_codes:
                     mod_vk = modifier_codes[mod]
                     win32api.SendMessage(hwnd, win32con.WM_KEYDOWN, mod_vk, 0)
-            sleep(0.01)  # Small delay to ensure modifiers are registered
-        
+            sleep(mod_settle)  # Hold modifier(s) down before the base key
+
         # Handle function keys with scan codes if requested
         if use_scan_code and vk_code >= 0x70 and vk_code <= 0x7B:  # F1-F12
             try:
@@ -112,23 +119,23 @@ def send_silent_key(hwnd, vk_code, use_scan_code=False, modifiers=None):
                 lparam_up = 3221225473 | scan_code << 16
                 # Use PostMessage for function keys (asynchronous, better for some games)
                 win32api.PostMessage(hwnd, win32con.WM_KEYDOWN, vk_code, lparam_down)
-                sleep(0.08)
+                sleep(hold)
                 win32api.PostMessage(hwnd, win32con.WM_KEYUP, vk_code, lparam_up)
             except Exception as e:
                 print(f"Error using scan code, falling back to simple method: {e}")
                 # Fallback to standard method
                 win32api.SendMessage(hwnd, win32con.WM_KEYDOWN, vk_code, 0)
-                sleep(0.01)
+                sleep(hold)
                 win32api.SendMessage(hwnd, win32con.WM_KEYUP, vk_code, 0)
         else:
             # Standard method for regular keys (use SendMessage for synchronous behavior)
             win32api.SendMessage(hwnd, win32con.WM_KEYDOWN, vk_code, 0)
-            sleep(0.01)
+            sleep(hold)
             win32api.SendMessage(hwnd, win32con.WM_KEYUP, vk_code, 0)
         
-        # Release modifier keys
+        # Release modifier keys (after the base key, reverse order)
         if modifiers:
-            sleep(0.01)  # Small delay before releasing modifiers
+            sleep(mod_settle)  # Keep modifier(s) down through the base key press
             for mod in reversed(modifiers):  # Release in reverse order
                 if mod in modifier_codes:
                     mod_vk = modifier_codes[mod]
@@ -182,12 +189,16 @@ def send_input(key):
                         base_key_pyd = part.strip()
                 
                 if base_key_pyd:
-                    # Hold modifiers, press key, release modifiers
+                    # Hold modifiers, hold the base key for the configured time, release
+                    hold = config.get_key_press_delay_seconds()
+                    mod_settle = max(hold, 0.005)
                     for mod in modifiers_pyd:
                         pydirectinput.keyDown(mod)
-                    sleep(0.01)
-                    pydirectinput.press(base_key_pyd.lower())
-                    sleep(0.01)
+                    sleep(mod_settle)
+                    pydirectinput.keyDown(base_key_pyd.lower())
+                    sleep(hold)
+                    pydirectinput.keyUp(base_key_pyd.lower())
+                    sleep(mod_settle)
                     for mod in reversed(modifiers_pyd):
                         pydirectinput.keyUp(mod)
                     return
@@ -212,12 +223,16 @@ def send_input(key):
                         base_key_pyd = part.strip()
                 
                 if base_key_pyd:
-                    # Hold modifiers, press key, release modifiers
+                    # Hold modifiers, hold the base key for the configured time, release
+                    hold = config.get_key_press_delay_seconds()
+                    mod_settle = max(hold, 0.005)
                     for mod in modifiers_pyd:
                         pydirectinput.keyDown(mod)
-                    sleep(0.01)
-                    pydirectinput.press(base_key_pyd.lower())
-                    sleep(0.01)
+                    sleep(mod_settle)
+                    pydirectinput.keyDown(base_key_pyd.lower())
+                    sleep(hold)
+                    pydirectinput.keyUp(base_key_pyd.lower())
+                    sleep(mod_settle)
                     for mod in reversed(modifiers_pyd):
                         pydirectinput.keyUp(mod)
                     return
@@ -227,69 +242,245 @@ def send_input(key):
         print(f"Error sending input {key}: {e}")
 
 
-def start_movement_sequence():
-    """Start a movement sequence - sets foreground window once at the start"""
-    global _movement_sequence_active, _previous_foreground_hwnd
+def _post_key_hold(hwnd, vk_code, hold_duration):
+    """Hold a key down via window messages only (no focus steal, works in background).
+
+    Sends WM_KEYDOWN, then repeated auto-repeat WM_KEYDOWNs for the hold duration so
+    message-reading games keep the key 'held' (movement keeps going), then WM_KEYUP.
+    """
     try:
-        if config.connected_window:
+        from ctypes import windll
+        scan = windll.user32.MapVirtualKeyW(vk_code, 0)
+    except Exception:
+        scan = 0
+    lp_down = 1 | (scan << 16)
+    lp_repeat = 1 | (scan << 16) | (1 << 30)          # bit 30 = key was already down
+    lp_up = 1 | (scan << 16) | (1 << 30) | (1 << 31)  # bit 31 = transition to up
+    win32api.PostMessage(hwnd, win32con.WM_KEYDOWN, vk_code, lp_down)
+    reps = max(1, int(hold_duration / 0.03))
+    for _ in range(reps):
+        sleep(0.03)
+        win32api.PostMessage(hwnd, win32con.WM_KEYDOWN, vk_code, lp_repeat)
+    win32api.PostMessage(hwnd, win32con.WM_KEYUP, vk_code, lp_up)
+
+
+# Raw mouse-event flags (foreground fallback: games read camera look via real motion).
+_MOUSEEVENTF_MOVE = 0x0001
+_MOUSEEVENTF_RIGHTDOWN = 0x0008
+_MOUSEEVENTF_RIGHTUP = 0x0010
+
+
+def start_movement_sequence(foreground=False):
+    """Begin a movement sequence. Background (default) needs no focus; the foreground
+    fallback focuses the game once so a burst of movement keys reaches it."""
+    global _movement_sequence_active, _previous_foreground_hwnd, _movement_sequence_foreground
+    _movement_sequence_active = True
+    _movement_sequence_foreground = bool(foreground)
+    _previous_foreground_hwnd = None
+    if foreground and config.connected_window:
+        try:
             hwnd = config.connected_window.handle
-            # Store the previous foreground window to restore it later
             _previous_foreground_hwnd = win32gui.GetForegroundWindow()
             win32gui.SetForegroundWindow(hwnd)
             sleep(0.05)
-            _movement_sequence_active = True
-    except Exception as e:
-        print(f"Error starting movement sequence: {e}")
+        except Exception as e:
+            print(f"Error starting movement sequence: {e}")
 
 
 def end_movement_sequence():
-    """End a movement sequence - restores previous foreground window"""
-    global _movement_sequence_active, _previous_foreground_hwnd
+    """End a movement sequence; restore the previous foreground window if we took it."""
+    global _movement_sequence_active, _previous_foreground_hwnd, _movement_sequence_foreground
     try:
-        if _movement_sequence_active and _previous_foreground_hwnd:
-            if config.connected_window:
-                hwnd = config.connected_window.handle
-                # Restore the previous foreground window
-                if _previous_foreground_hwnd != hwnd:
-                    try:
-                        win32gui.SetForegroundWindow(_previous_foreground_hwnd)
-                    except:
-                        pass  # Ignore errors when restoring foreground window
-        _movement_sequence_active = False
-        _previous_foreground_hwnd = None
-    except Exception as e:
-        print(f"Error ending movement sequence: {e}")
-        _movement_sequence_active = False
-        _previous_foreground_hwnd = None
-
-
-def send_movement_key(key, hold_duration=0.15):
-    """Send movement key with hold duration to actually move the character
-    Note: Use start_movement_sequence() and end_movement_sequence() to manage
-    foreground window for multiple movement keys"""
-    try:
-        if config.connected_window and not _movement_sequence_active:
-            # Only manage foreground if not in a sequence
+        if (_movement_sequence_foreground and _previous_foreground_hwnd
+                and config.connected_window):
             hwnd = config.connected_window.handle
-            previous_hwnd = win32gui.GetForegroundWindow()
-            win32gui.SetForegroundWindow(hwnd)
-            sleep(0.05)
+            if _previous_foreground_hwnd != hwnd:
+                try:
+                    win32gui.SetForegroundWindow(_previous_foreground_hwnd)
+                except Exception:
+                    pass
+    finally:
+        _movement_sequence_active = False
+        _movement_sequence_foreground = False
+        _previous_foreground_hwnd = None
+
+
+def send_movement_key(key, hold_duration=0.15, foreground=False):
+    """Send a movement key held for hold_duration.
+
+    Default is background (window messages, no focus steal - game can stay hidden).
+    Pass foreground=True (the auto-escalation fallback for games that ignore message
+    input) to briefly focus the game and use real key input instead.
+    """
+    try:
+        use_fg = foreground or _movement_sequence_foreground
+        if config.connected_window and use_fg:
+            hwnd = config.connected_window.handle
+            manage_fg = not _movement_sequence_active  # sequence already focused once
+            previous_hwnd = None
+            if manage_fg:
+                previous_hwnd = win32gui.GetForegroundWindow()
+                try:
+                    win32gui.SetForegroundWindow(hwnd)
+                    sleep(0.05)
+                except Exception:
+                    pass
             pydirectinput.keyDown(key)
             sleep(hold_duration)
             pydirectinput.keyUp(key)
-            # Restore the previous foreground window
-            if previous_hwnd and previous_hwnd != hwnd:
+            if manage_fg and previous_hwnd and previous_hwnd != hwnd:
                 try:
                     win32gui.SetForegroundWindow(previous_hwnd)
-                except:
-                    pass  # Ignore errors when restoring foreground window
-        else:
-            # In a sequence or no connected window - just send the key
-            pydirectinput.keyDown(key)
-            sleep(hold_duration)
-            pydirectinput.keyUp(key)
+                except Exception:
+                    pass
+            return
+
+        if config.connected_window:
+            hwnd = config.connected_window.handle
+            vk_code = get_virtual_key_code(key)
+            if vk_code:
+                _post_key_hold(hwnd, vk_code, hold_duration)
+                return
+
+        # No connected window - best-effort global input.
+        pydirectinput.keyDown(key)
+        sleep(hold_duration)
+        pydirectinput.keyUp(key)
     except Exception as e:
         print(f"Error sending movement key {key}: {e}")
+
+
+def _rotate_camera_background(hwnd, drag_pixels, step_pixels, direction, move_delay):
+    """Rotate the camera via window messages only (no focus steal, works in background).
+
+    Posts WM_RBUTTONDOWN, a run of WM_MOUSEMOVE messages (right button held) sweeping
+    sideways across the client area, then WM_RBUTTONUP. Works for games that read
+    camera look from mouse-move messages. Returns True on success.
+    """
+    try:
+        client = win32gui.GetClientRect(hwnd)
+        client_w = max(2, client[2])
+        cy = max(1, client[3] // 2)
+        total = max(1, int(abs(drag_pixels)))
+        step = max(1, int(abs(step_pixels)))
+        dx_sign = 1 if direction >= 0 else -1
+
+        cx = client_w // 2
+        win32api.PostMessage(hwnd, win32con.WM_RBUTTONDOWN, win32con.MK_RBUTTON,
+                             win32api.MAKELONG(cx, cy))
+        sleep(0.02)
+
+        moved = 0
+        while moved < total:
+            cx = max(0, min(client_w - 1, cx + min(step, total - moved) * dx_sign))
+            win32api.PostMessage(hwnd, win32con.WM_MOUSEMOVE, win32con.MK_RBUTTON,
+                                 win32api.MAKELONG(cx, cy))
+            moved += step
+            sleep(max(0.0, move_delay))
+
+        sleep(0.02)
+        win32api.PostMessage(hwnd, win32con.WM_RBUTTONUP, 0, win32api.MAKELONG(cx, cy))
+        return True
+    except Exception as e:
+        print(f"Error rotating camera (background): {e}")
+        try:
+            win32api.PostMessage(hwnd, win32con.WM_RBUTTONUP, 0, 0)
+        except Exception:
+            pass
+        return False
+
+
+def _rotate_camera_foreground(drag_pixels, step_pixels, direction, settle, move_delay):
+    """Foreground fallback: focus the game and rotate with real mouse input (centre the
+    cursor, hold RMB, sweep sideways with raw delta + SetCursorPos), then restore."""
+    hwnd = None
+    prev_hwnd = None
+    prev_cursor = None
+    button_down = False
+    try:
+        total = max(1, int(abs(drag_pixels)))
+        step = max(1, int(abs(step_pixels)))
+        dx_sign = 1 if direction >= 0 else -1
+
+        if config.connected_window:
+            hwnd = config.connected_window.handle
+            prev_hwnd = win32gui.GetForegroundWindow()
+            if prev_hwnd != hwnd:
+                try:
+                    win32gui.SetForegroundWindow(hwnd)
+                    sleep(0.08)
+                except Exception:
+                    pass
+
+        try:
+            prev_cursor = win32gui.GetCursorPos()
+        except Exception:
+            prev_cursor = None
+
+        cur_x, cur_y = (prev_cursor or (0, 0))
+        if hwnd:
+            try:
+                client = win32gui.GetClientRect(hwnd)
+                center_client = (client[2] // 2, client[3] // 2)
+                cur_x, cur_y = win32gui.ClientToScreen(hwnd, center_client)
+                win32api.SetCursorPos((cur_x, cur_y))
+                sleep(0.03)
+            except Exception:
+                pass
+
+        win32api.mouse_event(_MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0)
+        button_down = True
+        sleep(settle)
+
+        moved = 0
+        while moved < total:
+            dx = min(step, total - moved) * dx_sign
+            win32api.mouse_event(_MOUSEEVENTF_MOVE, int(dx), 0, 0, 0)
+            cur_x += int(dx)
+            try:
+                win32api.SetCursorPos((cur_x, cur_y))
+            except Exception:
+                pass
+            moved += step
+            sleep(max(0.0, move_delay))
+
+        sleep(settle)
+        win32api.mouse_event(_MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
+        button_down = False
+
+        if prev_cursor:
+            try:
+                win32api.SetCursorPos(prev_cursor)
+            except Exception:
+                pass
+        if prev_hwnd and hwnd and prev_hwnd != hwnd:
+            try:
+                win32gui.SetForegroundWindow(prev_hwnd)
+            except Exception:
+                pass
+        return True
+    except Exception as e:
+        print(f"Error rotating camera (foreground): {e}")
+        if button_down:
+            try:
+                win32api.mouse_event(_MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
+            except Exception:
+                pass
+        return False
+
+
+def rotate_camera(drag_pixels=220, step_pixels=20, direction=1, settle=0.06,
+                  move_delay=0.02, foreground=False):
+    """Rotate the game camera. Default is background (window messages, no focus steal).
+    Pass foreground=True (auto-escalation fallback) to focus the game and use real
+    mouse input for games that ignore message-based camera look."""
+    if not config.connected_window:
+        return False
+    if foreground:
+        return _rotate_camera_foreground(drag_pixels, step_pixels, direction, settle, move_delay)
+    return _rotate_camera_background(
+        config.connected_window.handle, drag_pixels, step_pixels, direction, move_delay,
+    )
 
 
 def perform_mouse_click():

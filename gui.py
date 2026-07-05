@@ -804,7 +804,12 @@ class BotGUI:
             if hasattr(self, 'unstuck_timeout_var'):
                 self.unstuck_timeout_var.set(str(config.unstuck_timeout))
                 print(f"  Applied unstuck timeout: {config.unstuck_timeout} seconds")
-            
+            if hasattr(self, 'auto_rotate_var'):
+                self.auto_rotate_var.set(config.auto_rotate_enabled)
+                if hasattr(self, 'auto_rotate_interval_var'):
+                    self.auto_rotate_interval_var.set(str(config.auto_rotate_interval))
+                print(f"  Applied auto rotate camera: enabled={config.auto_rotate_enabled}, interval={config.auto_rotate_interval}s")
+
             # Apply Mage setting
             if hasattr(self, 'is_mage_var'):
                 self.is_mage_var.set(config.is_mage)
@@ -1006,7 +1011,13 @@ class BotGUI:
         self.minimized_window = None
         self.minimized_toggle_bot_button = None
         self.saved_window_position = None  # Store window position when minimizing
-        
+
+        # Mini Overlay Mode state
+        self._bot_run_start_time = None   # Set when bot starts (runtime timer)
+        self._overlay_after_id = None     # Pending overlay refresh callback
+        self.overlay_status_dot = None
+        self.overlay_timer_label = None
+
         # Track last active tab in skill selector
         self.last_skill_selector_tab = None
         
@@ -1644,7 +1655,39 @@ class BotGUI:
         unstuck_timeout_entry.bind('<FocusOut>', lambda event: self.update_unstuck_timeout())
         ctk.CTkLabel(auto_unstuck_row, text="s", font=_t_font).pack(side="left")
         create_tooltip(unstuck_timeout_entry, "Seconds before considering HP stagnant.")
-        
+
+        auto_rotate_row = ctk.CTkFrame(right_body, fg_color="transparent")
+        auto_rotate_row.pack(fill="x", pady=(0, 2))
+        self.auto_rotate_var = tk.BooleanVar(value=config.auto_rotate_enabled)
+        self.auto_rotate_checkbox = ctk.CTkCheckBox(
+            auto_rotate_row,
+            text="Auto Rotate Camera",
+            variable=self.auto_rotate_var,
+            command=self.update_auto_rotate,
+            font=_t_font,
+        )
+        self.auto_rotate_checkbox.pack(side="left")
+        create_tooltip(
+            self.auto_rotate_checkbox,
+            "Every few seconds, briefly focus the game and spin the camera (hold right-click "
+            "+ drag) so nameplate detection isn't fooled by the background and hidden mobs "
+            "come into view. Set the interval on the right.",
+        )
+
+        ctk.CTkLabel(auto_rotate_row, text="every", font=_t_font).pack(side="left", padx=(10, 4))
+        self.auto_rotate_interval_var = tk.StringVar(value=str(config.auto_rotate_interval))
+        auto_rotate_interval_entry = ctk.CTkEntry(
+            auto_rotate_row,
+            textvariable=self.auto_rotate_interval_var,
+            width=52,
+            font=_t_font,
+        )
+        auto_rotate_interval_entry.pack(side="left", padx=(0, 4))
+        auto_rotate_interval_entry.bind('<KeyRelease>', lambda event: self.update_auto_rotate_timing())
+        auto_rotate_interval_entry.bind('<FocusOut>', lambda event: self.update_auto_rotate_timing())
+        ctk.CTkLabel(auto_rotate_row, text="s", font=_t_font).pack(side="left")
+        create_tooltip(auto_rotate_interval_entry, "Seconds between camera rotations.")
+
         mob_separator = ctk.CTkFrame(settings_frame, height=1, fg_color="gray50")
         mob_separator.grid(row=6, column=0, columnspan=2, sticky="ew", padx=15, pady=(4, 0))
 
@@ -2694,8 +2737,9 @@ class BotGUI:
             bot_logic.reset_bot_state()
                 
             config.bot_running = True
+            self._bot_run_start_time = time.time()
             input_handler.initialize_pyautogui()
-            
+
             config.bot_thread = threading.Thread(target=bot_logic.bot_loop, daemon=True)
             config.bot_thread.start()
             
@@ -2709,7 +2753,8 @@ class BotGUI:
             
     def stop_bot(self):
         config.bot_running = False
-        
+        self._bot_run_start_time = None
+
         # Reset all bot state for clean stop
         bot_logic.reset_bot_state()
         
@@ -3707,7 +3752,25 @@ class BotGUI:
         except ValueError:
             print(f"Invalid unstuck timeout value")
             self.unstuck_timeout_var.set(str(config.unstuck_timeout))
-    
+
+    def update_auto_rotate(self):
+        """Update Auto Rotate Camera enabled status"""
+        config.auto_rotate_enabled = self.auto_rotate_var.get()
+        status = "enabled" if config.auto_rotate_enabled else "disabled"
+        print(f"Auto Rotate Camera {status}")
+
+    def update_auto_rotate_timing(self):
+        """Update the interval (seconds) between camera rotations"""
+        try:
+            interval = float(self.auto_rotate_interval_var.get())
+            if interval > 0:
+                config.auto_rotate_interval = interval
+                print(f"Auto Rotate interval updated to {config.auto_rotate_interval} seconds")
+            else:
+                self.auto_rotate_interval_var.set(str(config.auto_rotate_interval))
+        except ValueError:
+            self.auto_rotate_interval_var.set(str(config.auto_rotate_interval))
+
     def update_auto_hp(self):
         """Update auto HP enabled status"""
 
@@ -4863,16 +4926,16 @@ class BotGUI:
             self.toggle_bot_button.configure(
                 state="normal", text="Start", fg_color="green", hover_color="darkgreen", command=self.toggle_bot
             )
-            cfg_min(minib, state="normal", text="Start", fg_color="green", hover_color="darkgreen", command=self.toggle_bot)
+            cfg_min(minib, state="normal", text="▶", fg_color="#16a34a", hover_color="#15803d", command=self.toggle_bot)
         elif config.bot_running:
             # Keep button enabled when running so user can stop
             self.toggle_bot_button.configure(
                 state="normal", text="Stop", fg_color="red", hover_color="darkred", command=self.toggle_bot
             )
-            cfg_min(minib, state="normal", text="Stop", fg_color="red", hover_color="darkred", command=self.toggle_bot)
+            cfg_min(minib, state="normal", text="■", fg_color="#dc2626", hover_color="#b91c1c", command=self.toggle_bot)
         else:
             self.toggle_bot_button.configure(state="disabled")
-            cfg_min(minib, state="disabled", text="Start", fg_color="green", hover_color="darkgreen", command=self.toggle_bot)
+            cfg_min(minib, state="disabled", text="▶", fg_color="#16a34a", hover_color="#15803d", command=self.toggle_bot)
         self.update_mob_filter_ui_state()
     
     def _mob_filter_ready(self):
@@ -5315,59 +5378,8 @@ class BotGUI:
                 auto_unstuck.update_unstuck_countdown_display(time.time())
 
             self._update_auto_repair_count_display()
-            
-            # Update minimized window if it exists
-            if self.is_minimized and self.minimized_window:
-                try:
-                    # Update minimized progress bars
-                    if hasattr(self, 'minimized_hp_progress_bar'):
-                        self.minimized_hp_progress_bar.set(hp_percent / 100.0)
-                        self.minimized_hp_percent_label.configure(text=f"{int(hp_percent)}%")
-                    if hasattr(self, 'minimized_mp_progress_bar'):
-                        self.minimized_mp_progress_bar.set(mp_percent / 100.0)
-                        self.minimized_mp_percent_label.configure(text=f"{int(mp_percent)}%")
-                    if hasattr(self, 'minimized_enemy_hp_progress_bar'):
-                        self.minimized_enemy_hp_progress_bar.set(enemy_hp_percent / 100.0)
-                        self.minimized_enemy_hp_percent_label.configure(text=f"{int(enemy_hp_percent)}%" if enemy_hp_percent > 0 else "---%")
-                    
-                    # Update minimized enemy name
-                    if hasattr(self, 'minimized_current_mob_label'):
-                        enemy_name = config.current_enemy_name
-                        if mob_filter.is_active() and config.current_mob_match:
-                            enemy_name = config.current_mob_match.get('name', enemy_name)
-                        if enemy_name:
-                            if mob_filter.is_active() and not auto_attack.should_target_current_mob():
-                                self.minimized_current_mob_label.configure(text=enemy_name, text_color="orange")
-                            else:
-                                self.minimized_current_mob_label.configure(text=enemy_name, text_color="green")
-                        else:
-                            self.minimized_current_mob_label.configure(text="None", text_color="red")
-                    
-                    # Update minimized unstuck countdown
-                    if hasattr(self, 'minimized_unstuck_countdown_label'):
-                        import auto_unstuck
-                        current_time = time.time()
-                        _, remaining_time = auto_unstuck.get_unstuck_remaining_time(config.unstuck_timeout)
-                        if config.enemy_hp_stagnant_time == 0 or config.last_enemy_hp_before_stagnant is None:
-                            self.minimized_unstuck_countdown_label.configure(text="Unstuck: ---", text_color="gray")
-                        else:
-                            import math
-                            display_seconds = math.ceil(remaining_time)
-                            if remaining_time > config.unstuck_timeout * 0.5:
-                                color = "green"
-                            elif remaining_time > config.unstuck_timeout * 0.25:
-                                color = "yellow"
-                            else:
-                                color = "red"
-                            target_indicator = " (no target)" if config.enemy_target_time == 0 else ""
-                            self.minimized_unstuck_countdown_label.configure(
-                                text=f"Unstuck: {display_seconds}s{target_indicator}",
-                                text_color=color
-                            )
-                except Exception as e:
-                    # Ignore errors if minimized window was closed
-                    pass
-        
+            # The Mini Overlay pill refreshes itself via _refresh_overlay().
+
         if config.bot_running:
             self.root.after(config.get_gui_status_interval_ms(), self.update_status)
     
@@ -5387,8 +5399,16 @@ class BotGUI:
         """Toggle between minimized and maximized UI"""
         if self.is_minimized:
             # Restore to maximized view
+            if self._overlay_after_id:
+                try:
+                    self.minimized_window.after_cancel(self._overlay_after_id)
+                except Exception:
+                    pass
+                self._overlay_after_id = None
             if self.minimized_window:
                 self.minimized_toggle_bot_button = None
+                self.overlay_status_dot = None
+                self.overlay_timer_label = None
                 self.minimized_window.destroy()
                 self.minimized_window = None
             self.root.deiconify()
@@ -5406,121 +5426,152 @@ class BotGUI:
                 self.saved_window_position = geometry
             except:
                 self.saved_window_position = "655x800+100+100"
+            # Mark minimized BEFORE building the pill so the refresh loop (which
+            # checks is_minimized) actually starts and the timer/status tick.
+            self.is_minimized = True
             # Create minimized window at the same position
             self.create_minimized_window()
             self.minimize_button.configure(text="+")
-            self.is_minimized = True
     
+    # ------------------------------------------------------------------
+    # Mini Overlay Mode — compact, frameless, always-on-top control pill.
+    # Replaces the old minimized panel: a slim floating bar (like a screen
+    # recorder widget) with a live status dot, runtime timer, Start/Stop,
+    # and an expand-to-restore button.
+    # ------------------------------------------------------------------
+    OVERLAY_BG = "#15181e"
+    OVERLAY_BORDER = "#333947"
+    # Colour keyed out to transparency so only the rounded pill shows (no square
+    # corners around it). Must not appear elsewhere in the overlay.
+    OVERLAY_TRANSPARENT_KEY = "#010203"
+    OVERLAY_TICK_MS = 500
+
     def create_minimized_window(self):
-        """Create a minimized window showing only progress bars"""
+        """Create the compact Mini Overlay pill (frameless, draggable, on top)."""
         if self.minimized_window:
             return
-        
-        # Create new window for minimized view
-        self.minimized_window = ctk.CTkToplevel(self.root)
-        self.minimized_window.title(config.APP_TITLE)
-        
-        # Position minimized window at the same location as main window
+
+        pill = ctk.CTkToplevel(self.root)
+        pill.title(config.APP_TITLE)
+        self.minimized_window = pill
+
+        # Position at the previous window's top-left (fallback: near top).
+        pos = "+120+80"
         if self.saved_window_position:
-            # Extract position from geometry string (format: "WxH+X+Y")
-            try:
-                parts = self.saved_window_position.split('+')
-                if len(parts) >= 3:
-                    x_pos = parts[1]
-                    y_pos = parts[2]
-                    self.minimized_window.geometry(f"350x226+{x_pos}+{y_pos}")
-                else:
-                    self.minimized_window.geometry("350x226")
-            except:
-                self.minimized_window.geometry("350x226")
-        else:
-            self.minimized_window.geometry("350x226")
-        
-        self.minimized_window.resizable(False, False)
-        self.minimized_window.overrideredirect(False)  # Keep window controls
-        
-        # Make it stay on top
-        self.minimized_window.attributes("-topmost", True)
-        
-        # Configure grid
-        self.minimized_window.columnconfigure(0, weight=1)
-        self.minimized_window.rowconfigure(0, weight=1)
-        
-        # Create main frame
-        minimized_frame = ctk.CTkFrame(self.minimized_window, corner_radius=5)
-        minimized_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
-        minimized_frame.columnconfigure(1, weight=1)
-        
-        # HP Progress Bar
-        hp_bar_frame = ctk.CTkFrame(minimized_frame, fg_color="transparent")
-        hp_bar_frame.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(10, 5))
-        
-        hp_label = ctk.CTkLabel(hp_bar_frame, text="HP:", width=70, anchor='w', font=ctk.CTkFont(size=11))
-        hp_label.grid(row=0, column=0, padx=(0, 10))
-        self.minimized_hp_progress_bar = ctk.CTkProgressBar(hp_bar_frame, width=200, height=20, progress_color="red", corner_radius=0)
-        self.minimized_hp_progress_bar.set(0)
-        self.minimized_hp_progress_bar.grid(row=0, column=1, padx=(0, 10))
-        self.minimized_hp_percent_label = ctk.CTkLabel(hp_bar_frame, text="---%", font=ctk.CTkFont(size=11, weight="bold"), text_color="white")
-        self.minimized_hp_percent_label.grid(row=0, column=2)
-        
-        # MP Progress Bar
-        mp_bar_frame = ctk.CTkFrame(minimized_frame, fg_color="transparent")
-        mp_bar_frame.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
-        
-        mp_label = ctk.CTkLabel(mp_bar_frame, text="MP:", width=70, anchor='w', font=ctk.CTkFont(size=11))
-        mp_label.grid(row=0, column=0, padx=(0, 10))
-        self.minimized_mp_progress_bar = ctk.CTkProgressBar(mp_bar_frame, width=200, height=20, progress_color="#0b58b0", corner_radius=0)
-        self.minimized_mp_progress_bar.set(0)
-        self.minimized_mp_progress_bar.grid(row=0, column=1, padx=(0, 10))
-        self.minimized_mp_percent_label = ctk.CTkLabel(mp_bar_frame, text="---%", font=ctk.CTkFont(size=11, weight="bold"), text_color="white")
-        self.minimized_mp_percent_label.grid(row=0, column=2)
-        
-        # Enemy HP Progress Bar
-        enemy_hp_bar_frame = ctk.CTkFrame(minimized_frame, fg_color="transparent")
-        enemy_hp_bar_frame.grid(row=2, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
-        
-        enemy_hp_label = ctk.CTkLabel(enemy_hp_bar_frame, text="Enemy HP:", width=70, anchor='w', font=ctk.CTkFont(size=11))
-        enemy_hp_label.grid(row=0, column=0, padx=(0, 10))
-        self.minimized_enemy_hp_progress_bar = ctk.CTkProgressBar(enemy_hp_bar_frame, width=200, height=20, progress_color="green", corner_radius=0)
-        self.minimized_enemy_hp_progress_bar.set(0)
-        self.minimized_enemy_hp_progress_bar.grid(row=0, column=1, padx=(0, 10))
-        self.minimized_enemy_hp_percent_label = ctk.CTkLabel(enemy_hp_bar_frame, text="---%", font=ctk.CTkFont(size=11, weight="bold"), text_color="white")
-        self.minimized_enemy_hp_percent_label.grid(row=0, column=2)
-        
-        # Enemy Name display
-        enemy_name_frame = ctk.CTkFrame(minimized_frame, fg_color="transparent")
-        enemy_name_frame.grid(row=3, column=0, columnspan=2, sticky="w", padx=10, pady=(5, 10))
-        
-        enemy_name_label = ctk.CTkLabel(enemy_name_frame, text="Enemy Name:", width=70, anchor='w', font=ctk.CTkFont(size=11))
-        enemy_name_label.grid(row=0, column=0, padx=(0, 10))
-        self.minimized_current_mob_label = ctk.CTkLabel(enemy_name_frame, text="None", width=170, anchor='w', font=ctk.CTkFont(size=11), text_color="red")
-        self.minimized_current_mob_label.grid(row=0, column=1, sticky="w", padx=(0, 10))
-        self.minimized_unstuck_countdown_label = ctk.CTkLabel(enemy_name_frame, text="Unstuck: ---", font=ctk.CTkFont(size=10), text_color="gray")
-        self.minimized_unstuck_countdown_label.grid(row=0, column=2)
-        
-        # Start / Stop (same behavior as main window; no need to restore big UI)
-        bot_btn_frame = ctk.CTkFrame(minimized_frame, fg_color="transparent")
-        bot_btn_frame.grid(row=4, column=0, columnspan=2, sticky="ew", padx=10, pady=(2, 10))
-        bot_btn_frame.columnconfigure(0, weight=1)
-        self.minimized_toggle_bot_button = ctk.CTkButton(
-            bot_btn_frame,
-            text="Start",
-            command=self.toggle_bot,
-            width=120,
-            height=32,
-            corner_radius=6,
-            fg_color="green",
-            hover_color="darkgreen",
+            parts = self.saved_window_position.split('+')
+            if len(parts) >= 3:
+                pos = f"+{parts[1]}+{parts[2]}"
+        pill.geometry(f"244x56{pos}")
+        pill.resizable(False, False)
+        pill.attributes("-topmost", True)
+        # Frameless pill look. overrideredirect drops the title bar/taskbar entry.
+        try:
+            pill.overrideredirect(True)
+        except Exception:
+            pass
+        # Key the window background out to transparency so the square corners
+        # around the rounded body disappear (clean floating pill, full border).
+        pill.configure(fg_color=self.OVERLAY_TRANSPARENT_KEY)
+        try:
+            pill.attributes("-transparentcolor", self.OVERLAY_TRANSPARENT_KEY)
+        except Exception:
+            pass
+        pill.columnconfigure(0, weight=1)
+        pill.rowconfigure(0, weight=1)
+
+        icon_font = ctk.CTkFont(family="Segoe UI Symbol", size=15)
+
+        # Rounded body — padding leaves the border fully visible on every side,
+        # and the padding area (window bg) is keyed to transparency.
+        body = ctk.CTkFrame(pill, corner_radius=26, fg_color=self.OVERLAY_BG,
+                            border_width=1, border_color=self.OVERLAY_BORDER)
+        body.grid(row=0, column=0, sticky="nsew", padx=3, pady=3)
+
+        # Status dot (green = running, gray = stopped)
+        self.overlay_status_dot = ctk.CTkLabel(
+            body, text="●", font=ctk.CTkFont(size=15), text_color="#6b7280", width=14,
         )
-        self.minimized_toggle_bot_button.grid(row=0, column=0)
+        self.overlay_status_dot.pack(side="left", padx=(14, 8))
+
+        # Runtime timer
+        self.overlay_timer_label = ctk.CTkLabel(
+            body, text="00:00:00",
+            font=ctk.CTkFont(family="Consolas", size=15, weight="bold"),
+            text_color="#e5e7eb",
+        )
+        self.overlay_timer_label.pack(side="left", padx=(0, 8))
+
+        # Drag the pill by its body / status area (buttons stay clickable).
+        for w in (body, self.overlay_status_dot, self.overlay_timer_label):
+            w.bind("<Button-1>", self._overlay_start_move)
+            w.bind("<B1-Motion>", self._overlay_on_move)
+
+        # Expand / restore (rightmost)
+        expand_btn = ctk.CTkButton(
+            body, text="⤢", width=32, height=32, corner_radius=8,
+            font=icon_font, fg_color="transparent", hover_color="#2b2f38",
+            command=self.toggle_minimize,
+        )
+        expand_btn.pack(side="right", padx=(4, 10))
+        create_tooltip(expand_btn, "Expand — restore the full window")
+
+        # Start / Stop (managed by update_toggle_bot_button_state via cfg_min)
+        self.minimized_toggle_bot_button = ctk.CTkButton(
+            body, text="▶", width=40, height=32, corner_radius=8,
+            font=icon_font, fg_color="#16a34a", hover_color="#15803d",
+            command=self.toggle_bot,
+        )
+        self.minimized_toggle_bot_button.pack(side="right", padx=4)
+
         self.update_toggle_bot_button_state()
-        
-        # Handle window close - restore to maximized
-        self.minimized_window.protocol("WM_DELETE_WINDOW", self.toggle_minimize)
-        
-        # Hide main window
+
+        # Escape restores the full window (needs focus; harmless otherwise).
+        pill.bind("<Escape>", lambda _e: self.toggle_minimize())
+        pill.protocol("WM_DELETE_WINDOW", self.toggle_minimize)
+
+        # Hide the main window and start the lightweight refresh loop.
         self.root.withdraw()
-    
+        self._refresh_overlay()
+
+    def _overlay_start_move(self, event):
+        self._overlay_drag_ox = event.x_root - self.minimized_window.winfo_x()
+        self._overlay_drag_oy = event.y_root - self.minimized_window.winfo_y()
+
+    def _overlay_on_move(self, event):
+        if not self.minimized_window:
+            return
+        x = event.x_root - getattr(self, "_overlay_drag_ox", 0)
+        y = event.y_root - getattr(self, "_overlay_drag_oy", 0)
+        self.minimized_window.geometry(f"+{x}+{y}")
+
+    def _bot_runtime_seconds(self):
+        if config.bot_running and self._bot_run_start_time:
+            return max(0, int(time.time() - self._bot_run_start_time))
+        return 0
+
+    @staticmethod
+    def _format_hms(seconds):
+        h, rem = divmod(int(seconds), 3600)
+        m, s = divmod(rem, 60)
+        return f"{h:02d}:{m:02d}:{s:02d}"
+
+    def _refresh_overlay(self):
+        """Lightweight overlay refresh loop (runs only while the pill is open).
+
+        Guarded on the window existing (cleared to None on restore) rather than the
+        is_minimized flag, so the loop keeps ticking regardless of flag-set ordering.
+        """
+        if not self.minimized_window:
+            self._overlay_after_id = None
+            return
+        try:
+            running = config.bot_running
+            self.overlay_status_dot.configure(text_color="#22c55e" if running else "#6b7280")
+            self.overlay_timer_label.configure(text=self._format_hms(self._bot_runtime_seconds()))
+        except Exception:
+            pass
+        self._overlay_after_id = self.minimized_window.after(self.OVERLAY_TICK_MS, self._refresh_overlay)
+
     def run(self):
         # Update license status info
         self.update_license_status_info()
