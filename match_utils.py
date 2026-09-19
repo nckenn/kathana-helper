@@ -1,5 +1,4 @@
 """Shared OpenCV template matching helpers."""
-import numpy as np
 
 
 def template_match_with_margin(area, template, threshold, margin=0.05):
@@ -20,11 +19,21 @@ def template_match_with_margin(area, template, threshold, margin=0.05):
     if confidence < threshold:
         return False, confidence, None
 
-    flat = res.ravel()
-    if flat.size >= 2:
-        idx = np.argpartition(flat, -2)[-2:]
-        top2 = np.sort(flat[idx])[::-1]
-        if top2[0] - top2[1] < margin:
-            return False, confidence, None
+    # Reject only when a *spatially distinct* peak scores nearly as high (a
+    # genuinely ambiguous match). The pixels immediately around the best peak
+    # are near-identical to it — they belong to the same match blob — so we
+    # suppress a template-sized neighborhood before looking for the runner-up.
+    # Without this suppression, the runner-up is always an adjacent pixel and
+    # every real match gets falsely rejected.
+    th, tw = template.shape[:2]
+    x, y = max_loc
+    suppressed = res.copy()
+    x0, y0 = max(0, x - tw), max(0, y - th)
+    x1, y1 = min(res.shape[1], x + tw + 1), min(res.shape[0], y + th + 1)
+    suppressed[y0:y1, x0:x1] = -1.0
+
+    _, second_val, _, _ = cv2.minMaxLoc(suppressed)
+    if second_val >= 0.0 and (confidence - second_val) < margin:
+        return False, confidence, None
 
     return True, confidence, max_loc

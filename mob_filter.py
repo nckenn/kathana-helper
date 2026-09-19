@@ -345,26 +345,18 @@ def _column_agreement_ratio(scan_gray, tmpl_gray):
     """
     scan_fg = scan_gray > 0
     tmpl_fg = tmpl_gray > 0
-    either = scan_fg.any(axis=0) | tmpl_fg.any(axis=0)
-    if not np.any(either):
+    # Vectorized per-column IoU (replaces a Python per-column loop run on every
+    # template comparison during combat/target scans).
+    union_cols = (scan_fg | tmpl_fg).sum(axis=0)
+    compared_mask = union_cols > 0
+    compared = int(compared_mask.sum())
+    if compared == 0:
         return 1.0
+    overlap_cols = (scan_fg & tmpl_fg).sum(axis=0)
     iou_min = float(getattr(config, 'mob_match_column_iou_min', 0.62))
-    agrees = 0
-    compared = 0
-    for c in range(scan_gray.shape[1]):
-        if not either[c]:
-            continue
-        compared += 1
-        s_col = scan_fg[:, c]
-        t_col = tmpl_fg[:, c]
-        union = int((s_col | t_col).sum())
-        if union == 0:
-            agrees += 1
-            continue
-        overlap = int((s_col & t_col).sum())
-        if overlap / union >= iou_min:
-            agrees += 1
-    return agrees / compared if compared else 1.0
+    iou = overlap_cols[compared_mask] / union_cols[compared_mask]
+    agrees = int((iou >= iou_min).sum())
+    return agrees / compared
 
 
 def _column_shape_penalty(scan_gray, tmpl_gray, base_score):
@@ -801,6 +793,42 @@ def refresh_scan(hwnd):
         return match
 
     return _with_mob_lock(_do, hwnd)
+
+
+def verify_after_target(hwnd):
+    """
+    Fast + accurate post-target confirmation.
+
+    - Always matches a freshly captured frame (never a stale pre-target frame).
+    - Trusts a strong match on a single frame (fast path).
+    - Re-checks only a borderline match once, on an independent fresh frame, so a
+      transparent-nameplate single-frame false positive is rejected without the
+      old multi-frame sleep penalty.
+    """
+    import frame_cache
+    import time as _time
+
+    frame_cache.invalidate()
+    first = refresh_scan(hwnd)
+    if first is None:
+        return None
+
+    conf = float(first.get('confidence', 0.0))
+    confident = float(config.mob_match_threshold) + float(
+        getattr(config, 'mob_target_confident_margin', 0.08)
+    )
+    if conf >= confident:
+        return first
+
+    # Borderline: confirm with one independent fresh frame (must be the same mob).
+    delay_s = float(getattr(config, 'mob_target_confirm_delay_s', 0.03))
+    if delay_s > 0:
+        _time.sleep(delay_s)
+    frame_cache.invalidate()
+    second = refresh_scan(hwnd)
+    if second is not None and second.get('id') == first.get('id'):
+        return second
+    return None
 
 
 def refresh_scan_combat(hwnd):

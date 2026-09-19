@@ -1,6 +1,7 @@
 """Fullscreen drag-to-select rectangle overlay for in-game regions."""
 import tkinter as tk
 import win32gui
+from ui_fonts import APP_FONT_FAMILY
 
 
 def pick_region(root, hwnd, instruction, on_complete, on_cancel=None):
@@ -16,11 +17,11 @@ def pick_region(root, hwnd, instruction, on_complete, on_cancel=None):
     canvas.pack(fill='both', expand=True)
 
     label = tk.Label(
-        picker, text=instruction, font=('Arial', 16), fg='white', bg='black',
+        picker, text=instruction, font=(APP_FONT_FAMILY, 16), fg='white', bg='black',
     )
     label.place(relx=0.5, rely=0.1, anchor='center')
 
-    info = tk.Label(picker, text='', font=('Arial', 12), fg='yellow', bg='black')
+    info = tk.Label(picker, text='', font=(APP_FONT_FAMILY, 12), fg='yellow', bg='black')
     info.place(relx=0.5, rely=0.15, anchor='center')
 
     rect_id = None

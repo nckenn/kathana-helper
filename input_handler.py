@@ -101,6 +101,22 @@ def send_silent_key(hwnd, vk_code, use_scan_code=False, modifiers=None):
         # with a small floor so the combo still registers even at a 0 ms hold.
         mod_settle = max(hold, 0.005)
 
+        # Build a proper scan-code lParam for keys that want one (F1-F12, OEM
+        # punctuation). A fully-formed keystroke message is what message-reading
+        # games expect; without it they may ignore the key.
+        scan_code = 0
+        if use_scan_code:
+            try:
+                from ctypes import windll
+                scan_code = windll.user32.MapVirtualKeyW(vk_code, 0)
+            except Exception as e:
+                print(f"Error mapping scan code, using bare lParam: {e}")
+                scan_code = 0
+        # Non-scan keys keep lParam=0 (proven to work for plain number keys).
+        lparam_down = (1 | (scan_code << 16)) if scan_code else 0
+        lparam_up = ((1 | (scan_code << 16) | (1 << 30) | (1 << 31))
+                     if scan_code else 0)
+
         # Press modifier keys first (Ctrl/Alt/Shift) and let them register.
         if modifiers:
             for mod in modifiers:
@@ -109,30 +125,14 @@ def send_silent_key(hwnd, vk_code, use_scan_code=False, modifiers=None):
                     win32api.SendMessage(hwnd, win32con.WM_KEYDOWN, mod_vk, 0)
             sleep(mod_settle)  # Hold modifier(s) down before the base key
 
-        # Handle function keys with scan codes if requested
-        if use_scan_code and vk_code >= 0x70 and vk_code <= 0x7B:  # F1-F12
-            try:
-                from ctypes import windll
-                user32 = windll.user32
-                scan_code = user32.MapVirtualKeyW(vk_code, 0)
-                lparam_down = 1 | scan_code << 16
-                lparam_up = 3221225473 | scan_code << 16
-                # Use PostMessage for function keys (asynchronous, better for some games)
-                win32api.PostMessage(hwnd, win32con.WM_KEYDOWN, vk_code, lparam_down)
-                sleep(hold)
-                win32api.PostMessage(hwnd, win32con.WM_KEYUP, vk_code, lparam_up)
-            except Exception as e:
-                print(f"Error using scan code, falling back to simple method: {e}")
-                # Fallback to standard method
-                win32api.SendMessage(hwnd, win32con.WM_KEYDOWN, vk_code, 0)
-                sleep(hold)
-                win32api.SendMessage(hwnd, win32con.WM_KEYUP, vk_code, 0)
-        else:
-            # Standard method for regular keys (use SendMessage for synchronous behavior)
-            win32api.SendMessage(hwnd, win32con.WM_KEYDOWN, vk_code, 0)
-            sleep(hold)
-            win32api.SendMessage(hwnd, win32con.WM_KEYUP, vk_code, 0)
-        
+        # Base key: always synchronous SendMessage. PostMessage (async) gets
+        # coalesced/dropped when the skill rotation fires ~10x/sec, which is why
+        # F-keys worked for the slow buff loop but silently failed here. Sending
+        # every key the same synchronous way keeps F-keys as reliable as numbers.
+        win32api.SendMessage(hwnd, win32con.WM_KEYDOWN, vk_code, lparam_down)
+        sleep(hold)
+        win32api.SendMessage(hwnd, win32con.WM_KEYUP, vk_code, lparam_up)
+
         # Release modifier keys (after the base key, reverse order)
         if modifiers:
             sleep(mod_settle)  # Keep modifier(s) down through the base key press

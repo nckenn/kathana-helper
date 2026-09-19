@@ -25,3 +25,23 @@ def test_template_match_with_margin_rejects_ambiguous_peaks():
     matched, conf, _ = match_utils.template_match_with_margin(area, template, 0.5, 0.05)
     assert matched is False
     assert conf >= 0.5
+
+
+def test_template_match_accepts_smooth_low_contrast_single_match():
+    """A single clean match on a smooth icon must not be rejected as ambiguous.
+
+    Real buff icons are smooth gradients: a 1px shift barely changes the
+    correlation, so the runner-up pixel sits within `margin` of the peak. This
+    is the exact case the old top-2-raw-pixels check falsely rejected, causing
+    active buffs to never be detected and the key to be re-pressed forever.
+    """
+    grad = np.linspace(20, 220, 16, dtype=np.uint8)
+    template = np.repeat(grad[None, :], 16, axis=0)
+    template = np.stack([template] * 3, axis=-1)
+    area = np.zeros((48, 48, 3), dtype=np.uint8)
+    area[10:26, 10:26] = template
+
+    matched, conf, loc = match_utils.template_match_with_margin(area, template, 0.7, 0.05)
+    assert matched is True
+    assert conf >= 0.7
+    assert loc is not None

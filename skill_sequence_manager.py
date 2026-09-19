@@ -16,6 +16,11 @@ except ImportError:
 
 
 class SkillSequenceManager:
+    # Safety cap: how many presses to spend on a ready skill before assuming it
+    # cast (or can't be cast right now) and moving on, so the rotation never
+    # stalls on a skill whose icon lingers (~MAX_CAST_ATTEMPTS * 0.1s).
+    MAX_CAST_ATTEMPTS = 10
+
     def __init__(self, num_skills=8):
         self.skills = [None] * num_skills
         self.skill_sequence_index = 0
@@ -25,6 +30,7 @@ class SkillSequenceManager:
         self.ui_reference = None
         self.enemy_found_previous = False
         self._skills_loc_cache = {}
+        self._cast_attempts = 0
 
     def set_skill(self, idx, image_path):
         if 0 <= idx < len(self.skills):
@@ -43,10 +49,70 @@ class SkillSequenceManager:
         self.skill_sequence_index = 0
         self.skill_waiting_activation = False
         self.enemy_found_previous = False
+        self._cast_attempts = 0
         print('[SKILL-SEQUENCE] Sequence reset')
 
+    def _advance(self, n):
+        """Move to the next slot in the rotation and clear per-skill state."""
+        self.skill_sequence_index = (self.skill_sequence_index + 1) % n
+        self.skill_waiting_activation = False
+        self._cast_attempts = 0
+
+    def _match_skill(self, area_img, template_img, cache_key, threshold=None):
+        """Return (found, loc, confidence) for one skill icon inside the skill-bar crop.
+
+        Uses a cached last-known location to search a small ROI first for speed,
+        falling back to a full-area search.
+        """
+        if threshold is None:
+            threshold = float(getattr(config, 'skill_match_threshold', 0.7))
+        margin = float(getattr(config, 'template_match_margin', 0.05))
+        if area_img is None or template_img is None or area_img.size == 0:
+            return False, None, 0.0
+        if area_img.shape[0] < template_img.shape[0] or area_img.shape[1] < template_img.shape[1]:
+            return False, None, 0.0
+
+        hint = self._skills_loc_cache.get(cache_key)
+        if hint is not None:
+            hx, hy = hint
+            pad = 30
+            x0 = max(0, hx - pad)
+            y0 = max(0, hy - pad)
+            x1r = min(area_img.shape[1], hx + template_img.shape[1] + pad)
+            y1r = min(area_img.shape[0], hy + template_img.shape[0] + pad)
+            roi = area_img[y0:y1r, x0:x1r]
+            if roi.shape[0] >= template_img.shape[0] and roi.shape[1] >= template_img.shape[1]:
+                matched, conf, max_loc = match_utils.template_match_with_margin(
+                    roi, template_img, threshold, margin,
+                )
+                if matched and max_loc is not None:
+                    loc = (x0 + max_loc[0], y0 + max_loc[1])
+                    self._skills_loc_cache[cache_key] = loc
+                    return True, loc, conf
+
+        matched, conf, max_loc = match_utils.template_match_with_margin(
+            area_img, template_img, threshold, margin,
+        )
+        if matched and max_loc is not None:
+            self._skills_loc_cache[cache_key] = max_loc
+            return True, max_loc, conf
+        return False, None, conf
+
     def execute_skill_sequence(self, hwnd, screen, area_skills, enemy_found, run_active=True):
-        """Match skill icons in the skill bar; press assigned hotkey when ready."""
+        """Cast skills as an ordered rotation that skips cooldowns without stalling.
+
+        The rotation walks the enabled skills in slot order (1 -> 2 -> 3 -> ...
+        -> back to 1). Each cycle it looks at the current slot:
+
+        * If that skill's icon is present (off cooldown), it presses the key and
+          waits for the icon to disappear (cast confirmed) before advancing.
+        * If that skill's icon is missing (on cooldown), it simply advances to
+          the next slot instead of waiting, so the rotation keeps flowing and
+          slot 1 is picked up again on the next lap the moment it is ready.
+
+        A safety cap (MAX_CAST_ATTEMPTS) advances past a ready skill that never
+        casts (e.g. not enough resources) so it can never stall.
+        """
         if not run_active or not CV2_AVAILABLE:
             return
 
@@ -64,45 +130,34 @@ class SkillSequenceManager:
         if screen is None:
             return
 
-        skill_sequence = []
+        # Ordered list of castable skills; list order is the rotation order.
+        valid_skills = []  # (original_idx, resolved_path)
         for idx in range(len(self.skills)):
-            key = (config.skill_sequence_config[idx].get('key') or '').strip()
-            if self.skills[idx] and config.skill_sequence_config[idx]['enabled'] and key:
-                skill_sequence.append(self.skills[idx])
-            else:
-                skill_sequence.append(None)
-
-        valid_skills = []
-        skill_index_map = {}
-        bypass_list = []
-        for i, relative_path in enumerate(skill_sequence):
-            if relative_path:
-                resolved_path = config.resolve_resource_path(relative_path)
+            cfg = config.skill_sequence_config[idx]
+            key = (cfg.get('key') or '').strip()
+            if self.skills[idx] and cfg.get('enabled') and key:
+                resolved_path = config.resolve_resource_path(self.skills[idx])
                 if resolved_path and os.path.exists(resolved_path):
-                    valid_skills.append(resolved_path)
-                    skill_index_map[resolved_path] = i
-                    bypass_list.append(config.skill_sequence_config[i].get('bypass', False))
+                    valid_skills.append((idx, resolved_path))
 
         n = len(valid_skills)
         if n == 0:
             return
 
+        # Restart the rotation when the enemy changes so we always open at slot 1.
         if enemy_found and not self.enemy_found_previous:
             self.skill_sequence_index = 0
             self.skill_waiting_activation = False
-            print('[SKILL-SEQUENCE] Resetting sequence - new enemy detected')
-        elif not enemy_found and self.enemy_found_previous:
-            self.skill_sequence_index = 0
-            self.skill_waiting_activation = False
-            print('[SKILL-SEQUENCE] Resetting sequence - enemy lost')
-
+            self._cast_attempts = 0
         self.enemy_found_previous = enemy_found
         if not enemy_found:
             return
 
-        if not hasattr(self, 'last_skill_count') or self.last_skill_count != n:
+        # Keep the index valid if the number of enabled skills changed.
+        if self.last_skill_count != n:
             self.skill_sequence_index = 0
             self.skill_waiting_activation = False
+            self._cast_attempts = 0
             self.last_skill_count = n
 
         x1, y1, x2, y2 = area_skills
@@ -111,86 +166,65 @@ class SkillSequenceManager:
         if area is None or area.size == 0:
             return
 
-        idx = self.skill_sequence_index % n
-        skill_path = valid_skills[idx]
-        original_idx = skill_index_map.get(skill_path)
-        if original_idx is None:
+        # Throttle: bound scanning + pressing to ~10x/sec.
+        current_time = time.time()
+        if current_time - self.ultimo_tiempo_skill < 0.1:
             return
+        self.ultimo_tiempo_skill = current_time
+
+        mode = str(getattr(config, 'skill_sequence_mode', 'rotation')).lower()
+        if mode == 'priority':
+            self._run_priority(valid_skills, area)
+        else:
+            self._run_rotation(valid_skills, n, area)
+
+    def _press_skill(self, original_idx):
+        hotkey = (config.skill_sequence_config[original_idx].get('key') or '').strip()
+        if hotkey:
+            print(f'[SKILL-SEQUENCE] Skill {original_idx + 1} ready; pressing key {hotkey!r}')
+            input_handler.send_input(hotkey)
+
+    def _run_priority(self, valid_skills, area):
+        """Cast the first ready skill in slot order (on-cooldown skills skipped)."""
+        for original_idx, skill_path in valid_skills:
+            template = template_cache.get_template(skill_path, cv2.IMREAD_COLOR)
+            if template is None:
+                continue
+            if area.shape[0] < template.shape[0] or area.shape[1] < template.shape[1]:
+                continue
+            found, _loc, _conf = self._match_skill(area, template, skill_path)
+            if found:
+                self._press_skill(original_idx)
+                return
+
+    def _run_rotation(self, valid_skills, n, area):
+        """Cast skills in order, skipping cooldowns for the lap without stalling."""
+        idx = self.skill_sequence_index % n
+        original_idx, skill_path = valid_skills[idx]
 
         template = template_cache.get_template(skill_path, cv2.IMREAD_COLOR)
         if template is None:
-            print(f'[SKILL-SEQUENCE] Could not load template from: {skill_path}')
+            print(f'[SKILL-SEQUENCE] Could not load template for skill {original_idx + 1}; skipping')
+            self._advance(n)
             return
-
-        def match_with_hint(area_img, template_img, cache_key, threshold=None):
-            if threshold is None:
-                threshold = float(getattr(config, 'skill_match_threshold', 0.7))
-            margin = float(getattr(config, 'template_match_margin', 0.05))
-            if area_img is None or template_img is None or area_img.size == 0:
-                return False, None, 0.0
-            if area_img.shape[0] < template_img.shape[0] or area_img.shape[1] < template_img.shape[1]:
-                return False, None, 0.0
-
-            hint = self._skills_loc_cache.get(cache_key)
-            if hint is not None:
-                hx, hy = hint
-                pad = 30
-                x0 = max(0, hx - pad)
-                y0 = max(0, hy - pad)
-                x1r = min(area_img.shape[1], hx + template_img.shape[1] + pad)
-                y1r = min(area_img.shape[0], hy + template_img.shape[0] + pad)
-                roi = area_img[y0:y1r, x0:x1r]
-                if roi.shape[0] >= template_img.shape[0] and roi.shape[1] >= template_img.shape[1]:
-                    matched, conf, max_loc = match_utils.template_match_with_margin(
-                        roi, template_img, threshold, margin,
-                    )
-                    if matched and max_loc is not None:
-                        loc = (x0 + max_loc[0], y0 + max_loc[1])
-                        self._skills_loc_cache[cache_key] = loc
-                        return True, loc, conf
-
-            matched, conf, max_loc = match_utils.template_match_with_margin(
-                area_img, template_img, threshold, margin,
-            )
-            if matched and max_loc is not None:
-                self._skills_loc_cache[cache_key] = max_loc
-                return True, max_loc, conf
-            return False, None, conf
-
         if area.shape[0] < template.shape[0] or area.shape[1] < template.shape[1]:
-            print(f'[SKILL-SEQUENCE] Template or area invalid for skill {original_idx + 1}')
+            self._advance(n)
             return
 
-        found, max_loc, max_val = match_with_hint(
-            area_img=area,
-            template_img=template,
-            cache_key=skill_path,
-        )
+        found, _loc, _conf = self._match_skill(area, template, skill_path)
 
         if found:
-            current_time = time.time()
-            if current_time - self.ultimo_tiempo_skill >= 0.1:
-                hotkey = (config.skill_sequence_config[original_idx].get('key') or '').strip()
-                if hotkey:
-                    print(f'[SKILL-SEQUENCE] Skill {original_idx + 1} present; pressing key {hotkey!r}')
-                    input_handler.send_input(hotkey)
-                self.ultimo_tiempo_skill = current_time
+            self._press_skill(original_idx)
             self.skill_waiting_activation = True
+            self._cast_attempts += 1
+            # Give up on a ready skill that won't cast so we never stall here.
+            if self._cast_attempts >= self.MAX_CAST_ATTEMPTS:
+                print(f'[SKILL-SEQUENCE] Skill {original_idx + 1} did not cast after '
+                      f'{self._cast_attempts} tries; advancing')
+                self._advance(n)
+        elif self.skill_waiting_activation:
+            # We pressed it and its icon is now gone -> cast confirmed, move on.
+            self._advance(n)
         else:
-            bypass_active = idx < len(bypass_list) and bypass_list[idx]
-            if bypass_active:
-                print(
-                    f'[SKILL-SEQUENCE] Skill {original_idx + 1} not found with bypass enabled, skipping to next.'
-                )
-                self.skill_sequence_index += 1
-                if self.skill_sequence_index >= n:
-                    print('[SKILL-SEQUENCE] Last skill, resetting sequence.')
-                    self.skill_sequence_index = 0
-                self.skill_waiting_activation = False
-            elif self.skill_waiting_activation:
-                print(f'[SKILL-SEQUENCE] Skill {original_idx + 1} disappeared, advancing to next')
-                self.skill_sequence_index += 1
-                if self.skill_sequence_index >= n:
-                    print('[SKILL-SEQUENCE] Last skill executed, resetting sequence')
-                    self.skill_sequence_index = 0
-                self.skill_waiting_activation = False
+            # On cooldown when we arrived at this slot -> skip so the lap keeps moving.
+            self._advance(n)

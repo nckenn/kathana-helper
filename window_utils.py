@@ -152,6 +152,7 @@ def capture_window_bgr(hwnd):
 
     best = None
     best_method = 'empty'
+    best_mean = -1.0
     for name, fn in attempts:
         try:
             img = fn(hwnd, width, height)
@@ -163,9 +164,11 @@ def capture_window_bgr(hwnd):
         if capture_has_content(img):
             _full_capture_method_cache[hwnd] = name
             return img, name
-        if best is None or capture_stats(img)['mean'] > capture_stats(best)['mean']:
+        img_mean = capture_stats(img)['mean']
+        if best is None or img_mean > best_mean:
             best = img
             best_method = name
+            best_mean = img_mean
 
     if best is not None:
         return best, best_method

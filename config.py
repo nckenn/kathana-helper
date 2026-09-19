@@ -141,8 +141,10 @@ current_mob_match = None
 # Skip elite variants: same name template but higher max HP than learned normal mob
 mob_elite_skip_enabled = True
 mob_elite_sig_threshold = 0.82     # max-HP digit signature match (lower = elite)
-# Pixel shift tolerance when comparing templates (UI sub-pixel drift / window move)
-mob_match_shift_px = 3
+# Pixel shift tolerance when comparing templates (UI sub-pixel drift / window move).
+# 2 covers observed nameplate drift while keeping the shift search ~40% cheaper
+# than 3 (49 vs 25 variants) with no loss on real matches; combat stays at 1.
+mob_match_shift_px = 2
 mob_combat_shift_px = 1
 mob_match_miss_streak = 0
 mob_combat_miss_required = 2
@@ -150,6 +152,12 @@ mob_combat_match_grace_seconds = 0.3
 mob_verify_attempts = 3
 mob_verify_required = 2
 mob_verify_delay_s = 0.06
+# Fast + accurate post-target confirmation. A match this far above the match
+# threshold is trusted on a single fresh frame (fast path); a borderline match is
+# re-checked once on an independent fresh frame so transparent-nameplate false
+# positives are rejected without the old multi-frame sleep penalty.
+mob_target_confident_margin = 0.08
+mob_target_confirm_delay_s = 0.03
 last_mob_scan_time = 0
 # Grave/backtick — focus your character (clear mob target) before retarget/buffs when mob filter is on.
 self_target_key = '`'
@@ -182,7 +190,7 @@ last_repair_time = 0
 REPAIR_COOLDOWN = 5.0
 AUTO_REPAIR_CHECK_INTERVAL = 3.0  # Legacy default; use get_auto_repair_check_interval()
 REPAIR_WARNING_CHECK_INTERVAL = 0.3  # Light-green warning text poll (300ms)
-BREAK_WARNING_TRIGGER_COUNT = 10  # Detections required before repair triggers
+BREAK_WARNING_TRIGGER_COUNT = 5  # Detections required before repair triggers
 last_auto_repair_check_time = 0
 
 # Mob detection optimization
@@ -332,6 +340,11 @@ skill_sequence_config = {
         'bypass': False  # If True, skip skill if not found (not on cooldown/available)
     } for i in range(8)
 }
+
+# How the skill sequence chooses what to cast:
+#   'rotation' - cast skills in slot order, skipping any on cooldown (default)
+#   'priority' - each cycle, cast the first ready skill in slot order
+skill_sequence_mode = 'rotation'
 
 # Current HP/MP percentages (updated by bot_logic, read by GUI)
 current_hp_percentage = 100.0

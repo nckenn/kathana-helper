@@ -179,6 +179,7 @@ def build_settings_snapshot(gui_overlay=None):
         'buff_match_threshold': config.buff_match_threshold,
         'skill_match_threshold': config.skill_match_threshold,
         'template_match_margin': config.template_match_margin,
+        'skill_sequence_mode': getattr(config, 'skill_sequence_mode', 'rotation'),
     }
 
     if gui_overlay:
@@ -336,6 +337,12 @@ def apply_settings_dict(settings):
                     config.buffs_config[idx]['key'] = buff_data.get('key', '')
             except (ValueError, KeyError):
                 continue
+
+    if 'skill_sequence_mode' in settings:
+        config.skill_sequence_mode = (
+            'priority' if str(settings['skill_sequence_mode']).lower() == 'priority'
+            else 'rotation'
+        )
 
     if 'skill_sequence_config' in settings:
         for idx_str, skill_data in settings['skill_sequence_config'].items():

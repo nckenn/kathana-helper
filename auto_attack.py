@@ -98,12 +98,9 @@ def detect_and_verify_mob_after_target(delay=0.05, retry_delay=0.08):
     if mob_filter.is_active():
         if not mob_filter.scan_area_available():
             return {'detected': False, 'name': None, 'should_target': False, 'needs_retarget': False}
-        # Slow-but-safe: require stable match across multiple frames.
-        # Transparent UI backgrounds can cause single-frame false positives.
-        match = mob_filter.refresh_scan_stable(hwnd)
-        if not match and retry_delay > 0:
-            time.sleep(retry_delay)
-            match = mob_filter.refresh_scan_stable(hwnd)
+        # Fast + accurate: trusts a strong match on a fresh frame, and only
+        # re-checks a borderline match once (see mob_filter.verify_after_target).
+        match = mob_filter.verify_after_target(hwnd)
         detected_mob = match['name'] if match else None
         should_target = match is not None
         needs_retarget = match is None
@@ -1221,7 +1218,7 @@ def check_auto_attack():
                     
                     # Verify mob filter after targeting
                     if mob_filter.is_active():
-                        mob_filter.refresh_scan_stable(hwnd)
+                        mob_filter.verify_after_target(hwnd)
                         if config.current_mob_match is None:
                             print("[Mob Filter] No CV template match after targeting — retargeting")
                             EnemyStateManager.reset_enemy_state()

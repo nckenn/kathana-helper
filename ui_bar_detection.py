@@ -86,13 +86,13 @@ def _split_row_runs(column_indices, max_gap=ROW_RUN_GAP):
 
 def _row_merged_mask(mask_u8):
     """Bridge horizontal gaps from white numbers without merging separate bars vertically."""
-    h, w = mask_u8.shape[:2]
+    if mask_u8 is None or mask_u8.size == 0:
+        return mask_u8
+    # Kernel height is 1, so a single whole-image close is identical to closing
+    # each row independently (no vertical interaction) — but avoids the per-row
+    # Python loop, which runs on every HP/MP/enemy bar read.
     close_k = cv2.getStructuringElement(cv2.MORPH_RECT, (ROW_CLOSE_WIDTH, 1))
-    out = np.zeros_like(mask_u8)
-    for y in range(h):
-        row = mask_u8[y : y + 1, :]
-        out[y : y + 1, :] = cv2.morphologyEx(row, cv2.MORPH_CLOSE, close_k)
-    return out
+    return cv2.morphologyEx(mask_u8, cv2.MORPH_CLOSE, close_k)
 
 
 def _find_row_band_segments(mask_u8):

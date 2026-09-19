@@ -27,6 +27,8 @@ import debug_utils
 import logger
 from ui.keybind_dialogs import open_keybind_dialog
 from ui.settings_overlays import collect_gui_overlay, sync_gui_to_config
+import ui_fonts
+import ui_icons
 
 
 class ToolTip:
@@ -70,7 +72,7 @@ class ToolTip:
         tw.wm_geometry("+%d+%d" % (x, y))
         label = tk.Label(tw, text=self.text, justify=tk.LEFT,
                       background="#ffffe0", relief=tk.SOLID, borderwidth=1,
-                      font=("tahoma", "8", "normal"), wraplength=250)
+                      font=(ui_fonts.APP_FONT_FAMILY, "8", "normal"), wraplength=250)
         label.pack(ipadx=1)
 
     def hidetip(self):
@@ -910,6 +912,12 @@ class BotGUI:
                         import traceback
                         traceback.print_exc()
             
+            # Apply skill sequence cast mode (Rotation / Priority)
+            if hasattr(self, 'skill_sequence_mode_var'):
+                self.skill_sequence_mode_var.set(
+                    "Priority" if getattr(config, 'skill_sequence_mode', 'rotation') == 'priority' else "Rotation"
+                )
+
             # Apply skill sequence settings
             if hasattr(self, 'skill_sequence_vars') and hasattr(self, 'skill_sequence_canvases'):
                 for i in range(8):
@@ -978,7 +986,11 @@ class BotGUI:
         # Configure customtkinter appearance and theme
         ctk.set_appearance_mode("dark")  # Options: "dark", "light", "system"
         ctk.set_default_color_theme("blue")  # Options: "blue", "green", "dark-blue"
-        
+
+        # Register the bundled Geist Pixel font and make it the app-wide default
+        # (all CTkFont(size=...) calls without an explicit family inherit this).
+        ui_fonts.apply_app_font()
+
         # Initialize root window with customtkinter
         self.root = ctk.CTk()
         self.root.title(config.APP_TITLE)
@@ -1096,7 +1108,7 @@ class BotGUI:
         self.bars_status_label.grid(row=0, column=3, padx=(0, 10), pady=6, sticky="w")
         
         # Minimize/Maximize button
-        self.minimize_button = ctk.CTkButton(status_info_frame, text="−", command=self.toggle_minimize, width=30, height=25, font=ctk.CTkFont(size=16, weight="bold"))
+        self.minimize_button = ctk.CTkButton(status_info_frame, text="", image=ui_icons.get_icon("minimize", size=16), command=self.toggle_minimize, width=30, height=25)
         self.minimize_button.grid(row=0, column=2, padx=(10, 10), pady=6)
         
         # Bot control frame - fixed height to prevent fluid expansion
@@ -1362,7 +1374,10 @@ class BotGUI:
         _small_font = ctk.CTkFont(size=10)
         _chk_w = 118
 
-        def _card(parent, title):
+        _sub_font = ctk.CTkFont(size=10)
+        _chev_color = "#9aa4b2"
+
+        def _card(parent, title, subtitle=None):
             frame = ctk.CTkFrame(parent, fg_color=("gray92", "gray20"), corner_radius=10)
             frame.columnconfigure(0, weight=1)
             ctk.CTkLabel(
@@ -1371,17 +1386,138 @@ class BotGUI:
                 font=_h_font,
                 text_color=("gray25", "gray80"),
                 anchor="w",
-            ).grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 2))
+            ).grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 0))
+            next_row = 1
+            if subtitle:
+                ctk.CTkLabel(
+                    frame, text=subtitle, font=_sub_font,
+                    text_color=("gray45", "gray55"), anchor="w",
+                ).grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 2))
+                next_row = 2
             body = ctk.CTkFrame(frame, fg_color="transparent")
-            body.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 10))
+            body.grid(row=next_row, column=0, sticky="ew", padx=12, pady=(4, 10))
             body.columnconfigure(0, weight=1)
             return frame, body
 
-        left_card, left_body = _card(settings_frame, "Combat & Utility")
-        left_card.grid(row=1, column=0, sticky="nsew", padx=(15, 6), pady=(10, 6))
+        def _collapsible_card(parent, title, subtitle=None, expanded=False):
+            frame = ctk.CTkFrame(parent, fg_color=("gray92", "gray20"), corner_radius=10)
+            frame.columnconfigure(0, weight=1)
+            header = ctk.CTkFrame(frame, fg_color="transparent")
+            header.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 2))
+            header.columnconfigure(1, weight=1)
+            chev = ctk.CTkLabel(
+                header, text="", width=18,
+                image=ui_icons.get_icon(
+                    "chevron_down" if expanded else "chevron_right",
+                    size=14, color=_chev_color,
+                ),
+            )
+            chev.grid(row=0, column=0, sticky="w")
+            tlbl = ctk.CTkLabel(
+                header, text=title, font=_h_font,
+                text_color=("gray25", "gray80"), anchor="w",
+            )
+            tlbl.grid(row=0, column=1, sticky="w", padx=(4, 0))
+            sub_lbl = None
+            if subtitle:
+                sub_lbl = ctk.CTkLabel(
+                    frame, text=subtitle, font=_sub_font,
+                    text_color=("gray45", "gray55"), anchor="w",
+                )
+            body = ctk.CTkFrame(frame, fg_color="transparent")
+            body.columnconfigure(0, weight=1)
+            state = {"open": expanded}
 
-        right_card, right_body = _card(settings_frame, "Pots & Unstuck")
-        right_card.grid(row=1, column=1, sticky="nsew", padx=(6, 15), pady=(10, 6))
+            def _apply():
+                chev.configure(image=ui_icons.get_icon(
+                    "chevron_down" if state["open"] else "chevron_right",
+                    size=14, color=_chev_color,
+                ))
+                if state["open"]:
+                    if sub_lbl is not None:
+                        sub_lbl.grid(row=1, column=0, sticky="ew", padx=34, pady=(0, 2))
+                    body.grid(row=2, column=0, sticky="ew", padx=12, pady=(4, 10))
+                else:
+                    if sub_lbl is not None:
+                        sub_lbl.grid_forget()
+                    body.grid_forget()
+
+            def _toggle(_e=None):
+                state["open"] = not state["open"]
+                _apply()
+
+            for w in (header, chev, tlbl):
+                w.bind("<Button-1>", _toggle)
+            _apply()
+            return frame, body
+
+        # --- Quick Start card (compact readiness checklist + one-click presets) ---
+        qs_card, qs_body = _card(settings_frame, "Quick Start")
+        qs_card.grid(row=0, column=0, columnspan=2, sticky="nsew", padx=15, pady=(12, 6))
+        qs_body.columnconfigure(0, weight=1)
+
+        qs_row = ctk.CTkFrame(qs_body, fg_color="transparent")
+        qs_row.pack(fill="x")
+
+        steps_wrap = ctk.CTkFrame(qs_row, fg_color="transparent")
+        steps_wrap.pack(side="left")
+        self.qs_dots = {}
+        self.qs_texts = {}
+        _qs_steps = [
+            ("connect", "Connect", "Connect to your game window using the top bar."),
+            ("regions", "Regions", "Click \u201cRegions\u201d and set the HP & MP bar areas."),
+            ("start", "Start", "Press Start once the first two steps are done."),
+        ]
+        for key, label, tip in _qs_steps:
+            cell = ctk.CTkFrame(steps_wrap, fg_color="transparent")
+            cell.pack(side="left", padx=(0, 12))
+            dot = ctk.CTkLabel(cell, text="", width=16, image=ui_icons.get_icon("dot", size=13, color="#6b7280"))
+            dot.pack(side="left")
+            txt = ctk.CTkLabel(cell, text=label, font=_t_font, text_color=("gray30", "gray75"), anchor="w")
+            txt.pack(side="left", padx=(3, 0))
+            create_tooltip(cell, tip)
+            create_tooltip(txt, tip)
+            self.qs_dots[key] = dot
+            self.qs_texts[key] = txt
+
+        preset_wrap = ctk.CTkFrame(qs_row, fg_color="transparent")
+        preset_wrap.pack(side="right")
+        ctk.CTkLabel(preset_wrap, text="Presets:", font=_small_font, text_color=("gray40", "gray60")).pack(side="left", padx=(0, 6))
+        for _pk, _plabel, _ptip in (
+            ("melee", "Melee", "Auto attack + loot, HP/MP pots, repair, unstuck."),
+            ("caster", "Caster", "Like Melee but casts skills instead of basic attack."),
+            ("support", "Support", "Party assist mode + HP/MP pots (no auto-target)."),
+        ):
+            b = ctk.CTkButton(
+                preset_wrap, text=_plabel, width=60, height=24, corner_radius=6,
+                font=_small_font, command=lambda k=_pk: self.apply_quick_preset(k),
+            )
+            b.pack(side="left", padx=(0, 4))
+            create_tooltip(b, _ptip)
+
+        left_card, left_body = _card(
+            settings_frame, "Combat",
+            "Targeting, attacking, looting, and gear repair.",
+        )
+        left_card.grid(row=1, column=0, sticky="nsew", padx=(15, 6), pady=(6, 6))
+
+        right_card, right_body = _card(
+            settings_frame, "Staying Alive",
+            "Automatic HP and MP potions.",
+        )
+        right_card.grid(row=1, column=1, sticky="nsew", padx=(6, 15), pady=(6, 6))
+
+        movement_card, movement_body = _collapsible_card(
+            settings_frame, "Movement & Camera",
+            "Get unstuck and rotate the camera for better detection.",
+        )
+        movement_card.grid(row=2, column=0, sticky="nsew", padx=(15, 6), pady=(6, 6))
+
+        extras_card, extras_body = _collapsible_card(
+            settings_frame, "Party & Misc",
+            "Assist a party leader instead of auto-targeting.",
+        )
+        extras_card.grid(row=2, column=1, sticky="nsew", padx=(6, 15), pady=(6, 6))
 
         # --- Left card (Combat & Utility) ---
         auto_attack_row = ctk.CTkFrame(left_body, fg_color="transparent")
@@ -1429,14 +1565,14 @@ class BotGUI:
         self.is_mage_var = tk.BooleanVar(value=config.is_mage)
         mage_checkbox = ctk.CTkCheckBox(
             mage_row,
-            text="Mage",
+            text="Caster mode",
             width=_chk_w,
             variable=self.is_mage_var,
             command=self.update_is_mage,
             font=_t_font,
         )
         mage_checkbox.pack(side="left")
-        create_tooltip(mage_checkbox, "Enable if you use skills instead of basic attack after targeting.")
+        create_tooltip(mage_checkbox, "Caster mode — skip the basic attack after targeting (use skills instead).")
 
         auto_repair_row = ctk.CTkFrame(left_body, fg_color="transparent")
         auto_repair_row.pack(fill="x", pady=(0, 6))
@@ -1455,14 +1591,14 @@ class BotGUI:
         self.auto_repair_count_label.pack(side="left", padx=(10, 0))
         self.auto_repair_reset_btn = ctk.CTkButton(
             auto_repair_row,
-            text="↺",
+            text="",
+            image=ui_icons.get_icon("refresh", size=15),
             width=28,
             height=24,
             corner_radius=6,
             command=self.reset_auto_repair_count,
             fg_color=("gray75", "gray30"),
             hover_color=("gray65", "gray40"),
-            font=ctk.CTkFont(size=13),
         )
         self.auto_repair_reset_btn.pack(side="left", padx=(6, 0))
         self._update_auto_repair_count_display()
@@ -1485,7 +1621,7 @@ class BotGUI:
         ))
         bind_key_button_clear(self.repair_key_btn, self.clear_repair_key)
 
-        assist_row = ctk.CTkFrame(left_body, fg_color="transparent")
+        assist_row = ctk.CTkFrame(extras_body, fg_color="transparent")
         assist_row.pack(fill="x", pady=(0, 2))
         self.assist_only_var = tk.BooleanVar(value=config.assist_only_enabled)
         self.assist_only_checkbox = ctk.CTkCheckBox(
@@ -1499,7 +1635,7 @@ class BotGUI:
         self.assist_only_checkbox.pack(side="left")
         create_tooltip(self.assist_only_checkbox, "Party assist: presses Assist key on an interval.")
 
-        assist_key_row = ctk.CTkFrame(left_body, fg_color="transparent")
+        assist_key_row = ctk.CTkFrame(extras_body, fg_color="transparent")
         assist_key_row.pack(fill="x", pady=(0, 2))
         ctk.CTkLabel(assist_key_row, text="Assist key", font=_small_font, text_color=("gray35", "gray70")).pack(side="left")
         self.assist_key_var = tk.StringVar(value=config.assist_key)
@@ -1630,7 +1766,7 @@ class BotGUI:
         self.mp_height_var = tk.StringVar(value=str(config.mp_bar_area['height']))
         self.mp_coords_var = tk.StringVar(value=f"{config.mp_bar_area['x']},{config.mp_bar_area['y']}")
         
-        auto_unstuck_row = ctk.CTkFrame(right_body, fg_color="transparent")
+        auto_unstuck_row = ctk.CTkFrame(movement_body, fg_color="transparent")
         auto_unstuck_row.pack(fill="x", pady=(0, 2))
         self.auto_change_target_var = tk.BooleanVar(value=config.auto_change_target_enabled)
         self.auto_change_target_checkbox = ctk.CTkCheckBox(
@@ -1656,7 +1792,7 @@ class BotGUI:
         ctk.CTkLabel(auto_unstuck_row, text="s", font=_t_font).pack(side="left")
         create_tooltip(unstuck_timeout_entry, "Seconds before considering HP stagnant.")
 
-        auto_rotate_row = ctk.CTkFrame(right_body, fg_color="transparent")
+        auto_rotate_row = ctk.CTkFrame(movement_body, fg_color="transparent")
         auto_rotate_row.pack(fill="x", pady=(0, 2))
         self.auto_rotate_var = tk.BooleanVar(value=config.auto_rotate_enabled)
         self.auto_rotate_checkbox = ctk.CTkCheckBox(
@@ -1688,22 +1824,22 @@ class BotGUI:
         ctk.CTkLabel(auto_rotate_row, text="s", font=_t_font).pack(side="left")
         create_tooltip(auto_rotate_interval_entry, "Seconds between camera rotations.")
 
-        mob_separator = ctk.CTkFrame(settings_frame, height=1, fg_color="gray50")
-        mob_separator.grid(row=6, column=0, columnspan=2, sticky="ew", padx=15, pady=(4, 0))
-
-        ctk.CTkLabel(
-            settings_frame, text="Mob Filter", font=ctk.CTkFont(size=12, weight="bold"),
-        ).grid(row=7, column=0, columnspan=2, sticky="w", padx=15, pady=(10, 4))
+        mob_card, mob_filter_body = _collapsible_card(
+            settings_frame, "Mob Filter (advanced)",
+            "Only attack specific mobs you\u2019ve taught the bot to recognize.",
+        )
+        mob_card.grid(row=3, column=0, columnspan=2, sticky="nsew", padx=15, pady=(6, 12))
+        mob_filter_body.columnconfigure(0, weight=1)
 
         self.mob_detection_var = tk.BooleanVar()
         self.mob_checkbox = ctk.CTkCheckBox(
-            settings_frame, text="Enable mob filter",
+            mob_filter_body, text="Enable mob filter",
             variable=self.mob_detection_var,
             command=self.update_mob_detection,
             font=ctk.CTkFont(size=11),
             state="disabled",
         )
-        self.mob_checkbox.grid(row=8, column=0, columnspan=2, sticky="w", padx=15, pady=(0, 6))
+        self.mob_checkbox.pack(anchor="w", pady=(0, 6))
         create_tooltip(
             self.mob_checkbox,
             "Only attack mobs that match learned templates. Set Enemy Name in Region Editor, then Learn.",
@@ -1711,21 +1847,21 @@ class BotGUI:
 
         self.mob_elite_skip_var = tk.BooleanVar(value=config.mob_elite_skip_enabled)
         self.mob_elite_skip_checkbox = ctk.CTkCheckBox(
-            settings_frame,
+            mob_filter_body,
             text="Skip elite mobs (higher max HP, same name)",
             variable=self.mob_elite_skip_var,
             command=self.update_mob_elite_skip,
             font=ctk.CTkFont(size=11),
             state="disabled",
         )
-        self.mob_elite_skip_checkbox.grid(row=9, column=0, columnspan=2, sticky="w", padx=15, pady=(0, 6))
+        self.mob_elite_skip_checkbox.pack(anchor="w", pady=(0, 6))
         create_tooltip(
             self.mob_elite_skip_checkbox,
             "Learn templates from normal mobs only. Elites with the same name but larger HP numbers are skipped.",
         )
 
-        self_target_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        self_target_row.grid(row=10, column=0, columnspan=2, sticky="ew", padx=15, pady=(0, 6))
+        self_target_row = ctk.CTkFrame(mob_filter_body, fg_color="transparent")
+        self_target_row.pack(fill="x", pady=(0, 6))
         ctk.CTkLabel(
             self_target_row, text="Self-target key", font=ctk.CTkFont(size=11),
         ).pack(side="left")
@@ -1743,22 +1879,22 @@ class BotGUI:
 
         self.mob_safe_buffs_var = tk.BooleanVar(value=config.mob_filter_safe_buffs)
         self.mob_safe_buffs_checkbox = ctk.CTkCheckBox(
-            settings_frame,
+            mob_filter_body,
             text="Buffs only when not fighting",
             variable=self.mob_safe_buffs_var,
             command=self.update_mob_safe_buffs,
             font=ctk.CTkFont(size=11),
             state="disabled",
         )
-        self.mob_safe_buffs_checkbox.grid(row=11, column=0, columnspan=2, sticky="w", padx=15, pady=(0, 6))
+        self.mob_safe_buffs_checkbox.pack(anchor="w", pady=(0, 6))
         create_tooltip(
             self.mob_safe_buffs_checkbox,
             "Skip auto-buffs while a mob is targeted. HP/MP pots always work in combat. "
             "Uses self-target key before buffs when safe.",
         )
 
-        mob_btn_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        mob_btn_row.grid(row=12, column=0, columnspan=2, sticky="ew", padx=15, pady=(0, 8))
+        mob_btn_row = ctk.CTkFrame(mob_filter_body, fg_color="transparent")
+        mob_btn_row.pack(fill="x", pady=(0, 8))
         self.mob_scan_label = ctk.CTkLabel(
             mob_btn_row, text=self._mob_scan_status_text(),
             font=ctk.CTkFont(size=10), text_color=("gray40", "gray60"), anchor='w',
@@ -1793,9 +1929,9 @@ class BotGUI:
         self.mob_compare_btn.pack(side="left")
 
         mob_body = ctk.CTkFrame(
-            settings_frame, fg_color=("gray92", "gray20"), corner_radius=8,
+            mob_filter_body, fg_color=("gray88", "gray17"), corner_radius=8,
         )
-        mob_body.grid(row=13, column=0, columnspan=2, sticky="ew", padx=15, pady=(0, 6))
+        mob_body.pack(fill="x", pady=(0, 6))
         mob_body.columnconfigure(1, weight=1)
         mob_body.rowconfigure(0, weight=1)
 
@@ -1809,7 +1945,7 @@ class BotGUI:
             list_col, width=12, height=6, exportselection=False,
             bg='#2b2b2b', fg='white', selectbackground='#1f538d',
             selectforeground='white', highlightthickness=0, bd=0,
-            font=('Segoe UI', 10),
+            font=(ui_fonts.APP_FONT_FAMILY, 10),
         )
         self.mob_listbox.pack(fill="y")
         self.mob_listbox.bind('<<ListboxSelect>>', lambda _e: self._update_mob_preview())
@@ -1843,21 +1979,21 @@ class BotGUI:
         self.mob_preview_caption.grid(row=2, column=0, sticky="ew", pady=(4, 0))
 
         self.mob_filter_help = ctk.CTkLabel(
-            settings_frame,
+            mob_filter_body,
             text='Set Enemy Name in Region Editor (full width of the name/level bar). '
                  'Learn saves that exact region. Matching uses name text shape, not OCR. '
                  'Re-learn templates if you change the region.',
             font=ctk.CTkFont(size=10), text_color=("gray40", "gray60"), anchor='w',
             justify='left',
         )
-        self.mob_filter_help.grid(row=14, column=0, columnspan=2, sticky='ew', padx=15, pady=(0, 15))
+        self.mob_filter_help.pack(fill='x', pady=(0, 4))
 
         def _sync_mob_help_wrap(_event=None):
             if not hasattr(self, 'mob_filter_help'):
                 return
             w = settings_frame.winfo_width()
             if w > 60:
-                self.mob_filter_help.configure(wraplength=max(200, w - 30))
+                self.mob_filter_help.configure(wraplength=max(200, w - 80))
 
         settings_frame.bind('<Configure>', _sync_mob_help_wrap, add='+')
         self.root.after(100, _sync_mob_help_wrap)
@@ -1896,11 +2032,38 @@ class BotGUI:
         info_text = ctk.CTkLabel(info_frame, 
                                 text="1. Click the skill image to select a skill icon\n"
                                      "2. Assign a hotkey for each skill (pressed instead of clicking)\n"
-                                     "3. Enable the checkbox to include the skill in the sequence\n"
-                                     "4. Skills run in order when an enemy is found (set Skill Bar in Region Editor)",
+                                     "3. Enable the checkbox to include the skill\n"
+                                     "4. Pick a Cast mode below (skills on cooldown are always skipped):\n"
+                                     "   \u2022 Rotation: cast in slot order 1\u21922\u21923\u2026 then back to 1\n"
+                                     "   \u2022 Priority: each cycle cast the first ready skill (slot 1 first)\n"
+                                     "   (Runs when an enemy is found — set Skill Bar in Region Editor)",
                                 font=ctk.CTkFont(size=12),
                                 justify="left", anchor="w")
         info_text.grid(row=1, column=0, sticky="w", padx=10, pady=(0, 10))
+
+        # Cast mode selector: Rotation vs Priority
+        mode_row = ctk.CTkFrame(info_frame, fg_color="transparent")
+        mode_row.grid(row=2, column=0, sticky="w", padx=10, pady=(0, 10))
+        mode_label = ctk.CTkLabel(
+            mode_row, text="Cast mode:", font=ctk.CTkFont(size=12, weight="bold"),
+        )
+        mode_label.pack(side="left", padx=(0, 8))
+        create_tooltip(
+            mode_label,
+            "Rotation: cast skills in slot order (1\u21922\u21923\u2026), skipping any on cooldown.\n"
+            "Priority: each cycle cast the first ready skill in the list (slot 1 gets first dibs).",
+        )
+        self.skill_sequence_mode_var = tk.StringVar(
+            value="Priority" if getattr(config, 'skill_sequence_mode', 'rotation') == 'priority' else "Rotation"
+        )
+        self.skill_sequence_mode_selector = ctk.CTkSegmentedButton(
+            mode_row,
+            values=["Rotation", "Priority"],
+            variable=self.skill_sequence_mode_var,
+            command=self.update_skill_sequence_mode,
+            font=ctk.CTkFont(size=11),
+        )
+        self.skill_sequence_mode_selector.pack(side="left")
         
         # Initialize skill sequence variables
         self.skill_sequence_vars = {}
@@ -1966,18 +2129,10 @@ class BotGUI:
                 key_btn.configure(text=key_button_label(config.skill_sequence_config[i]['key']))
             bind_key_button_clear(key_btn, lambda idx=i: self.clear_skill_sequence_key(idx))
 
-            # Skip if on cooldown (icon not visible in Skill Area)
+            # Cooldown skipping is now automatic (priority casting), so the old
+            # per-skill "Skip if on cooldown" checkbox has been removed. The var is
+            # kept so existing saved profiles still load without error.
             self.skill_sequence_bypass_vars[i] = tk.BooleanVar(value=config.skill_sequence_config[i].get('bypass', False))
-            bypass_checkbox = ctk.CTkCheckBox(skill_slot_frame, text="",
-                                             variable=self.skill_sequence_bypass_vars[i],
-                                             command=lambda idx=i: self.update_skill_sequence_bypass(idx),
-                                             font=ctk.CTkFont(size=10), width=20)
-            bypass_checkbox.grid(row=0, column=4, padx=(5, 8), pady=6, sticky="e")
-            create_tooltip(
-                bypass_checkbox,
-                "Skip if on cooldown: when this skill's icon is not found in the Skill Area "
-                "(likely on cooldown), skip this slot and continue to the next skill.",
-            )
             self.skill_sequence_state.append({
                 'image_path': config.skill_sequence_config[i].get('image_path'),
                 'enabled': config.skill_sequence_config[i]['enabled']
@@ -3189,6 +3344,14 @@ class BotGUI:
         status = "enabled" if config.skill_sequence_config[idx]['enabled'] else "disabled"
         print(f"Skill Sequence {idx + 1} {status}")
     
+    def update_skill_sequence_mode(self, value=None):
+        """Switch the skill sequence between ordered Rotation and Priority casting."""
+        selected = str(self.skill_sequence_mode_var.get()).lower()
+        config.skill_sequence_mode = 'priority' if selected == 'priority' else 'rotation'
+        if config.skill_sequence_manager:
+            config.skill_sequence_manager.reset_sequence()
+        print(f"Skill sequence cast mode: {config.skill_sequence_mode}")
+
     def update_skill_sequence_bypass(self, idx):
         """Update skill sequence bypass status"""
         if hasattr(self, 'skill_sequence_bypass_vars') and idx in self.skill_sequence_bypass_vars:
@@ -3622,6 +3785,61 @@ class BotGUI:
         status = "enabled" if config.mob_filter_safe_buffs else "disabled"
         print(f"Mob filter safe buffs {status}")
 
+    def _refresh_quick_start(self):
+        """Update the Quick Start readiness checklist (Connect / Regions / Start)."""
+        if not hasattr(self, 'qs_dots'):
+            return
+        connected = config.connected_window is not None
+        regions = config.bot_regions_ready()
+        status = {'connect': connected, 'regions': regions, 'start': connected and regions}
+        for key, ok in status.items():
+            dot = self.qs_dots.get(key)
+            if dot is not None:
+                dot.configure(image=ui_icons.get_icon(
+                    'check' if ok else 'dot', size=13,
+                    color='#16a34a' if ok else '#6b7280',
+                ))
+            txt = self.qs_texts.get(key)
+            if txt is not None:
+                txt.configure(text_color=("#15803d", "#4ade80") if ok else ("gray30", "gray75"))
+
+    def apply_quick_preset(self, kind):
+        """One-click config presets for beginners (Melee / Caster / Support)."""
+        try:
+            # Assist mode gates auto-attack/mob/unstuck, so clear it first for combat presets.
+            if kind != 'support' and self.assist_only_var.get():
+                self.assist_only_var.set(False)
+                self.update_assist_only()
+
+            # Survival defaults shared by every preset.
+            for var_name, handler in (
+                ('auto_hp_var', self.update_auto_hp),
+                ('auto_mp_var', self.update_auto_mp),
+                ('auto_repair_var', self.update_auto_repair),
+            ):
+                getattr(self, var_name).set(True)
+                handler()
+
+            if kind in ('melee', 'caster'):
+                self.action_vars['pick'].set(True)
+                self.update_action_slot('pick')
+                self.auto_change_target_var.set(True)
+                self.update_auto_change_target()
+                self.auto_attack_var.set(True)
+                self.update_auto_attack()
+                self.is_mage_var.set(kind == 'caster')
+                self.update_is_mage()
+            elif kind == 'support':
+                self.is_mage_var.set(False)
+                self.update_is_mage()
+                self.assist_only_var.set(True)
+                self.update_assist_only()
+
+            self._refresh_quick_start()
+            print(f"[Preset] Applied '{kind}' preset")
+        except Exception as e:
+            print(f"[Preset] Failed to apply '{kind}': {e}")
+
     def update_mob_detection(self):
         """Update mob filter enabled status"""
         config.mob_detection_enabled = self.mob_detection_var.get()
@@ -3872,7 +4090,7 @@ class BotGUI:
             # Add instruction label
             instruction_label = tk.Label(picker_window, 
                                        text="Click on the game window to set click position\nPress ESC to cancel", 
-                                       font=("Arial", 16), 
+                                       font=(ui_fonts.APP_FONT_FAMILY, 16), 
                                        fg="white", 
                                        bg="black")
             instruction_label.place(relx=0.5, rely=0.1, anchor="center")
@@ -3880,7 +4098,7 @@ class BotGUI:
             # Label to show current position
             info_label = tk.Label(picker_window, 
                                 text="", 
-                                font=("Arial", 12), 
+                                font=(ui_fonts.APP_FONT_FAMILY, 12), 
                                 fg="yellow", 
                                 bg="black")
             info_label.place(relx=0.5, rely=0.15, anchor="center")
@@ -3984,7 +4202,7 @@ class BotGUI:
             # Add instruction label
             instruction_label = tk.Label(picker_window, 
                                        text="Click and drag to select HP bar area\nRelease to confirm, Press ESC to cancel", 
-                                       font=("Arial", 16), 
+                                       font=(ui_fonts.APP_FONT_FAMILY, 16), 
                                        fg="white", 
                                        bg="black")
             instruction_label.place(relx=0.5, rely=0.1, anchor="center")
@@ -3992,7 +4210,7 @@ class BotGUI:
             # Label to show current position and size
             info_label = tk.Label(picker_window, 
                                 text="", 
-                                font=("Arial", 12), 
+                                font=(ui_fonts.APP_FONT_FAMILY, 12), 
                                 fg="yellow", 
                                 bg="black")
             info_label.place(relx=0.5, rely=0.15, anchor="center")
@@ -4166,7 +4384,7 @@ class BotGUI:
             # Add instruction label
             instruction_label = tk.Label(picker_window, 
                                        text="Click and drag to select MP bar area\nRelease to confirm, Press ESC to cancel", 
-                                       font=("Arial", 16), 
+                                       font=(ui_fonts.APP_FONT_FAMILY, 16), 
                                        fg="white", 
                                        bg="black")
             instruction_label.place(relx=0.5, rely=0.1, anchor="center")
@@ -4174,7 +4392,7 @@ class BotGUI:
             # Label to show current position and size
             info_label = tk.Label(picker_window, 
                                 text="", 
-                                font=("Arial", 12), 
+                                font=(ui_fonts.APP_FONT_FAMILY, 12), 
                                 fg="cyan", 
                                 bg="black")
             info_label.place(relx=0.5, rely=0.15, anchor="center")
@@ -4348,7 +4566,7 @@ class BotGUI:
             # Add instruction label
             instruction_label = tk.Label(picker_window, 
                                        text="Click and drag to select mob name area\nRelease to confirm, Press ESC to cancel", 
-                                       font=("Arial", 16), 
+                                       font=(ui_fonts.APP_FONT_FAMILY, 16), 
                                        fg="white", 
                                        bg="black")
             instruction_label.place(relx=0.5, rely=0.1, anchor="center")
@@ -4356,7 +4574,7 @@ class BotGUI:
             # Label to show current position and size
             info_label = tk.Label(picker_window, 
                                 text="", 
-                                font=("Arial", 12), 
+                                font=(ui_fonts.APP_FONT_FAMILY, 12), 
                                 fg="lime", 
                                 bg="black")
             info_label.place(relx=0.5, rely=0.15, anchor="center")
@@ -4534,7 +4752,7 @@ class BotGUI:
             # Add instruction label
             instruction_label = tk.Label(picker_window, 
                                        text="Click and drag to select enemy HP bar area\nRelease to confirm, Press ESC to cancel", 
-                                       font=("Arial", 16), 
+                                       font=(ui_fonts.APP_FONT_FAMILY, 16), 
                                        fg="white", 
                                        bg="black")
             instruction_label.place(relx=0.5, rely=0.1, anchor="center")
@@ -4542,7 +4760,7 @@ class BotGUI:
             # Label to show current position and size
             info_label = tk.Label(picker_window, 
                                 text="", 
-                                font=("Arial", 12), 
+                                font=(ui_fonts.APP_FONT_FAMILY, 12), 
                                 fg="orange", 
                                 bg="black")
             info_label.place(relx=0.5, rely=0.15, anchor="center")
@@ -4716,7 +4934,7 @@ class BotGUI:
             # Add instruction label
             instruction_label = tk.Label(picker_window, 
                                        text="Click and drag to select system message area\nRelease to confirm, Press ESC to cancel", 
-                                       font=("Arial", 16), 
+                                       font=(ui_fonts.APP_FONT_FAMILY, 16), 
                                        fg="white", 
                                        bg="black")
             instruction_label.place(relx=0.5, rely=0.1, anchor="center")
@@ -4724,7 +4942,7 @@ class BotGUI:
             # Label to show current position and size
             info_label = tk.Label(picker_window, 
                                 text="", 
-                                font=("Arial", 12), 
+                                font=(ui_fonts.APP_FONT_FAMILY, 12), 
                                 fg="orange", 
                                 bg="black")
             info_label.place(relx=0.5, rely=0.15, anchor="center")
@@ -4926,16 +5144,16 @@ class BotGUI:
             self.toggle_bot_button.configure(
                 state="normal", text="Start", fg_color="green", hover_color="darkgreen", command=self.toggle_bot
             )
-            cfg_min(minib, state="normal", text="▶", fg_color="#16a34a", hover_color="#15803d", command=self.toggle_bot)
+            cfg_min(minib, state="normal", text="", image=ui_icons.get_icon("play", size=16), fg_color="#16a34a", hover_color="#15803d", command=self.toggle_bot)
         elif config.bot_running:
             # Keep button enabled when running so user can stop
             self.toggle_bot_button.configure(
                 state="normal", text="Stop", fg_color="red", hover_color="darkred", command=self.toggle_bot
             )
-            cfg_min(minib, state="normal", text="■", fg_color="#dc2626", hover_color="#b91c1c", command=self.toggle_bot)
+            cfg_min(minib, state="normal", text="", image=ui_icons.get_icon("stop", size=15), fg_color="#dc2626", hover_color="#b91c1c", command=self.toggle_bot)
         else:
             self.toggle_bot_button.configure(state="disabled")
-            cfg_min(minib, state="disabled", text="▶", fg_color="#16a34a", hover_color="#15803d", command=self.toggle_bot)
+            cfg_min(minib, state="disabled", text="", image=ui_icons.get_icon("play", size=16), fg_color="#16a34a", hover_color="#15803d", command=self.toggle_bot)
         self.update_mob_filter_ui_state()
     
     def _mob_filter_ready(self):
@@ -5392,7 +5610,12 @@ class BotGUI:
                 update_func()  # Execute the queued GUI update
         except queue.Empty:
             pass  # No more updates to process
-        
+
+        try:
+            self._refresh_quick_start()
+        except Exception:
+            pass
+
         self.root.after(config.get_gui_updates_interval_ms(), self.process_gui_updates)
     
     def toggle_minimize(self):
@@ -5417,7 +5640,7 @@ class BotGUI:
                 self.root.geometry(self.saved_window_position)
             else:
                 self.root.geometry("655x800")
-            self.minimize_button.configure(text="−")
+            self.minimize_button.configure(text="", image=ui_icons.get_icon("minimize", size=16))
             self.is_minimized = False
         else:
             # Save current window position and size before minimizing
@@ -5431,7 +5654,7 @@ class BotGUI:
             self.is_minimized = True
             # Create minimized window at the same position
             self.create_minimized_window()
-            self.minimize_button.configure(text="+")
+            self.minimize_button.configure(text="", image=ui_icons.get_icon("minimize", size=16))
     
     # ------------------------------------------------------------------
     # Mini Overlay Mode — compact, frameless, always-on-top control pill.
@@ -5479,8 +5702,6 @@ class BotGUI:
         pill.columnconfigure(0, weight=1)
         pill.rowconfigure(0, weight=1)
 
-        icon_font = ctk.CTkFont(family="Segoe UI Symbol", size=15)
-
         # Rounded body — padding leaves the border fully visible on every side,
         # and the padding area (window bg) is keyed to transparency.
         body = ctk.CTkFrame(pill, corner_radius=26, fg_color=self.OVERLAY_BG,
@@ -5508,8 +5729,9 @@ class BotGUI:
 
         # Expand / restore (rightmost)
         expand_btn = ctk.CTkButton(
-            body, text="⤢", width=32, height=32, corner_radius=8,
-            font=icon_font, fg_color="transparent", hover_color="#2b2f38",
+            body, text="", image=ui_icons.get_icon("expand", size=17),
+            width=32, height=32, corner_radius=8,
+            fg_color="transparent", hover_color="#2b2f38",
             command=self.toggle_minimize,
         )
         expand_btn.pack(side="right", padx=(4, 10))
@@ -5517,8 +5739,9 @@ class BotGUI:
 
         # Start / Stop (managed by update_toggle_bot_button_state via cfg_min)
         self.minimized_toggle_bot_button = ctk.CTkButton(
-            body, text="▶", width=40, height=32, corner_radius=8,
-            font=icon_font, fg_color="#16a34a", hover_color="#15803d",
+            body, text="", image=ui_icons.get_icon("play", size=16),
+            width=40, height=32, corner_radius=8,
+            fg_color="#16a34a", hover_color="#15803d",
             command=self.toggle_bot,
         )
         self.minimized_toggle_bot_button.pack(side="right", padx=4)
