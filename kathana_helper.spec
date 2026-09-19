@@ -97,7 +97,7 @@ datas = [
     ("ui_fonts.py", "."),
     ("ui_icons.py", "."),
     ("ui", "ui"),
-    ("fonts", "fonts"),  # Bundled Geist Pixel Square app font + OFL license
+    ("fonts", "fonts"),  # Bundled JetBrains Mono app font (Regular + Bold) + OFL license
     ("license_manager.py", "."),
     ("icon.ico", "."),  # Application icon
     ("jobs", "jobs"),  # Skill images folder for buffs and skill sequence (all job folders and images)

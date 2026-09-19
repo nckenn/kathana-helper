@@ -1,4 +1,4 @@
-"""App font setup: register the bundled Geist Pixel family and make it the default.
+"""App font setup: register the bundled JetBrains Mono family and make it the default.
 
 Every ``ctk.CTkFont(size=..., weight=...)`` in the GUI that does not pass an
 explicit ``family`` falls back to ``ThemeManager.theme["CTkFont"]["family"]``,
@@ -8,12 +8,11 @@ import os
 import sys
 
 # Tk matches on the font's family name, not the file name.
-APP_FONT_FAMILY = "Geist Pixel Square"
+APP_FONT_FAMILY = "JetBrains Mono"
 # Windows/Tk fallbacks if the bundled font fails to register for any reason.
 _FALLBACK_FAMILY = "Segoe UI"
 
-# Ships Regular only; Tk synthesizes the bold weight the GUI asks for.
-_FONT_FILES = ("GeistPixel-Square.ttf",)
+_FONT_FILES = ("JetBrainsMono-Regular.ttf", "JetBrainsMono-Bold.ttf")
 
 
 def _fonts_dir():
@@ -48,7 +47,7 @@ def _register_font_files():
 
 def apply_app_font():
     """
-    Register Geist Pixel and set it as the CustomTkinter default font family.
+    Register JetBrains Mono and set it as the CustomTkinter default font family.
 
     Call once, after ``set_appearance_mode`` / ``set_default_color_theme`` and
     before creating widgets. Safe to call even if the font is missing (falls back

@@ -987,14 +987,14 @@ class BotGUI:
         ctk.set_appearance_mode("dark")  # Options: "dark", "light", "system"
         ctk.set_default_color_theme("blue")  # Options: "blue", "green", "dark-blue"
 
-        # Register the bundled Geist Pixel font and make it the app-wide default
+        # Register the bundled JetBrains Mono font and make it the app-wide default
         # (all CTkFont(size=...) calls without an explicit family inherit this).
         ui_fonts.apply_app_font()
 
         # Initialize root window with customtkinter
         self.root = ctk.CTk()
         self.root.title(config.APP_TITLE)
-        self.root.geometry("655x800")
+        self.root.geometry("720x800")
         self.root.resizable(True, True)
         
         # Set application icon
@@ -1372,10 +1372,28 @@ class BotGUI:
         _h_font = ctk.CTkFont(size=11, weight="bold")
         _t_font = ctk.CTkFont(size=11)
         _small_font = ctk.CTkFont(size=10)
-        _chk_w = 118
+        # Sized for the bundled monospace app font (JetBrains Mono): the
+        # longest label here is 11 chars, which needs ~110px plus the box.
+        _chk_w = 145
 
         _sub_font = ctk.CTkFont(size=10)
         _chev_color = "#9aa4b2"
+
+        def _wrap_to_card(card, label, inset):
+            """Keep a card subtitle wrapped to the card width instead of clipping.
+
+            Card widths come from the grid, so the text that fits depends on the
+            font — the app font is monospace and noticeably wider than the system
+            UI font. Wrapping on <Configure> keeps subtitles readable at any
+            window size without hand-tuning each string.
+            """
+            def _sync(_event=None):
+                w = card.winfo_width()
+                if w > inset + 40:
+                    label.configure(wraplength=w - inset)
+
+            card.bind("<Configure>", _sync, add="+")
+            card.after(0, _sync)
 
         def _card(parent, title, subtitle=None):
             frame = ctk.CTkFrame(parent, fg_color=("gray92", "gray20"), corner_radius=10)
@@ -1389,10 +1407,12 @@ class BotGUI:
             ).grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 0))
             next_row = 1
             if subtitle:
-                ctk.CTkLabel(
+                sub_lbl = ctk.CTkLabel(
                     frame, text=subtitle, font=_sub_font,
-                    text_color=("gray45", "gray55"), anchor="w",
-                ).grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 2))
+                    text_color=("gray45", "gray55"), anchor="w", justify="left",
+                )
+                sub_lbl.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 2))
+                _wrap_to_card(frame, sub_lbl, 24)
                 next_row = 2
             body = ctk.CTkFrame(frame, fg_color="transparent")
             body.grid(row=next_row, column=0, sticky="ew", padx=12, pady=(4, 10))
@@ -1422,8 +1442,9 @@ class BotGUI:
             if subtitle:
                 sub_lbl = ctk.CTkLabel(
                     frame, text=subtitle, font=_sub_font,
-                    text_color=("gray45", "gray55"), anchor="w",
+                    text_color=("gray45", "gray55"), anchor="w", justify="left",
                 )
+                _wrap_to_card(frame, sub_lbl, 46)  # 34 chevron indent + 12 pad
             body = ctk.CTkFrame(frame, fg_color="transparent")
             body.columnconfigure(0, weight=1)
             state = {"open": expanded}
@@ -1489,7 +1510,7 @@ class BotGUI:
             ("support", "Support", "Party assist mode + HP/MP pots (no auto-target)."),
         ):
             b = ctk.CTkButton(
-                preset_wrap, text=_plabel, width=60, height=24, corner_radius=6,
+                preset_wrap, text=_plabel, width=74, height=24, corner_radius=6,
                 font=_small_font, command=lambda k=_pk: self.apply_quick_preset(k),
             )
             b.pack(side="left", padx=(0, 4))
@@ -1497,7 +1518,7 @@ class BotGUI:
 
         left_card, left_body = _card(
             settings_frame, "Combat",
-            "Targeting, attacking, looting, and gear repair.",
+            "Targeting, attacking, looting, repair.",
         )
         left_card.grid(row=1, column=0, sticky="nsew", padx=(15, 6), pady=(6, 6))
 
@@ -1509,13 +1530,13 @@ class BotGUI:
 
         movement_card, movement_body = _collapsible_card(
             settings_frame, "Movement & Camera",
-            "Get unstuck and rotate the camera for better detection.",
+            "Get unstuck and rotate the camera.",
         )
         movement_card.grid(row=2, column=0, sticky="nsew", padx=(15, 6), pady=(6, 6))
 
         extras_card, extras_body = _collapsible_card(
             settings_frame, "Party & Misc",
-            "Assist a party leader instead of auto-targeting.",
+            "Party assist instead of auto-targeting.",
         )
         extras_card.grid(row=2, column=1, sticky="nsew", padx=(6, 15), pady=(6, 6))
 
@@ -5639,7 +5660,7 @@ class BotGUI:
             if self.saved_window_position:
                 self.root.geometry(self.saved_window_position)
             else:
-                self.root.geometry("655x800")
+                self.root.geometry("720x800")
             self.minimize_button.configure(text="", image=ui_icons.get_icon("minimize", size=16))
             self.is_minimized = False
         else:
