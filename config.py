@@ -337,14 +337,11 @@ skill_sequence_config = {
         'enabled': False,
         'image_path': None,
         'key': '',
-        'bypass': False  # If True, skip skill if not found (not on cooldown/available)
+        # "Skip if on cooldown": if True the rotation moves past this skill while
+        # its icon is dark instead of waiting for it, so slot order is not held up.
+        'bypass': False
     } for i in range(8)
 }
-
-# How the skill sequence chooses what to cast:
-#   'rotation' - cast skills in slot order, skipping any on cooldown (default)
-#   'priority' - each cycle, cast the first ready skill in slot order
-skill_sequence_mode = 'rotation'
 
 # Current HP/MP percentages (updated by bot_logic, read by GUI)
 current_hp_percentage = 100.0

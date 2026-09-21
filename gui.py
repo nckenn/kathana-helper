@@ -912,12 +912,6 @@ class BotGUI:
                         import traceback
                         traceback.print_exc()
             
-            # Apply skill sequence cast mode (Rotation / Priority)
-            if hasattr(self, 'skill_sequence_mode_var'):
-                self.skill_sequence_mode_var.set(
-                    "Priority" if getattr(config, 'skill_sequence_mode', 'rotation') == 'priority' else "Rotation"
-                )
-
             # Apply skill sequence settings
             if hasattr(self, 'skill_sequence_vars') and hasattr(self, 'skill_sequence_canvases'):
                 for i in range(8):
@@ -2053,39 +2047,15 @@ class BotGUI:
         info_text = ctk.CTkLabel(info_frame, 
                                 text="1. Click the skill image to select a skill icon\n"
                                      "2. Assign a hotkey for each skill (pressed instead of clicking)\n"
-                                     "3. Enable the checkbox to include the skill\n"
-                                     "4. Pick a Cast mode below (skills on cooldown are always skipped):\n"
-                                     "   \u2022 Rotation: cast in slot order 1\u21922\u21923\u2026 then back to 1\n"
-                                     "   \u2022 Priority: each cycle cast the first ready skill (slot 1 first)\n"
+                                     "3. Left checkbox: include this skill in the rotation\n"
+                                     "4. Right checkbox: skip this skill while it is on cooldown\n"
+                                     "   Skills cast in slot order 1\u21922\u21923\u2026 then back to 1. A skill\n"
+                                     "   without \u201cskip\u201d is waited for, so the order is never broken.\n"
                                      "   (Runs when an enemy is found — set Skill Bar in Region Editor)",
                                 font=ctk.CTkFont(size=12),
                                 justify="left", anchor="w")
         info_text.grid(row=1, column=0, sticky="w", padx=10, pady=(0, 10))
 
-        # Cast mode selector: Rotation vs Priority
-        mode_row = ctk.CTkFrame(info_frame, fg_color="transparent")
-        mode_row.grid(row=2, column=0, sticky="w", padx=10, pady=(0, 10))
-        mode_label = ctk.CTkLabel(
-            mode_row, text="Cast mode:", font=ctk.CTkFont(size=12, weight="bold"),
-        )
-        mode_label.pack(side="left", padx=(0, 8))
-        create_tooltip(
-            mode_label,
-            "Rotation: cast skills in slot order (1\u21922\u21923\u2026), skipping any on cooldown.\n"
-            "Priority: each cycle cast the first ready skill in the list (slot 1 gets first dibs).",
-        )
-        self.skill_sequence_mode_var = tk.StringVar(
-            value="Priority" if getattr(config, 'skill_sequence_mode', 'rotation') == 'priority' else "Rotation"
-        )
-        self.skill_sequence_mode_selector = ctk.CTkSegmentedButton(
-            mode_row,
-            values=["Rotation", "Priority"],
-            variable=self.skill_sequence_mode_var,
-            command=self.update_skill_sequence_mode,
-            font=ctk.CTkFont(size=11),
-        )
-        self.skill_sequence_mode_selector.pack(side="left")
-        
         # Initialize skill sequence variables
         self.skill_sequence_vars = {}
         self.skill_sequence_bypass_vars = {}
@@ -2150,10 +2120,19 @@ class BotGUI:
                 key_btn.configure(text=key_button_label(config.skill_sequence_config[i]['key']))
             bind_key_button_clear(key_btn, lambda idx=i: self.clear_skill_sequence_key(idx))
 
-            # Cooldown skipping is now automatic (priority casting), so the old
-            # per-skill "Skip if on cooldown" checkbox has been removed. The var is
-            # kept so existing saved profiles still load without error.
+            # Skip if on cooldown (icon not visible in the Skill Area)
             self.skill_sequence_bypass_vars[i] = tk.BooleanVar(value=config.skill_sequence_config[i].get('bypass', False))
+            bypass_checkbox = ctk.CTkCheckBox(skill_slot_frame, text="",
+                                             variable=self.skill_sequence_bypass_vars[i],
+                                             command=lambda idx=i: self.update_skill_sequence_bypass(idx),
+                                             font=ctk.CTkFont(size=10), width=20)
+            bypass_checkbox.grid(row=0, column=4, padx=(5, 8), pady=6, sticky="e")
+            create_tooltip(
+                bypass_checkbox,
+                "Skip if on cooldown: when this skill's icon is not found in the Skill Area "
+                "(likely on cooldown), move on to the next skill instead of waiting for it. "
+                "Leave unticked to keep this skill's place in the order.",
+            )
             self.skill_sequence_state.append({
                 'image_path': config.skill_sequence_config[i].get('image_path'),
                 'enabled': config.skill_sequence_config[i]['enabled']
@@ -3365,14 +3344,6 @@ class BotGUI:
         status = "enabled" if config.skill_sequence_config[idx]['enabled'] else "disabled"
         print(f"Skill Sequence {idx + 1} {status}")
     
-    def update_skill_sequence_mode(self, value=None):
-        """Switch the skill sequence between ordered Rotation and Priority casting."""
-        selected = str(self.skill_sequence_mode_var.get()).lower()
-        config.skill_sequence_mode = 'priority' if selected == 'priority' else 'rotation'
-        if config.skill_sequence_manager:
-            config.skill_sequence_manager.reset_sequence()
-        print(f"Skill sequence cast mode: {config.skill_sequence_mode}")
-
     def update_skill_sequence_bypass(self, idx):
         """Update skill sequence bypass status"""
         if hasattr(self, 'skill_sequence_bypass_vars') and idx in self.skill_sequence_bypass_vars:

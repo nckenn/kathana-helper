@@ -52,11 +52,15 @@ class SkillSequenceManager:
         self._cast_attempts = 0
         print('[SKILL-SEQUENCE] Sequence reset')
 
-    def _advance(self, n):
-        """Move to the next slot in the rotation and clear per-skill state."""
-        self.skill_sequence_index = (self.skill_sequence_index + 1) % n
+    def _park(self, idx, n):
+        """Point the rotation at slot `idx` and clear per-skill cast state."""
+        self.skill_sequence_index = idx % n
         self.skill_waiting_activation = False
         self._cast_attempts = 0
+
+    def _advance(self, n):
+        """Move to the next slot in the rotation and clear per-skill state."""
+        self._park(self.skill_sequence_index + 1, n)
 
     def _match_skill(self, area_img, template_img, cache_key, threshold=None):
         """Return (found, loc, confidence) for one skill icon inside the skill-bar crop.
@@ -99,16 +103,21 @@ class SkillSequenceManager:
         return False, None, conf
 
     def execute_skill_sequence(self, hwnd, screen, area_skills, enemy_found, run_active=True):
-        """Cast skills as an ordered rotation that skips cooldowns without stalling.
+        """Cast the enabled skills as a strict rotation in slot order.
 
         The rotation walks the enabled skills in slot order (1 -> 2 -> 3 -> ...
-        -> back to 1). Each cycle it looks at the current slot:
+        -> back to 1) and does not cast a later skill before an earlier one. Each
+        cycle it looks at the current slot:
 
         * If that skill's icon is present (off cooldown), it presses the key and
           waits for the icon to disappear (cast confirmed) before advancing.
-        * If that skill's icon is missing (on cooldown), it simply advances to
-          the next slot instead of waiting, so the rotation keeps flowing and
-          slot 1 is picked up again on the next lap the moment it is ready.
+        * If that skill's icon is missing (on cooldown), it waits there, so the
+          order is never broken -- unless that skill has "Skip if on cooldown"
+          ticked, in which case the rotation moves past it for this lap and picks
+          it up again on the next one.
+
+        Ticking "Skip if on cooldown" for every slot gives the "cast whatever is
+        ready" behaviour; leaving it off everywhere gives a literal 1-2-3 opener.
 
         A safety cap (MAX_CAST_ATTEMPTS) advances past a ready skill that never
         casts (e.g. not enough resources) so it can never stall.
@@ -172,11 +181,7 @@ class SkillSequenceManager:
             return
         self.ultimo_tiempo_skill = current_time
 
-        mode = str(getattr(config, 'skill_sequence_mode', 'rotation')).lower()
-        if mode == 'priority':
-            self._run_priority(valid_skills, area)
-        else:
-            self._run_rotation(valid_skills, n, area)
+        self._run_rotation(valid_skills, n, area)
 
     def _press_skill(self, original_idx):
         hotkey = (config.skill_sequence_config[original_idx].get('key') or '').strip()
@@ -184,47 +189,67 @@ class SkillSequenceManager:
             print(f'[SKILL-SEQUENCE] Skill {original_idx + 1} ready; pressing key {hotkey!r}')
             input_handler.send_input(hotkey)
 
-    def _run_priority(self, valid_skills, area):
-        """Cast the first ready skill in slot order (on-cooldown skills skipped)."""
-        for original_idx, skill_path in valid_skills:
-            template = template_cache.get_template(skill_path, cv2.IMREAD_COLOR)
-            if template is None:
-                continue
-            if area.shape[0] < template.shape[0] or area.shape[1] < template.shape[1]:
-                continue
-            found, _loc, _conf = self._match_skill(area, template, skill_path)
-            if found:
-                self._press_skill(original_idx)
-                return
+    @staticmethod
+    def _skips_cooldown(original_idx):
+        """True when this slot is allowed to be passed over while on cooldown."""
+        return bool(config.skill_sequence_config[original_idx].get('bypass', False))
 
     def _run_rotation(self, valid_skills, n, area):
-        """Cast skills in order, skipping cooldowns for the lap without stalling."""
-        idx = self.skill_sequence_index % n
-        original_idx, skill_path = valid_skills[idx]
+        """Cast in strict slot order, passing over only slots that opted in.
 
-        template = template_cache.get_template(skill_path, cv2.IMREAD_COLOR)
-        if template is None:
-            print(f'[SKILL-SEQUENCE] Could not load template for skill {original_idx + 1}; skipping')
-            self._advance(n)
+        Scans forward from the current slot within this tick so a run of
+        skip-enabled skills on cooldown does not cost a tick each. `start` is the
+        scan cursor and stays fixed for the tick; the rotation pointer
+        (`skill_sequence_index`) is moved separately as slots are resolved. It
+        stops at the first slot it can act on, so at most one key is pressed
+        per tick.
+        """
+        start = self.skill_sequence_index % n
+        # Whether the previous tick pressed the slot we are starting from; only
+        # that slot's icon going dark means a cast landed.
+        awaiting_cast = self.skill_waiting_activation
+
+        for step in range(n):
+            idx = (start + step) % n
+            original_idx, skill_path = valid_skills[idx]
+
+            template = template_cache.get_template(skill_path, cv2.IMREAD_COLOR)
+            if template is None:
+                print(f'[SKILL-SEQUENCE] Could not load template for skill '
+                      f'{original_idx + 1}; skipping')
+                self._park(idx + 1, n)
+                continue
+            if area.shape[0] < template.shape[0] or area.shape[1] < template.shape[1]:
+                self._park(idx + 1, n)
+                continue
+
+            found, _loc, _conf = self._match_skill(area, template, skill_path)
+
+            if found:
+                # Ready: press it and hold here until its icon goes dark.
+                if idx != self.skill_sequence_index:
+                    self._park(idx, n)
+                self._press_skill(original_idx)
+                self.skill_waiting_activation = True
+                self._cast_attempts += 1
+                # Give up on a ready skill that won't cast so we never stall here.
+                if self._cast_attempts >= self.MAX_CAST_ATTEMPTS:
+                    print(f'[SKILL-SEQUENCE] Skill {original_idx + 1} did not cast after '
+                          f'{self._cast_attempts} tries; advancing')
+                    self._advance(n)
+                return
+
+            if step == 0 and awaiting_cast:
+                # We pressed it and its icon is now gone -> cast confirmed.
+                self._park(idx + 1, n)
+                continue
+
+            if self._skips_cooldown(original_idx):
+                # Opted out of the wait: move past it for this lap.
+                self._park(idx + 1, n)
+                continue
+
+            # On cooldown and not skippable -> hold the order and wait here.
+            if idx != self.skill_sequence_index:
+                self._park(idx, n)
             return
-        if area.shape[0] < template.shape[0] or area.shape[1] < template.shape[1]:
-            self._advance(n)
-            return
-
-        found, _loc, _conf = self._match_skill(area, template, skill_path)
-
-        if found:
-            self._press_skill(original_idx)
-            self.skill_waiting_activation = True
-            self._cast_attempts += 1
-            # Give up on a ready skill that won't cast so we never stall here.
-            if self._cast_attempts >= self.MAX_CAST_ATTEMPTS:
-                print(f'[SKILL-SEQUENCE] Skill {original_idx + 1} did not cast after '
-                      f'{self._cast_attempts} tries; advancing')
-                self._advance(n)
-        elif self.skill_waiting_activation:
-            # We pressed it and its icon is now gone -> cast confirmed, move on.
-            self._advance(n)
-        else:
-            # On cooldown when we arrived at this slot -> skip so the lap keeps moving.
-            self._advance(n)
