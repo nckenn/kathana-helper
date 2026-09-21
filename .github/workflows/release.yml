@@ -116,6 +116,37 @@ jobs:
           echo "path=$out" >> "$GITHUB_OUTPUT"
           echo "Built $out ($(du -h "$out" | cut -f1))"
 
+      # The patch notes live in this private repo, so they never reach anyone
+      # unless the release carries them.
+      - name: Assemble the release notes
+        id: notes
+        shell: bash
+        run: |
+          body=RELEASE_BODY.md
+          {
+            echo "## Kathana Helper ${{ steps.version.outputs.tag }}"
+            echo
+            echo "Download the \`.exe\` below and run it. No installation needed."
+            echo
+            echo "Windows SmartScreen may warn about an unrecognised publisher --"
+            echo "the build is unsigned. Choose **More info -> Run anyway**."
+          } > "$body"
+
+          notes="PATCH_NOTES_${{ steps.version.outputs.tag }}.md"
+          if [ -f "$notes" ]; then
+            echo "Including $notes"
+            {
+              echo
+              echo "---"
+              echo
+              # Drop the file's own H1; the release already has a heading.
+              tail -n +2 "$notes"
+            } >> "$body"
+          else
+            echo "No $notes in the repo; publishing the short body only."
+          fi
+          echo "path=$body" >> "$GITHUB_OUTPUT"
+
       - name: Publish to the public releases repo
         uses: softprops/action-gh-release@v2
         with:
@@ -125,10 +156,4 @@ jobs:
           name: Kathana Helper ${{ steps.version.outputs.tag }}
           files: ${{ steps.artifact.outputs.path }}
           fail_on_unmatched_files: true
-          body: |
-            ## Kathana Helper ${{ steps.version.outputs.tag }}
-
-            Download the `.exe` below and run it. No installation needed.
-
-            Windows SmartScreen may warn about an unrecognised publisher --
-            the build is unsigned. Choose **More info -> Run anyway**.
+          body_path: ${{ steps.notes.outputs.path }}
