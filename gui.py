@@ -503,15 +503,15 @@ class BotGUI(
         # rows have different structures, and the combo's columnspan starved the
         # first column, leaving the Start button unmapped.
         top_row = ctk.CTkFrame(toolbar, fg_color="transparent")
-        top_row.pack(fill="x", padx=10, pady=(8, 4))
+        top_row.pack(fill="x", padx=10, pady=(10, 0))
 
         bottom_row = ctk.CTkFrame(toolbar, fg_color="transparent")
-        bottom_row.pack(fill="x", padx=10, pady=(0, 2))
+        bottom_row.pack(fill="x", padx=10, pady=(12, 0))
 
         # Status gets its own row. Sharing the button row meant the two competed
         # for width, and at the default 720px window the labels lost.
         status_row = ctk.CTkFrame(toolbar, fg_color="transparent")
-        status_row.pack(fill="x", padx=10, pady=(0, 6))
+        status_row.pack(fill="x", padx=10, pady=(8, 10))
 
         # --- top row: pick a window and connect to it -------------------
         self.window_var = tk.StringVar()
