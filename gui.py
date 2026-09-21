@@ -1090,6 +1090,8 @@ class BotGUI:
         # Status label
         self.status_label = ctk.CTkLabel(status_info_frame, text="Status: Stopped", font=ctk.CTkFont(size=12, weight="bold"))
         self.status_label.grid(row=0, column=0, padx=10, pady=6)
+        # Remembered so the red "Stopped (error)" styling can be undone on restart.
+        self._status_label_default_color = self.status_label.cget("text_color")
         
         # Connection status label
         self.connection_label = ctk.CTkLabel(status_info_frame, text="Window: Not Connected", font=ctk.CTkFont(size=11))
@@ -2899,7 +2901,8 @@ class BotGUI:
             config.bot_thread.start()
             
             self.update_toggle_bot_button_state()
-            self.status_label.configure(text="Status: Running")
+            # Clear any red "Stopped (error)" styling from a previous crash.
+            self.status_label.configure(text="Status: Running", text_color=self._status_label_default_color)
             
             # Start periodic status updates
             self.update_status()
@@ -2914,7 +2917,7 @@ class BotGUI:
         bot_logic.reset_bot_state()
         
         self.update_toggle_bot_button_state()
-        self.status_label.configure(text="Status: Stopped")
+        self.status_label.configure(text="Status: Stopped", text_color=self._status_label_default_color)
         # Keep connection status - don't reset to "Not Connected"
     
     def update_skill_slot(self, slot_num):
@@ -5542,8 +5545,35 @@ class BotGUI:
         """Test mob filter match (alias for status bar testing)."""
         self._test_mob_match()
     
+    def _bot_thread_died(self):
+        """True when the bot is meant to be running but its thread is gone.
+
+        bot_loop guards each tick, so this only fires if it died outside that
+        guard. Without the check the GUI would keep reporting "Running" over a
+        thread that stopped doing anything.
+        """
+        thread = getattr(config, 'bot_thread', None)
+        return bool(config.bot_running and thread is not None and not thread.is_alive())
+
+    def _handle_bot_thread_death(self):
+        """Put the UI back in a truthful state after the bot thread died."""
+        logger.error("Bot thread stopped unexpectedly; marking the bot as stopped", "Bot")
+        config.bot_running = False
+        self._bot_run_start_time = None
+        self.update_toggle_bot_button_state()
+        self.status_label.configure(text="Status: Stopped (error)", text_color="red")
+        messagebox.showerror(
+            "Bot Stopped",
+            "The bot stopped unexpectedly.\n\n"
+            "Check the console or log for the error, then start it again.",
+        )
+
     def update_status(self):
         """Update HP/MP/Enemy HP status display (reads from config, updated by bot_logic/auto_attack)"""
+        if self._bot_thread_died():
+            self._handle_bot_thread_death()
+            return
+
         if config.bot_running:
             # Read HP/MP percentages from config (calculated by bot_logic in separate thread)
             hp_percent = config.current_hp_percentage

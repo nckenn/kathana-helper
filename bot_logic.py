@@ -2,6 +2,7 @@
 Main bot logic - skill checking, action handling, and bot loop
 """
 import time
+import traceback
 import config
 import input_handler
 import auto_attack
@@ -268,10 +269,90 @@ def reset_bot_state():
     if config.skill_sequence_manager:
         config.skill_sequence_manager.reset_sequence()
     
+    reset_tick_error_state()
+
     # Set flag to force initial auto-target on bot start (if auto attack enabled)
     config.force_initial_target = config.auto_attack_enabled
     
     logger.info("All timers and smoothing buffers reset", "BotState")
+
+
+# A single unhandled exception used to kill the bot thread outright: it is a
+# daemon thread nothing joins or inspects, so the GUI kept showing "Running"
+# while the bot silently did nothing. Each tick is guarded instead, and the
+# failure is logged rather than swallowed.
+TICK_ERROR_LOG_INTERVAL = 10.0
+
+_tick_error_state = {
+    'signature': None,      # identifies the failure, so a new one is never hidden
+    'consecutive': 0,
+    'last_log_time': 0.0,
+}
+
+
+def _tick_error_signature(exc):
+    """Identify a failure by its type, message and origin line."""
+    tb = exc.__traceback__
+    last = None
+    while tb is not None:
+        last = tb
+        tb = tb.tb_next
+    origin = (
+        (last.tb_frame.f_code.co_filename, last.tb_lineno) if last is not None else None
+    )
+    return (type(exc).__name__, str(exc), origin)
+
+
+def _report_tick_error(exc):
+    """Log a failed tick, throttling a fault that repeats every loop.
+
+    The first occurrence gets a full traceback. While the same failure keeps
+    firing, repeats are summarised at most once per TICK_ERROR_LOG_INTERVAL so a
+    permanent fault cannot flood the log at loop speed -- but the count is
+    carried so it is clear it never stopped.
+    """
+    signature = _tick_error_signature(exc)
+    now = time.time()
+
+    if signature != _tick_error_state['signature']:
+        _tick_error_state['signature'] = signature
+        _tick_error_state['consecutive'] = 1
+        _tick_error_state['last_log_time'] = now
+        logger.error(
+            f"Loop iteration failed, continuing: {type(exc).__name__}: {exc}\n"
+            f"{traceback.format_exc()}",
+            "Bot",
+        )
+        return
+
+    _tick_error_state['consecutive'] += 1
+    if now - _tick_error_state['last_log_time'] >= TICK_ERROR_LOG_INTERVAL:
+        _tick_error_state['last_log_time'] = now
+        logger.error(
+            f"Same failure still repeating "
+            f"({_tick_error_state['consecutive']} loops): "
+            f"{type(exc).__name__}: {exc}",
+            "Bot",
+        )
+
+
+def _note_tick_success():
+    """Clear the failure streak so a later fault is reported in full again."""
+    if _tick_error_state['signature'] is not None:
+        if _tick_error_state['consecutive'] > 1:
+            logger.info(
+                f"Recovered after {_tick_error_state['consecutive']} failed loops",
+                "Bot",
+            )
+        _tick_error_state['signature'] = None
+        _tick_error_state['consecutive'] = 0
+
+
+def reset_tick_error_state():
+    """Forget any failure streak (called when the bot starts)."""
+    _tick_error_state['signature'] = None
+    _tick_error_state['consecutive'] = 0
+    _tick_error_state['last_log_time'] = 0.0
 
 
 def bot_loop():
@@ -284,75 +365,81 @@ def bot_loop():
     initial_target_done = False
     
     while config.bot_running:
-        bs = state.BotState(running=config.bot_running, is_looting=config.is_looting)
-        vs = state.VisionState(connected_window=config.connected_window, calibrator=config.calibrator)
-        cs = state.CombatState(auto_attack_enabled=config.auto_attack_enabled, assist_only_enabled=config.assist_only_enabled)
+        try:
+            bs = state.BotState(running=config.bot_running, is_looting=config.is_looting)
+            vs = state.VisionState(connected_window=config.connected_window, calibrator=config.calibrator)
+            cs = state.CombatState(auto_attack_enabled=config.auto_attack_enabled, assist_only_enabled=config.assist_only_enabled)
 
-        if vs.connected_window:
-            # Optional: pause vision when game isn't focused (disabled by default for alt-tab multitasking).
-            if getattr(config, "pause_when_unfocused", False):
-                try:
-                    import win32gui
-                    hwnd = vs.connected_window.handle
-                    if win32gui.IsIconic(hwnd) or win32gui.GetForegroundWindow() != hwnd:
-                        time.sleep(getattr(config, "unfocused_sleep_seconds", 0.6))
-                        continue
-                except Exception:
-                    # If focus checks fail, continue normally.
-                    pass
+            if vs.connected_window:
+                # Optional: pause vision when game isn't focused (disabled by default for alt-tab multitasking).
+                if getattr(config, "pause_when_unfocused", False):
+                    try:
+                        import win32gui
+                        hwnd = vs.connected_window.handle
+                        if win32gui.IsIconic(hwnd) or win32gui.GetForegroundWindow() != hwnd:
+                            time.sleep(getattr(config, "unfocused_sleep_seconds", 0.6))
+                            continue
+                    except Exception:
+                        # If focus checks fail, continue normally.
+                        pass
 
-            if config.bot_regions_ready() or (
-                vs.calibrator
-                and vs.calibrator.hp_position is not None
-                and vs.calibrator.mp_position is not None
-            ):
-                if mob_filter.is_active() and vs.connected_window and not config.is_looting and not config.is_buffing:
-                    hwnd = vs.connected_window.handle
-                    engaged = (
-                        config.enemy_target_time > 0
-                        or len(config.enemy_hp_readings) > 0
-                        or (config.current_enemy_hp_percentage or 0) > 1.0
-                    )
-                    if not engaged:
-                        mob_filter.clear_match()
+                if config.bot_regions_ready() or (
+                    vs.calibrator
+                    and vs.calibrator.hp_position is not None
+                    and vs.calibrator.mp_position is not None
+                ):
+                    if mob_filter.is_active() and vs.connected_window and not config.is_looting and not config.is_buffing:
+                        hwnd = vs.connected_window.handle
+                        engaged = (
+                            config.enemy_target_time > 0
+                            or len(config.enemy_hp_readings) > 0
+                            or (config.current_enemy_hp_percentage or 0) > 1.0
+                        )
+                        if not engaged:
+                            mob_filter.clear_match()
 
-                # Force initial auto-target on bot start if auto attack is enabled
-                if (config.force_initial_target and cs.auto_attack_enabled and
-                    not initial_target_done and not bs.is_looting):
-                    # Small delay to ensure everything is initialized
-                    time.sleep(0.2)
-                    auto_attack._auto_target_manager.reset_search_timer()
-                    auto_attack._auto_target_manager.try_auto_target("bot started")
-                    initial_target_done = True
-                    config.force_initial_target = False
-                    logger.info("Forced initial auto-targeting", "BotStart")
+                    # Force initial auto-target on bot start if auto attack is enabled
+                    if (config.force_initial_target and cs.auto_attack_enabled and
+                        not initial_target_done and not bs.is_looting):
+                        # Small delay to ensure everything is initialized
+                        time.sleep(0.2)
+                        auto_attack._auto_target_manager.reset_search_timer()
+                        auto_attack._auto_target_manager.try_auto_target("bot started")
+                        initial_target_done = True
+                        config.force_initial_target = False
+                        logger.info("Forced initial auto-targeting", "BotStart")
                 
-                # High priority: Auto pots and buffs (buffs should be checked early for combat effectiveness)
-                # Only check if features are enabled to avoid unnecessary work
-                if config.auto_hp_enabled or config.auto_mp_enabled:
-                    autopots.check_auto_pots()
-                # Only check buffs if any are enabled and configured
-                if (config.buffs_manager and 
-                    any(config.buffs_config[i]['image_path'] and config.buffs_config[i]['enabled'] 
-                        for i in range(8))):
-                    check_buffs()  # High priority - check buffs early (has internal throttling)
-                if cs.auto_attack_enabled or cs.assist_only_enabled:
-                    auto_attack.check_auto_attack()
+                    # High priority: Auto pots and buffs (buffs should be checked early for combat effectiveness)
+                    # Only check if features are enabled to avoid unnecessary work
+                    if config.auto_hp_enabled or config.auto_mp_enabled:
+                        autopots.check_auto_pots()
+                    # Only check buffs if any are enabled and configured
+                    if (config.buffs_manager and 
+                        any(config.buffs_config[i]['image_path'] and config.buffs_config[i]['enabled'] 
+                            for i in range(8))):
+                        check_buffs()  # High priority - check buffs early (has internal throttling)
+                    if cs.auto_attack_enabled or cs.assist_only_enabled:
+                        auto_attack.check_auto_attack()
                 
-                # Check and click assist button if assist_only is enabled (spam assist button)
-                if cs.assist_only_enabled:
-                    auto_attack.check_assist_key()
+                    # Check and click assist button if assist_only is enabled (spam assist button)
+                    if cs.assist_only_enabled:
+                        auto_attack.check_assist_key()
                 
-                if config.auto_change_target_enabled:
-                    auto_unstuck.check_auto_unstuck()
-                if config.auto_rotate_enabled:
-                    auto_rotate.check_auto_rotate()
-                check_skill_slots()  # Lightweight - just checks intervals
-                if config.auto_repair_enabled:
-                    auto_repair.check_auto_repair()
-                if config.mouse_clicker_enabled:
-                    check_mouse_clicker()
-            
+                    if config.auto_change_target_enabled:
+                        auto_unstuck.check_auto_unstuck()
+                    if config.auto_rotate_enabled:
+                        auto_rotate.check_auto_rotate()
+                    check_skill_slots()  # Lightweight - just checks intervals
+                    if config.auto_repair_enabled:
+                        auto_repair.check_auto_repair()
+                    if config.mouse_clicker_enabled:
+                        check_mouse_clicker()
+            _note_tick_success()
+        except Exception as e:
+            # Never let one bad tick kill the thread -- the GUI would keep
+            # reporting "Running" while nothing actually happened.
+            _report_tick_error(e)
+
         time.sleep(config.get_bot_loop_sleep())
     
     # Clean up when bot stops
