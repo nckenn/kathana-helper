@@ -37,6 +37,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Checked before the ~10 minute build, not after it. A release needs a ref
+      # to attach to, so publishing into a repo with no commits uploads the
+      # asset and then fails on "Repository is empty" at the very last step.
+      - name: Check the releases repo is ready
+        shell: bash
+        env:
+          TOKEN: ${{ secrets.RELEASE_REPO_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Secret RELEASE_REPO_TOKEN is not set on this repository. Add a fine-grained PAT with Contents:write on $RELEASE_REPO under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          code=$(curl -sS -o /dev/null -w '%{http_code}'             -H "Authorization: Bearer $TOKEN"             -H "Accept: application/vnd.github+json"             "https://api.github.com/repos/$RELEASE_REPO/commits?per_page=1")
+          case "$code" in
+            200) echo "$RELEASE_REPO is reachable and has commits." ;;
+            409) echo "::error::$RELEASE_REPO has no commits. A release needs something to tag: open https://github.com/$RELEASE_REPO and add a README (Add a README file), then re-run."
+                 exit 1 ;;
+            401|403) echo "::error::RELEASE_REPO_TOKEN was rejected for $RELEASE_REPO (HTTP $code). Check it has Contents: Read and write and lists that repository under Repository access."
+                 exit 1 ;;
+            404) echo "::error::$RELEASE_REPO not found, or RELEASE_REPO_TOKEN cannot see it (HTTP 404). Check the repo name and the token's Repository access."
+                 exit 1 ;;
+            *) echo "::error::Unexpected HTTP $code from the GitHub API for $RELEASE_REPO."
+               exit 1 ;;
+          esac
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.14'
