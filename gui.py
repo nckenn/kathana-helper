@@ -52,6 +52,12 @@ import ui_fonts
 import ui_icons
 
 
+def _ellipsize(text, limit):
+    """Shorten a window title so it cannot stretch the toolbar."""
+    text = str(text or '')
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + '…'
+
+
 class BotGUI(
     DebugWindowMixin,
     LicensePanelMixin,
@@ -77,11 +83,39 @@ class BotGUI(
     def _settings_dialog_dir(self):
         return os.path.dirname(settings_manager.get_settings_path()) or config.app_dir()
 
+    def _fit_status_row(self, _event=None):
+        """Hide the profile name rather than let it render half-drawn.
+
+        It is the least important thing on the row, so it is what gives way
+        when the window is narrow. Below ~720px there is not room for all four.
+        """
+        row = getattr(self, '_status_row', None)
+        if row is None:
+            return
+        available = row.winfo_width()
+        if available <= 1:
+            return  # not laid out yet
+
+        needed = sum(
+            w.winfo_reqwidth() + 12
+            for w in (self.status_label, self.connection_label, self.bars_status_label)
+        )
+        fits = needed + self.settings_profile_label.winfo_reqwidth() + 12 <= available
+
+        # Only act on a change; re-packing fires <Configure> again.
+        if fits and not self._profile_label_shown:
+            self.settings_profile_label.pack(side="right")
+            self._profile_label_shown = True
+        elif not fits and self._profile_label_shown:
+            self.settings_profile_label.pack_forget()
+            self._profile_label_shown = False
+
     def _update_settings_profile_label(self):
         if not hasattr(self, 'settings_profile_label'):
             return
         profile = settings_manager.settings_profile_label()
         self.settings_profile_label.configure(text=profile)
+        self._fit_status_row()
 
     def save_settings_gui(self):
         """Save current GUI state to the active profile file."""
@@ -392,6 +426,8 @@ class BotGUI(
         self.root.title(config.APP_TITLE)
         self.root.geometry("720x800")
         self.root.resizable(True, True)
+        # Below this the toolbar's button row has nowhere left to go.
+        self.root.minsize(620, 560)
         
         # Set application icon
         try:
@@ -470,7 +506,12 @@ class BotGUI(
         top_row.pack(fill="x", padx=10, pady=(8, 4))
 
         bottom_row = ctk.CTkFrame(toolbar, fg_color="transparent")
-        bottom_row.pack(fill="x", padx=10, pady=(0, 8))
+        bottom_row.pack(fill="x", padx=10, pady=(0, 2))
+
+        # Status gets its own row. Sharing the button row meant the two competed
+        # for width, and at the default 720px window the labels lost.
+        status_row = ctk.CTkFrame(toolbar, fg_color="transparent")
+        status_row.pack(fill="x", padx=10, pady=(0, 6))
 
         # --- top row: pick a window and connect to it -------------------
         self.window_var = tk.StringVar()
@@ -548,29 +589,32 @@ class BotGUI(
         self.load_settings_button.pack(side="left", padx=(0, 10))
         create_tooltip(self.load_settings_button, "Load settings from a profile file.")
 
-        self.settings_profile_label = ctk.CTkLabel(
-            bottom_row, text="", font=ctk.CTkFont(size=11),
-            text_color=styles.MUTED_TEXT, anchor="w",
+        # Most important first, so the leftmost thing is the one you look for.
+        self.status_label = ctk.CTkLabel(
+            status_row, text="Stopped", font=ctk.CTkFont(size=12, weight="bold"),
         )
-        self.settings_profile_label.pack(side="left")
-
-        # Status reads from the right, quiet next to the actions on the left.
-        self.bars_status_label = ctk.CTkLabel(
-            bottom_row, text="", font=ctk.CTkFont(size=10),
-            text_color=styles.MUTED_TEXT,
-        )
-        self.bars_status_label.pack(side="right")
+        self.status_label.pack(side="left")
 
         self.connection_label = ctk.CTkLabel(
-            bottom_row, text="Not connected", font=ctk.CTkFont(size=11),
+            status_row, text="Not connected", font=ctk.CTkFont(size=11),
             text_color=styles.MUTED_TEXT,
         )
-        self.connection_label.pack(side="right", padx=(10, 10))
+        self.connection_label.pack(side="left", padx=(12, 0))
 
-        self.status_label = ctk.CTkLabel(
-            bottom_row, text="Stopped", font=ctk.CTkFont(size=12, weight="bold"),
+        self.bars_status_label = ctk.CTkLabel(
+            status_row, text="", font=ctk.CTkFont(size=10),
+            text_color=styles.MUTED_TEXT,
         )
-        self.status_label.pack(side="right", padx=(10, 0))
+        self.bars_status_label.pack(side="left", padx=(12, 0))
+
+        self.settings_profile_label = ctk.CTkLabel(
+            status_row, text="", font=ctk.CTkFont(size=11),
+            text_color=styles.MUTED_TEXT, anchor="e",
+        )
+        self.settings_profile_label.pack(side="right")
+        self._profile_label_shown = True
+        self._status_row = status_row
+        status_row.bind('<Configure>', self._fit_status_row)
         # Remembered so the red "Stopped (error)" styling can be undone on restart.
         self._status_label_default_color = self.status_label.cget("text_color")
 
@@ -1981,7 +2025,7 @@ class BotGUI(
         if config.connected_window:
             self.connect_button.configure(text="Connected", state="disabled")
             self.update_toggle_bot_button_state()
-            self.connection_label.configure(text=selected_window_title)
+            self.connection_label.configure(text=_ellipsize(selected_window_title, 28))
             self.status_label.configure(text="Connected")
             print(f"Successfully connected to: {selected_window_title}")
             try:
