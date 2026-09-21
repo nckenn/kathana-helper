@@ -38,6 +38,7 @@ from ui.panels.mini_overlay import MiniOverlayMixin
 from ui.panels.mob_filter_panel import MobFilterPanelMixin
 from ui.panels.region_pickers import RegionPickerMixin
 from ui.panels.skill_selector import SkillSelectorMixin
+from ui import styles
 from ui.settings_overlays import collect_gui_overlay, sync_gui_to_config
 import ui_fonts
 import ui_icons
@@ -145,9 +146,7 @@ class BotGUI(
         if not hasattr(self, 'settings_profile_label'):
             return
         profile = settings_manager.settings_profile_label()
-        self.settings_profile_label.configure(
-            text=f"Profile: {profile}  (use Save / Save As / Load)",
-        )
+        self.settings_profile_label.configure(text=profile)
 
     def save_settings_gui(self):
         """Save current GUI state to the active profile file."""
@@ -521,124 +520,128 @@ class BotGUI(
         main_frame.columnconfigure(1, weight=1)
         
         # Configure main frame rows for proper expansion
-        # Rows: 0=window, 1=status_info, 2=bot_controls, 3=tabview
-        main_frame.rowconfigure(3, weight=1)  # Tabview can expand
-        
-        # Window selection frame
-        window_frame = ctk.CTkFrame(main_frame, corner_radius=8)
-        window_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=10, padx=10)
-        window_frame_label = ctk.CTkLabel(window_frame, text="Window Selection", font=ctk.CTkFont(size=14, weight="bold"))
-        window_frame_label.grid(row=0, column=0, columnspan=3, sticky="w", padx=10, pady=(8, 5))
-        
-        # Window dropdown
+        # Rows: 0=toolbar, 1=tabview
+        main_frame.rowconfigure(1, weight=1)  # Tabview can expand
+
+        # One toolbar card instead of three stacked ones (window / status /
+        # controls). Same controls, ~140px less chrome above every tab.
+        toolbar = ctk.CTkFrame(main_frame, corner_radius=8)
+        toolbar.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(10, 8), padx=10)
+
+        # Each row packs independently. A shared grid does not work here: the two
+        # rows have different structures, and the combo's columnspan starved the
+        # first column, leaving the Start button unmapped.
+        top_row = ctk.CTkFrame(toolbar, fg_color="transparent")
+        top_row.pack(fill="x", padx=10, pady=(8, 4))
+
+        bottom_row = ctk.CTkFrame(toolbar, fg_color="transparent")
+        bottom_row.pack(fill="x", padx=10, pady=(0, 8))
+
+        # --- top row: pick a window and connect to it -------------------
         self.window_var = tk.StringVar()
         self.window_var.trace('w', self.on_window_change)  # Reset connection when window changes
-        self.window_combo = ctk.CTkComboBox(window_frame, variable=self.window_var, state="readonly", width=400, height=32)
-        self.window_combo.grid(row=1, column=0, sticky="ew", padx=(10, 5), pady=(0, 8))
-        
-        self.connect_button = ctk.CTkButton(
-            window_frame, text="Connect", command=self.connect_window, width=100, height=32,
-        )
-        self.connect_button.grid(row=1, column=1, padx=5, pady=(0, 8))
 
-        self.refresh_button = ctk.CTkButton(window_frame, text="Refresh", command=self.refresh_windows, width=100, height=32)
-        self.refresh_button.grid(row=1, column=2, padx=(5, 10), pady=(0, 8))
+        self.minimize_button = ctk.CTkButton(
+            top_row, text="", image=ui_icons.get_icon("minimize", size=16),
+            command=self.toggle_minimize, width=32, height=32, corner_radius=6,
+            **styles.SECONDARY,
+        )
+        self.minimize_button.pack(side="right")
+        create_tooltip(self.minimize_button, "Shrink to the floating overlay pill.")
+
+        self.refresh_button = ctk.CTkButton(
+            top_row, text="Refresh", command=self.refresh_windows,
+            width=84, height=32, corner_radius=6, **styles.SECONDARY,
+        )
+        self.refresh_button.pack(side="right", padx=(6, 8))
+
+        self.connect_button = ctk.CTkButton(
+            top_row, text="Connect", command=self.connect_window,
+            width=96, height=32, corner_radius=6, **styles.ACCENT,
+        )
+        self.connect_button.pack(side="right", padx=(6, 0))
         create_tooltip(
             self.connect_button,
             "Refresh the window list and connect to the selected game window.",
         )
-        
-        # Configure window frame grid
-        window_frame.columnconfigure(0, weight=1)
-        
-        # Status frame
-        status_info_frame = ctk.CTkFrame(main_frame, corner_radius=8)
-        status_info_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10), padx=10)
-        
-        # Status label
-        self.status_label = ctk.CTkLabel(status_info_frame, text="Status: Stopped", font=ctk.CTkFont(size=12, weight="bold"))
-        self.status_label.grid(row=0, column=0, padx=10, pady=6)
-        # Remembered so the red "Stopped (error)" styling can be undone on restart.
-        self._status_label_default_color = self.status_label.cget("text_color")
-        
-        # Connection status label
-        self.connection_label = ctk.CTkLabel(status_info_frame, text="Window: Not Connected", font=ctk.CTkFont(size=11))
-        self.connection_label.grid(row=0, column=1, padx=(10, 10), pady=6)
 
-        self.bars_status_label = ctk.CTkLabel(
-            status_info_frame, text="", font=ctk.CTkFont(size=10),
-            text_color=("gray40", "gray60"),
+        # Packed last so it takes whatever width the buttons leave.
+        self.window_combo = ctk.CTkComboBox(
+            top_row, variable=self.window_var, state="readonly", height=32,
         )
-        self.bars_status_label.grid(row=0, column=3, padx=(0, 10), pady=6, sticky="w")
-        
-        # Minimize/Maximize button
-        self.minimize_button = ctk.CTkButton(status_info_frame, text="", image=ui_icons.get_icon("minimize", size=16), command=self.toggle_minimize, width=30, height=25)
-        self.minimize_button.grid(row=0, column=2, padx=(10, 10), pady=6)
-        
-        # Bot control frame - fixed height to prevent fluid expansion
-        bot_frame = ctk.CTkFrame(main_frame, corner_radius=8)
-        bot_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 0), padx=10)
-        # Set minimum height to prevent frame from expanding
-        bot_frame.grid_rowconfigure(0, weight=0)  # Don't allow row to expand
-        
-        self.toggle_bot_button = ctk.CTkButton(bot_frame, text="Start", command=self.toggle_bot, state="disabled", width=100, height=32, corner_radius=6, fg_color="green", hover_color="darkgreen")
-        self.toggle_bot_button.grid(row=0, column=0, padx=(10, 5), pady=5)
+        self.window_combo.pack(side="left", fill="x", expand=True)
+
+        # --- bottom row: run the bot, manage the profile, read status ---
+        self.toggle_bot_button = ctk.CTkButton(
+            bottom_row, text="Start", command=self.toggle_bot, state="disabled",
+            width=96, height=32, corner_radius=6, **styles.PRIMARY,
+        )
+        self.toggle_bot_button.pack(side="left", padx=(0, 6))
         create_tooltip(self.toggle_bot_button, "Start or stop the bot. Set HP + MP in Region Editor first.")
 
         self.regions_button = ctk.CTkButton(
-            bot_frame, text="Regions", command=self.open_region_editor,
-            state="disabled", width=120, height=32, corner_radius=6,
-            fg_color="#2563eb", hover_color="#1d4ed8",
+            bottom_row, text="Regions", command=self.open_region_editor,
+            state="disabled", width=96, height=32, corner_radius=6, **styles.SECONDARY,
         )
-        self.regions_button.grid(row=0, column=1, padx=5, pady=5)
+        self.regions_button.pack(side="left", padx=(0, 10))
         create_tooltip(
             self.regions_button,
             "Open the Region Editor to pick HP/MP, enemy UI, skills, buffs, and chat areas.",
         )
-        
-        # Separator frame (using a thin frame as separator) - fixed height to match buttons
-        separator = ctk.CTkFrame(bot_frame, width=2, height=40, fg_color="gray50")
-        separator.grid(row=0, column=2, padx=6, pady=5)
-        
-        # Save Settings button
+
+        separator = ctk.CTkFrame(bottom_row, width=1, height=24, fg_color=("gray70", "gray35"))
+        separator.pack(side="left", padx=(0, 10), pady=4)
+
         self.save_settings_button = ctk.CTkButton(
-            bot_frame, text="Save", command=self.save_settings_gui,
-            width=72, height=32, corner_radius=6,
+            bottom_row, text="Save", command=self.save_settings_gui,
+            width=68, height=32, corner_radius=6, **styles.SECONDARY,
         )
-        self.save_settings_button.grid(row=0, column=3, padx=5, pady=5)
+        self.save_settings_button.pack(side="left", padx=(0, 5))
         create_tooltip(self.save_settings_button, "Save all settings to the current profile file.")
 
         self.save_settings_as_button = ctk.CTkButton(
-            bot_frame, text="Save As…", command=self.save_settings_as_gui,
-            width=82, height=32, corner_radius=6,
+            bottom_row, text="Save As…", command=self.save_settings_as_gui,
+            width=80, height=32, corner_radius=6, **styles.SECONDARY,
         )
-        self.save_settings_as_button.grid(row=0, column=4, padx=5, pady=5)
+        self.save_settings_as_button.pack(side="left", padx=(0, 5))
         create_tooltip(self.save_settings_as_button, "Save settings to a new profile file.")
 
         self.load_settings_button = ctk.CTkButton(
-            bot_frame, text="Load…", command=self.load_settings_gui,
-            width=72, height=32, corner_radius=6,
+            bottom_row, text="Load…", command=self.load_settings_gui,
+            width=68, height=32, corner_radius=6, **styles.SECONDARY,
         )
-        self.load_settings_button.grid(row=0, column=5, padx=(5, 10), pady=5)
+        self.load_settings_button.pack(side="left", padx=(0, 10))
         create_tooltip(self.load_settings_button, "Load settings from a profile file.")
 
         self.settings_profile_label = ctk.CTkLabel(
-            bot_frame,
-            text="",
-            font=ctk.CTkFont(size=11),
-            text_color=("gray35", "gray65"),
-            anchor="w",
+            bottom_row, text="", font=ctk.CTkFont(size=11),
+            text_color=styles.MUTED_TEXT, anchor="w",
         )
-        self.settings_profile_label.grid(
-            row=1, column=0, columnspan=6, sticky="w", padx=(10, 10), pady=(0, 6),
+        self.settings_profile_label.pack(side="left")
+
+        # Status reads from the right, quiet next to the actions on the left.
+        self.bars_status_label = ctk.CTkLabel(
+            bottom_row, text="", font=ctk.CTkFont(size=10),
+            text_color=styles.MUTED_TEXT,
         )
-        
+        self.bars_status_label.pack(side="right")
+
+        self.connection_label = ctk.CTkLabel(
+            bottom_row, text="Not connected", font=ctk.CTkFont(size=11),
+            text_color=styles.MUTED_TEXT,
+        )
+        self.connection_label.pack(side="right", padx=(10, 10))
+
+        self.status_label = ctk.CTkLabel(
+            bottom_row, text="Stopped", font=ctk.CTkFont(size=12, weight="bold"),
+        )
+        self.status_label.pack(side="right", padx=(10, 0))
+        # Remembered so the red "Stopped (error)" styling can be undone on restart.
+        self._status_label_default_color = self.status_label.cget("text_color")
+
         # Create tabview for all sections
         tabview = ctk.CTkTabview(main_frame, corner_radius=8)
-        tabview.grid(row=3, column=0, columnspan=2, sticky="nsew", pady=(0, 10), padx=10)
-        
-        # Configure tabview to expand
-        main_frame.rowconfigure(3, weight=1)
+        tabview.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(0, 10), padx=10)
         
         # Create tabs
         status_tab = tabview.add("Status")
@@ -730,6 +733,7 @@ class BotGUI(
             width=160,
             height=28,
             corner_radius=6,
+            **styles.SECONDARY,
         )
         activate_license_btn.grid(row=0, column=1, sticky="e", padx=(8, 12), pady=(10, 6))
         create_tooltip(activate_license_btn, "Activate or change your license key")
@@ -976,6 +980,7 @@ class BotGUI(
             b = ctk.CTkButton(
                 preset_wrap, text=_plabel, width=74, height=24, corner_radius=6,
                 font=_small_font, command=lambda k=_pk: self.apply_quick_preset(k),
+                **styles.SECONDARY,
             )
             b.pack(side="left", padx=(0, 4))
             create_tooltip(b, _ptip)
@@ -1099,6 +1104,8 @@ class BotGUI(
             text=key_button_label(config.repair_key),
             command=self.register_repair_key,
             font=_small_font,
+            corner_radius=6,
+            **styles.CHIP,
         )
         self.repair_key_btn.pack(side="left", padx=(10, 0))
         self.repair_key_var.trace_add('write', lambda *_: self.repair_key_btn.configure(
@@ -1131,6 +1138,8 @@ class BotGUI(
             text=key_button_label(config.assist_key),
             command=self.register_assist_key,
             font=_small_font,
+            corner_radius=6,
+            **styles.CHIP,
         )
         self.assist_key_btn.pack(side="left", padx=(10, 0))
         self.assist_key_var.trace_add('write', lambda *_: self.assist_key_btn.configure(
@@ -1190,6 +1199,7 @@ class BotGUI(
             height=28,
             command=self.configure_hp_thresholds,
             font=ctk.CTkFont(size=16),
+            **styles.SECONDARY,
             corner_radius=6,
         )
         hp_thresholds_button.pack(side="left", padx=(10, 0))
@@ -1238,6 +1248,7 @@ class BotGUI(
             command=self.register_mp_key,
             font=_small_font,
             corner_radius=6,
+            **styles.CHIP,
         )
         mp_key_button.pack(side="left", padx=(10, 0))
         update_mp_key_button_text(btn=mp_key_button)
@@ -1388,28 +1399,26 @@ class BotGUI(
         self.mob_learn_btn = ctk.CTkButton(
             mob_btn_row, text="Learn", command=self._learn_mob_template,
             width=68, height=28, corner_radius=6, state="disabled",
+            **styles.SECONDARY,
         )
         self.mob_learn_btn.pack(side="left", padx=(0, 6))
         self.mob_remove_btn = ctk.CTkButton(
             mob_btn_row, text="Remove", command=self._remove_mob_template,
             width=76, height=28, corner_radius=6,
-            fg_color=("gray75", "gray30"), hover_color=("gray65", "gray40"),
-            state="disabled",
+            state="disabled", **styles.SECONDARY,
         )
         self.mob_remove_btn.pack(side="left", padx=(0, 6))
         self.mob_test_btn = ctk.CTkButton(
             mob_btn_row, text="Test match", command=self._test_mob_match,
             width=96, height=28, corner_radius=6,
-            fg_color=("gray75", "gray30"), hover_color=("gray65", "gray40"),
-            state="disabled",
+            state="disabled", **styles.SECONDARY,
         )
         self.mob_test_btn.pack(side="left", padx=(0, 6))
 
         self.mob_compare_btn = ctk.CTkButton(
             mob_btn_row, text="Compare", command=self._compare_selected_mob_template_live,
             width=84, height=28, corner_radius=6,
-            fg_color=("gray75", "gray30"), hover_color=("gray65", "gray40"),
-            state="disabled",
+            state="disabled", **styles.SECONDARY,
         )
         self.mob_compare_btn.pack(side="left")
 
@@ -1577,7 +1586,7 @@ class BotGUI(
             key_btn = ctk.CTkButton(
                 skill_slot_frame, width=72, height=28, text=KEY_BUTTON_DEFAULT_LABEL,
                 command=lambda idx=i: self.register_skill_sequence_key(idx),
-                font=ctk.CTkFont(size=10),
+                font=ctk.CTkFont(size=10), corner_radius=6, **styles.CHIP,
             )
             key_btn.grid(row=0, column=3, padx=(5, 5), pady=6, sticky="w")
             self.skill_sequence_key_vars[i].trace_add(
@@ -1796,7 +1805,7 @@ class BotGUI(
             buff_key_btn = ctk.CTkButton(
                 buff_slot_frame, width=72, height=28, text=KEY_BUTTON_DEFAULT_LABEL,
                 command=lambda idx=i: self.register_buff_key(idx),
-                font=ctk.CTkFont(size=10),
+                font=ctk.CTkFont(size=10), corner_radius=6, **styles.CHIP,
             )
             buff_key_btn.grid(row=0, column=3, padx=(5, 8), pady=6, sticky="e")
             self.buffs_key_vars[i].trace_add(
@@ -1885,7 +1894,8 @@ class BotGUI(
         self.mouse_clicker_coords_frame.grid(row=0, column=2, sticky="w")
         
         # Coordinate picker button
-        mouse_clicker_picker_btn = ctk.CTkButton(self.mouse_clicker_coords_frame, text="...", command=self.pick_mouse_clicker_coordinates, width=30, corner_radius=6)
+        mouse_clicker_picker_btn = ctk.CTkButton(self.mouse_clicker_coords_frame, text="...", command=self.pick_mouse_clicker_coordinates, width=30, corner_radius=6,
+                                                  **styles.SECONDARY)
         mouse_clicker_picker_btn.grid(row=0, column=0, padx=(0, 0))
         
         # Initially hide/show coords frame based on mode
@@ -1972,8 +1982,8 @@ class BotGUI(
             self.connect_button.configure(text="Connect", state="normal")
             self.update_regions_button_state()
             self.toggle_bot_button.configure(state="disabled")
-            self.connection_label.configure(text="Window: Not Connected")
-            self.status_label.configure(text="Status: Disconnected")
+            self.connection_label.configure(text="Not connected")
+            self.status_label.configure(text="Disconnected")
             print("Window changed - connection reset")
             self.update_mob_filter_ui_state()
 
@@ -2036,8 +2046,8 @@ class BotGUI(
         if config.connected_window:
             self.connect_button.configure(text="Connected", state="disabled")
             self.update_toggle_bot_button_state()
-            self.connection_label.configure(text=f"Window: {selected_window_title}")
-            self.status_label.configure(text="Status: Connected")
+            self.connection_label.configure(text=selected_window_title)
+            self.status_label.configure(text="Connected")
             print(f"Successfully connected to: {selected_window_title}")
             try:
                 import bar_color_calibration
@@ -2055,8 +2065,8 @@ class BotGUI(
             self.connect_button.configure(text="Connect")
             self.update_regions_button_state()
             self.toggle_bot_button.configure(state="disabled")
-            self.connection_label.configure(text="Window: Connection Failed")
-            self.status_label.configure(text="Status: Connection Failed")
+            self.connection_label.configure(text="Connect failed")
+            self.status_label.configure(text="Connect failed")
             print(f"Failed to connect to: {selected_window_title}")
             self.update_mob_filter_ui_state()
 
@@ -2240,7 +2250,7 @@ class BotGUI(
             
             self.update_toggle_bot_button_state()
             # Clear any red "Stopped (error)" styling from a previous crash.
-            self.status_label.configure(text="Status: Running", text_color=self._status_label_default_color)
+            self.status_label.configure(text="Running", text_color=self._status_label_default_color)
             
             # Start periodic status updates
             self.update_status()
@@ -2255,7 +2265,7 @@ class BotGUI(
         bot_logic.reset_bot_state()
         
         self.update_toggle_bot_button_state()
-        self.status_label.configure(text="Status: Stopped", text_color=self._status_label_default_color)
+        self.status_label.configure(text="Stopped", text_color=self._status_label_default_color)
         # Keep connection status - don't reset to "Not Connected"
     
     def update_skill_slot(self, slot_num):
@@ -2381,7 +2391,8 @@ class BotGUI(
             
             key_button = ctk.CTkButton(row_frame, width=72, height=28,
                                       command=lambda: self.register_key_in_dialog(key_var, dialog),
-                                      font=ctk.CTkFont(size=10), corner_radius=4)
+                                      font=ctk.CTkFont(size=10), corner_radius=4,
+                                      **styles.CHIP)
             key_button.grid(row=0, column=4, padx=5, pady=5)
             update_key_button_text(btn=key_button)
             key_var.trace_add('write', lambda *args: update_key_button_text(btn=key_button))
@@ -2390,7 +2401,8 @@ class BotGUI(
             # Delete button
             delete_button = ctk.CTkButton(row_frame, text="×", width=30, height=28,
                                          command=lambda: remove_threshold_row(row_frame, widget_data),
-                                         font=ctk.CTkFont(size=16), corner_radius=4)
+                                         font=ctk.CTkFont(size=16), corner_radius=4,
+                                         **styles.SECONDARY)
             delete_button.grid(row=0, column=5, padx=5, pady=5)
             
             widget_data = {
@@ -2422,7 +2434,7 @@ class BotGUI(
         buttons_frame.pack(fill="x", pady=(10, 0))
         
         add_button = ctk.CTkButton(buttons_frame, text="Add Threshold", width=120,
-                                   command=lambda: add_threshold_row())
+                                   command=lambda: add_threshold_row(), **styles.SECONDARY)
         add_button.pack(side="left", padx=5)
         
         def save_thresholds():
@@ -2465,11 +2477,11 @@ class BotGUI(
                 messagebox.showerror("Error", f"Failed to save thresholds: {e}")
         
         save_button = ctk.CTkButton(buttons_frame, text="Save", width=100,
-                                   command=save_thresholds)
+                                   command=save_thresholds, **styles.ACCENT)
         save_button.pack(side="right", padx=5)
         
         cancel_button = ctk.CTkButton(buttons_frame, text="Cancel", width=100,
-                                     command=dialog.destroy)
+                                     command=dialog.destroy, **styles.SECONDARY)
         cancel_button.pack(side="right", padx=5)
         
         dialog.focus_set()
@@ -2567,7 +2579,8 @@ class BotGUI(
         popup.bind('<Key>', on_key_press)
         popup.focus_set()
         
-        cancel_btn = ctk.CTkButton(popup, text="Cancel", command=popup.destroy, width=100)
+        cancel_btn = ctk.CTkButton(popup, text="Cancel", command=popup.destroy, width=100,
+                                   **styles.SECONDARY)
         cancel_btn.pack(pady=10)
     
     def register_mp_key(self):
@@ -3107,7 +3120,7 @@ class BotGUI(
         config.bot_running = False
         self._bot_run_start_time = None
         self.update_toggle_bot_button_state()
-        self.status_label.configure(text="Status: Stopped (error)", text_color="red")
+        self.status_label.configure(text="Stopped (error)", text_color="red")
         messagebox.showerror(
             "Bot Stopped",
             "The bot stopped unexpectedly.\n\n"
