@@ -37,9 +37,11 @@ class SkillSelectorMixin:
                 # {'label': 'Others', 'key': 'Etc', 'sequenceNo': 9},
             ]
             
-            jobs_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'jobs')
+            # Resolve against the project root / PyInstaller bundle, not this
+            # package folder -- this module lives in ui/panels/, jobs/ does not.
+            jobs_folder = config.resolve_resource_path('jobs')
             
-            if not os.path.exists(jobs_folder):
+            if not jobs_folder:
                 return
             
             # Preload images for each job
