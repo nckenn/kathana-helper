@@ -839,7 +839,7 @@ class Calibrator:
                 return self.system_message_area
             else:
                 print('[Calibration] Chat scrollbar not found with sufficient confidence')
-                print(f'[Calibration] Match value: {max_val:.4f} (minimum threshold: {threshold})')
+                print(f'[Calibration] Match value: {max_val:.4f} (minimum threshold: {scroll_threshold})')
                 
                 # Create debug image showing failed match
                 debug_img = screen_img.copy()

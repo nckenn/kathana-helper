@@ -39,82 +39,17 @@ from ui.panels.mob_filter_panel import MobFilterPanelMixin
 from ui.panels.region_pickers import RegionPickerMixin
 from ui.panels.skill_selector import SkillSelectorMixin
 from ui import styles
+from ui.widgets import (
+    KEY_BUTTON_DEFAULT_LABEL,
+    KEY_BUTTON_TOOLTIP,
+    ToolTip,
+    bind_key_button_clear,
+    create_tooltip,
+    key_button_label,
+)
 from ui.settings_overlays import collect_gui_overlay, sync_gui_to_config
 import ui_fonts
 import ui_icons
-
-
-class ToolTip:
-    """Create a tooltip for a given widget"""
-    def __init__(self, widget, text='widget info'):
-        self.widget = widget
-        self.text = text
-        self.tipwindow = None
-        self.id = None
-        self.x = self.y = 0
-        self.widget.bind('<Enter>', self.enter)
-        self.widget.bind('<Leave>', self.leave)
-        self.widget.bind('<ButtonPress>', self.leave)
-
-    def enter(self, event=None):
-        self.schedule()
-
-    def leave(self, event=None):
-        self.unschedule()
-        self.hidetip()
-
-    def schedule(self):
-        self.unschedule()
-        self.id = self.widget.after(500, self.showtip)
-
-    def unschedule(self):
-        id = self.id
-        self.id = None
-        if id:
-            self.widget.after_cancel(id)
-
-    def showtip(self, event=None):
-        x = y = 0
-        x, y, cx, cy = self.widget.bbox("insert") if hasattr(self.widget, 'bbox') else (0, 0, 0, 0)
-        x += self.widget.winfo_rootx() + 25
-        y += self.widget.winfo_rooty() + 20
-        # Creates a toplevel window
-        self.tipwindow = tw = tk.Toplevel(self.widget)
-        # Leaves only the label and removes the app window
-        tw.wm_overrideredirect(True)
-        tw.wm_geometry("+%d+%d" % (x, y))
-        label = tk.Label(tw, text=self.text, justify=tk.LEFT,
-                      background="#ffffe0", relief=tk.SOLID, borderwidth=1,
-                      font=(ui_fonts.APP_FONT_FAMILY, "8", "normal"), wraplength=250)
-        label.pack(ipadx=1)
-
-    def hidetip(self):
-        tw = self.tipwindow
-        self.tipwindow = None
-        if tw:
-            tw.destroy()
-
-
-def create_tooltip(widget, text):
-    """Helper function to create a tooltip for a widget"""
-    return ToolTip(widget, text)
-
-
-KEY_BUTTON_DEFAULT_LABEL = "Set Key"
-KEY_BUTTON_TOOLTIP = "Click to set key. Right-click to clear."
-
-
-def key_button_label(key_value):
-    """Uniform label for hotkey assignment buttons (unset vs assigned)."""
-    if key_value and str(key_value).strip():
-        return str(key_value).strip().upper()
-    return KEY_BUTTON_DEFAULT_LABEL
-
-
-def bind_key_button_clear(button, clear_callback, tooltip=KEY_BUTTON_TOOLTIP):
-    """Right-click clears the assigned hotkey."""
-    button.bind('<Button-3>', lambda _event: clear_callback())
-    create_tooltip(button, tooltip)
 
 
 class BotGUI(
@@ -2198,9 +2133,13 @@ class BotGUI(
                 import traceback
                 traceback.print_exc()
                 
-                def show_error():
+                # Bound now: `e` is gone by the time after() runs show_error.
+                def show_error(message=str(e)):
                     self.calibrate_button.configure(state="normal", text="Calibrate")
-                    messagebox.showerror("Calibration Error", f"An error occurred during calibration:\n{str(e)}")
+                    messagebox.showerror(
+                        "Calibration Error",
+                        f"An error occurred during calibration:\n{message}",
+                    )
                 
                 self.root.after(0, show_error)
         

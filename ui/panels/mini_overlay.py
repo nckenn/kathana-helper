@@ -7,6 +7,7 @@ import config
 import customtkinter as ctk
 import time
 import ui_icons
+from ui.widgets import create_tooltip
 
 
 class MiniOverlayMixin:

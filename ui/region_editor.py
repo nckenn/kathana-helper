@@ -643,7 +643,8 @@ class RegionEditorWindow:
 
             self.win.after(0, _done)
         except Exception as exc:
-            self.win.after(0, lambda: self._set_status(f'Capture error: {exc}'))
+            # Bound now: `exc` is gone by the time after() runs the lambda.
+            self.win.after(0, lambda msg=str(exc): self._set_status(f'Capture error: {msg}'))
 
     def _apply_capture(self, bgr, method=''):
         self._bgr = bgr
