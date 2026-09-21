@@ -125,3 +125,23 @@ def test_each_picker_passes_its_own_commit_and_colours(monkeypatch):
         ('system message', 'System Message Area', 'orange', 'orange',
          '_commit_system_message_area'),
     ]
+
+
+def test_license_date_helpers_match_the_old_inline_parsing():
+    """The six copies each did fromisoformat -> '%B %d, %Y', raw value on failure."""
+    from ui.widgets import format_license_date, license_days_left
+
+    assert format_license_date('2027-01-24T00:00:00') == 'January 24, 2027'
+    assert format_license_date('2026-09-21') == 'September 21, 2026'
+
+    # Unparseable input fell through to the raw string before; it still does.
+    assert format_license_date('Never') == 'Never'
+    assert format_license_date('') == ''
+    assert format_license_date(None, 'Unknown') == 'Unknown'
+
+    # days_left reports None instead of raising, and the callers' try/except
+    # still catches the TypeError that comparing None produces.
+    assert isinstance(license_days_left('2027-01-24T00:00:00'), int)
+    assert license_days_left('Never') is None
+    with pytest.raises(TypeError):
+        _ = license_days_left('Never') < 0

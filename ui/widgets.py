@@ -80,3 +80,26 @@ def bind_key_button_clear(button, clear_callback, tooltip=KEY_BUTTON_TOOLTIP):
     """Right-click clears the assigned hotkey."""
     button.bind('<Button-3>', lambda _event: clear_callback())
     create_tooltip(button, tooltip)
+
+
+def format_license_date(value, fallback=None):
+    """Render an ISO timestamp as "January 24, 2027".
+
+    Repeated six times across the licence views, each with a bare `except:`
+    that also swallowed KeyboardInterrupt. Returns `fallback` (default: the raw
+    value) when the string will not parse, which is what every copy did.
+    """
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(value).strftime('%B %d, %Y')
+    except (ValueError, TypeError):
+        return value if fallback is None else fallback
+
+
+def license_days_left(value):
+    """Whole days until an ISO timestamp, or None if it will not parse."""
+    from datetime import datetime
+    try:
+        return (datetime.fromisoformat(value) - datetime.now()).days
+    except (ValueError, TypeError):
+        return None

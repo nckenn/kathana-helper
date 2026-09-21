@@ -5,6 +5,7 @@ using self exactly as before -- no call sites changed.
 """
 import customtkinter as ctk
 from license_manager import get_license_manager
+from ui.widgets import format_license_date, license_days_left
 from tkinter import messagebox
 
 
@@ -18,6 +19,72 @@ class LicensePanelMixin:
         self.root.deiconify()
         self.root.lift()
         self.root.focus_force()
+
+    def _build_machine_id_section(self, parent, dialog, get_status_label):
+        """The "Your Machine ID" panel, shared by both licence dialogs.
+
+        `get_status_label` is a callable rather than the widget itself: both
+        dialogs build their status label after this section, so it does not
+        exist yet at call time. It is only needed when Copy is clicked.
+        """
+        machine_id_frame = ctk.CTkFrame(parent, corner_radius=8)
+        machine_id_frame.pack(fill="x", padx=20, pady=(0, 10))
+        machine_id_frame.columnconfigure(0, weight=1)
+
+        machine_id_label = ctk.CTkLabel(
+            machine_id_frame,
+            text="Your Machine ID:",
+            font=ctk.CTkFont(size=11, weight="bold")
+        )
+        machine_id_label.grid(row=0, column=0, sticky="w", padx=10, pady=(10, 5))
+
+        license_manager = get_license_manager()
+        machine_id = license_manager.get_machine_id()
+
+        machine_id_value_frame = ctk.CTkFrame(machine_id_frame, fg_color="transparent")
+        machine_id_value_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 5))
+        machine_id_value_frame.columnconfigure(0, weight=1)
+
+        machine_id_entry = ctk.CTkEntry(
+            machine_id_value_frame,
+            width=400,
+            height=30,
+            font=ctk.CTkFont(size=10, family="Courier"),
+            state="readonly"
+        )
+        machine_id_entry.grid(row=0, column=0, sticky="ew", padx=(0, 5))
+        # Need to temporarily change state to insert text in readonly entry
+        machine_id_entry.configure(state="normal")
+        machine_id_entry.insert(0, machine_id)
+        machine_id_entry.configure(state="readonly")
+
+        def copy_machine_id():
+            """Copy machine ID to clipboard"""
+            dialog.clipboard_clear()
+            dialog.clipboard_append(machine_id)
+            dialog.update()
+            status_label = get_status_label()
+            status_label.configure(text="Machine ID copied to clipboard!", text_color="green")
+            dialog.after(2000, lambda: status_label.configure(text=""))
+
+        copy_machine_id_btn = ctk.CTkButton(
+            machine_id_value_frame,
+            text="Copy",
+            command=copy_machine_id,
+            width=80,
+            height=30,
+            font=ctk.CTkFont(size=10)
+        )
+        copy_machine_id_btn.grid(row=0, column=1)
+
+        machine_id_help = ctk.CTkLabel(
+            machine_id_frame,
+            text="If you need a machine-bound license, provide this Machine ID to the license issuer.",
+            font=ctk.CTkFont(size=9),
+            text_color="gray",
+            wraplength=540
+        )
+        machine_id_help.grid(row=2, column=0, sticky="w", padx=10, pady=(0, 10))
 
     def show_license_dialog_blocking(self):
         """Show license entry dialog that blocks until valid license is entered"""
@@ -66,65 +133,13 @@ class LicensePanelMixin:
         )
         instructions.pack(pady=(0, 10))
         
-        # Machine ID section (for machine-bound licenses)
-        machine_id_frame = ctk.CTkFrame(main_frame, corner_radius=8)
-        machine_id_frame.pack(fill="x", padx=20, pady=(0, 10))
-        machine_id_frame.columnconfigure(0, weight=1)
-        
-        machine_id_label = ctk.CTkLabel(
-            machine_id_frame,
-            text="Your Machine ID:",
-            font=ctk.CTkFont(size=11, weight="bold")
-        )
-        machine_id_label.grid(row=0, column=0, sticky="w", padx=10, pady=(10, 5))
-        
+        # Also used further down, by the activation handler.
         license_manager = get_license_manager()
-        machine_id = license_manager.get_machine_id()
-        
-        machine_id_value_frame = ctk.CTkFrame(machine_id_frame, fg_color="transparent")
-        machine_id_value_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 5))
-        machine_id_value_frame.columnconfigure(0, weight=1)
-        
-        machine_id_entry = ctk.CTkEntry(
-            machine_id_value_frame,
-            width=400,
-            height=30,
-            font=ctk.CTkFont(size=10, family="Courier"),
-            state="readonly"
-        )
-        machine_id_entry.grid(row=0, column=0, sticky="ew", padx=(0, 5))
-        # Need to temporarily change state to insert text in readonly entry
-        machine_id_entry.configure(state="normal")
-        machine_id_entry.insert(0, machine_id)
-        machine_id_entry.configure(state="readonly")
-        
-        def copy_machine_id():
-            """Copy machine ID to clipboard"""
-            license_dialog.clipboard_clear()
-            license_dialog.clipboard_append(machine_id)
-            license_dialog.update()
-            status_label.configure(text="Machine ID copied to clipboard!", text_color="green")
-            license_dialog.after(2000, lambda: status_label.configure(text=""))
-        
-        copy_machine_id_btn = ctk.CTkButton(
-            machine_id_value_frame,
-            text="Copy",
-            command=copy_machine_id,
-            width=80,
-            height=30,
-            font=ctk.CTkFont(size=10)
-        )
-        copy_machine_id_btn.grid(row=0, column=1)
-        
-        machine_id_help = ctk.CTkLabel(
-            machine_id_frame,
-            text="If you need a machine-bound license, provide this Machine ID to the license issuer.",
-            font=ctk.CTkFont(size=9),
-            text_color="gray",
-            wraplength=540
-        )
-        machine_id_help.grid(row=2, column=0, sticky="w", padx=10, pady=(0, 10))
-        
+
+        # Machine ID section (for machine-bound licenses)
+        self._build_machine_id_section(
+            main_frame, license_dialog, lambda: status_label)
+
         # License key entry
         license_label = ctk.CTkLabel(
             main_frame,
@@ -281,65 +296,13 @@ class LicensePanelMixin:
         )
         instructions.pack(pady=(0, 10))
         
-        # Machine ID section (for machine-bound licenses)
-        machine_id_frame = ctk.CTkFrame(main_frame, corner_radius=8)
-        machine_id_frame.pack(fill="x", padx=20, pady=(0, 10))
-        machine_id_frame.columnconfigure(0, weight=1)
-        
-        machine_id_label = ctk.CTkLabel(
-            machine_id_frame,
-            text="Your Machine ID:",
-            font=ctk.CTkFont(size=11, weight="bold")
-        )
-        machine_id_label.grid(row=0, column=0, sticky="w", padx=10, pady=(10, 5))
-        
+        # Also used further down, by the activation handler.
         license_manager = get_license_manager()
-        machine_id = license_manager.get_machine_id()
-        
-        machine_id_value_frame = ctk.CTkFrame(machine_id_frame, fg_color="transparent")
-        machine_id_value_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 5))
-        machine_id_value_frame.columnconfigure(0, weight=1)
-        
-        machine_id_entry = ctk.CTkEntry(
-            machine_id_value_frame,
-            width=400,
-            height=30,
-            font=ctk.CTkFont(size=10, family="Courier"),
-            state="readonly"
-        )
-        machine_id_entry.grid(row=0, column=0, sticky="ew", padx=(0, 5))
-        # Need to temporarily change state to insert text in readonly entry
-        machine_id_entry.configure(state="normal")
-        machine_id_entry.insert(0, machine_id)
-        machine_id_entry.configure(state="readonly")
-        
-        def copy_machine_id():
-            """Copy machine ID to clipboard"""
-            license_dialog.clipboard_clear()
-            license_dialog.clipboard_append(machine_id)
-            license_dialog.update()
-            status_label.configure(text="Machine ID copied to clipboard!", text_color="green")
-            license_dialog.after(2000, lambda: status_label.configure(text=""))
-        
-        copy_machine_id_btn = ctk.CTkButton(
-            machine_id_value_frame,
-            text="Copy",
-            command=copy_machine_id,
-            width=80,
-            height=30,
-            font=ctk.CTkFont(size=10)
-        )
-        copy_machine_id_btn.grid(row=0, column=1)
-        
-        machine_id_help = ctk.CTkLabel(
-            machine_id_frame,
-            text="If you need a machine-bound license, provide this Machine ID to the license issuer.",
-            font=ctk.CTkFont(size=9),
-            text_color="gray",
-            wraplength=540
-        )
-        machine_id_help.grid(row=2, column=0, sticky="w", padx=10, pady=(0, 10))
-        
+
+        # Machine ID section (for machine-bound licenses)
+        self._build_machine_id_section(
+            main_frame, license_dialog, lambda: status_label)
+
         # License key entry (text area)
         license_label = ctk.CTkLabel(
             main_frame,
@@ -463,11 +426,9 @@ class LicensePanelMixin:
             machine_bound = license_info['data'].get('machine_bound', False)
             
             if expires != 'Never':
-                from datetime import datetime
                 try:
-                    expires_date = datetime.fromisoformat(expires)
-                    expires_str = expires_date.strftime('%B %d, %Y')
-                    days_left = (expires_date - datetime.now()).days
+                    expires_str = format_license_date(expires)
+                    days_left = license_days_left(expires)
                     if days_left < 0:
                         expiry_info = f"{expires_str}"
                     elif days_left <= 7:
@@ -480,12 +441,7 @@ class LicensePanelMixin:
                 expiry_info = "No expiration"
             
             if issued != 'Unknown':
-                try:
-                    from datetime import datetime
-                    issued_date = datetime.fromisoformat(issued)
-                    issued_str = issued_date.strftime('%B %d, %Y')
-                except:
-                    issued_str = issued
+                issued_str = format_license_date(issued)
             else:
                 issued_str = "Unknown"
             
@@ -520,11 +476,9 @@ class LicensePanelMixin:
             machine_bound = license_info['data'].get('machine_bound', False)
             
             if expires != 'Never':
-                from datetime import datetime
                 try:
-                    expires_date = datetime.fromisoformat(expires)
-                    expires_str = expires_date.strftime('%B %d, %Y')
-                    days_left = (expires_date - datetime.now()).days
+                    expires_str = format_license_date(expires)
+                    days_left = license_days_left(expires)
                     if days_left < 0:
                         status_color = "red"
                         expiry_info = f"{expires_str}"
@@ -542,12 +496,7 @@ class LicensePanelMixin:
                 expiry_info = "No expiration"
             
             if issued != 'Unknown':
-                try:
-                    from datetime import datetime
-                    issued_date = datetime.fromisoformat(issued)
-                    issued_str = issued_date.strftime('%B %d, %Y')
-                except:
-                    issued_str = issued
+                issued_str = format_license_date(issued)
             else:
                 issued_str = "Unknown"
         else:

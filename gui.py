@@ -41,6 +41,8 @@ from ui.panels.skill_selector import SkillSelectorMixin
 from ui import styles
 from ui.widgets import (
     KEY_BUTTON_DEFAULT_LABEL,
+    format_license_date,
+    license_days_left,
     KEY_BUTTON_TOOLTIP,
     ToolTip,
     bind_key_button_clear,
@@ -835,9 +837,8 @@ class BotGUI(
             if expires != 'Never':
                 from datetime import datetime
                 try:
-                    expires_date = datetime.fromisoformat(expires)
-                    expires_str = expires_date.strftime('%B %d, %Y')
-                    days_left = (expires_date - datetime.now()).days
+                    expires_str = format_license_date(expires)
+                    days_left = license_days_left(expires)
                     if days_left < 0:
                         status_color = "red"
                         status_indicator = "●"
@@ -859,12 +860,7 @@ class BotGUI(
             
             # Format issued date
             if issued != 'Unknown':
-                try:
-                    from datetime import datetime
-                    issued_date = datetime.fromisoformat(issued)
-                    issued_str = issued_date.strftime('%B %d, %Y')
-                except:
-                    issued_str = issued
+                issued_str = format_license_date(issued)
             else:
                 issued_str = "Unknown"
         else:
