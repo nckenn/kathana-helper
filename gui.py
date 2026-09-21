@@ -517,7 +517,7 @@ class BotGUI(
 
         # --- top row: pick a window and connect to it -------------------
         self.window_var = tk.StringVar()
-        self.window_var.trace('w', self.on_window_change)  # Reset connection when window changes
+        self.window_var.trace_add('write', self.on_window_change)  # Reset connection when window changes
 
         self.minimize_button = ctk.CTkButton(
             top_row, text="", image=ui_icons.get_icon("minimize", size=16),
