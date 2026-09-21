@@ -9,12 +9,13 @@ import debug_io
 import debug_utils
 import template_cache
 import match_utils
+import logger
 try:
     import cv2
     CV2_AVAILABLE = True
 except ImportError:
     CV2_AVAILABLE = False
-    print('[CV2] OpenCV not available. Install with: pip install opencv-python')
+    logger.error('OpenCV not available. Install with: pip install opencv-python', 'CV2')
 
 
 
@@ -34,13 +35,13 @@ class BuffsManager:
         """Set a buff image path for a specific index (should be relative path)"""
         if 0 <= idx < len(self.buffs):
             self.buffs[idx] = image_path
-            print(f'[BuffsManager] Buff {idx + 1} set to: {image_path}')
+            logger.info(f'Buff {idx + 1} set to: {image_path}', 'Buffs')
     
     def clear_buff(self, idx):
         """Clear a buff at a specific index"""
         if 0 <= idx < len(self.buffs):
             self.buffs[idx] = None
-            print(f'[BuffsManager] Buff {idx + 1} cleared')
+            logger.info(f'Buff {idx + 1} cleared', 'Buffs')
     
     def set_ui_reference(self, ui):
         """Set reference to UI (kept for compatibility; keys are no longer used)"""
@@ -108,13 +109,13 @@ class BuffsManager:
             mob_filter.focus_self_target()
         config.is_buffing = True
         config.buffing_start_time = time.time()
-        print('[Buffs] Buff session started — holding retarget until buffs are active')
+        logger.info('Buff session started — holding retarget until buffs are active', 'Buffs')
 
     def end_buffing_session(self):
         if not config.is_buffing:
             return
         config.is_buffing = False
-        print('[Buffs] Buff session finished — resuming retarget')
+        logger.info('Buff session finished — resuming retarget', 'Buffs')
 
     def _retarget_after_buffs(self):
         """Resume mob targeting after a buff session (whitelisted mobs deferred until now)."""
@@ -137,7 +138,7 @@ class BuffsManager:
         if config.is_buffing:
             timeout = float(getattr(config, 'BUFFING_SESSION_TIMEOUT', 45.0))
             if now - config.buffing_start_time > timeout:
-                print('[Buffs] Buff session timed out — resuming retarget')
+                logger.info('Buff session timed out — resuming retarget', 'Buffs')
                 self.end_buffing_session()
                 self._retarget_after_buffs()
                 return False
@@ -280,7 +281,7 @@ class BuffsManager:
 
             grace_s = float(getattr(config, 'buff_activation_grace_seconds', 4.0))
             debug_utils.debug_print(f'Buff {idx + 1} not active, pressing key {key!r}', 'BuffsManager')
-            print(f'[BUFF] Buff {idx + 1} not active, pressing key {key!r}')
+            logger.info(f'Buff {idx + 1} not active, pressing key {key!r}', 'Buffs')
             input_handler.send_input(key)
             self.last_click_times[idx] = now
             self._pending_activation_until[idx] = now + grace_s

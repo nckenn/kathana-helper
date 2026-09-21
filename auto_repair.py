@@ -8,6 +8,7 @@ import time
 import config
 import debug_io
 import window_utils
+import logger
 
 try:
     import cv2
@@ -15,7 +16,7 @@ try:
     CV2_AVAILABLE = True
 except ImportError:
     CV2_AVAILABLE = False
-    print('[CV2] OpenCV not available. Install with: pip install opencv-python')
+    logger.error('OpenCV not available. Install with: pip install opencv-python', 'CV2')
 
 
 CALIBRATION_WARN_INTERVAL = 30.0
@@ -59,9 +60,9 @@ class RepairExecutor:
     def execute_repair(current_time, hwnd):
         key = (config.repair_key or '').strip()
         if not key:
-            print("[Auto Repair] REPAIR TRIGGERED but no repair_key configured")
+            logger.warn('Repair triggered but no repair_key configured', 'Auto Repair')
             return False
-        print(f"[Auto Repair] REPAIR TRIGGERED - pressing key {key!r}")
+        logger.info(f'Repair triggered - pressing key {key!r}', 'Auto Repair')
         import input_handler
         input_handler.send_input(key)
         config.last_repair_time = current_time
@@ -290,9 +291,10 @@ def check_auto_repair():
     if not CalibrationValidator.is_calibrated():
         current_time = time.time()
         if _repair_state_manager.should_warn_calibration(current_time):
-            print(
-                "[Auto Repair] Warning region not calibrated! "
-                "Set the system message area in Calibration."
+            logger.warn(
+                'Warning region not calibrated! '
+                'Set the system message area in Calibration.',
+                'Auto Repair',
             )
         return
 
@@ -322,7 +324,7 @@ def check_auto_repair():
                 else config.connected_window)
         detected = _warning_detector.detect_break_warning(hwnd)
     except Exception as e:
-        print(f"[Auto Repair] Error in check: {e}")
+        logger.error(f'Error in check: {e}', 'Auto Repair')
         return
 
     if not detected:
@@ -333,9 +335,10 @@ def check_auto_repair():
     update_repair_count_display()
 
     if _repair_state_manager.should_log_detection(current_time):
-        print(
-            f"[Auto Repair] \"About to break\" warning appeared "
-            f"(count: {detection_count}/{config.BREAK_WARNING_TRIGGER_COUNT})"
+        logger.info(
+            f'"About to break" warning appeared '
+            f'(count: {detection_count}/{config.BREAK_WARNING_TRIGGER_COUNT})',
+            'Auto Repair',
         )
 
     if not _break_warning_tracker.should_trigger_repair():
@@ -344,7 +347,7 @@ def check_auto_repair():
     if RepairExecutor.is_on_cooldown(current_time):
         if _repair_state_manager.should_log_cooldown(current_time):
             remaining = RepairExecutor.get_remaining_cooldown(current_time)
-            print(f"[Auto Repair] Repair on cooldown ({remaining:.1f}s remaining)")
+            logger.info(f'Repair on cooldown ({remaining:.1f}s remaining)', 'Auto Repair')
         return
 
     if RepairExecutor.execute_repair(current_time, hwnd):

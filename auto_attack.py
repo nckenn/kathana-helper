@@ -20,6 +20,7 @@ import hp_number_reader
 import region_helpers
 import ui_bar_detection
 import loot_helpers
+import logger
 
 
 # Initialize lock for thread-safe mob detection
@@ -199,7 +200,7 @@ def _detect_enemy_from_target_strip(hwnd, screen=None):
             screen=screen,
         ).to_dict()
     except Exception as e:
-        print(f"[Enemy HP Detection] Strip scan error: {e}")
+        logger.error(f'Strip scan error: {e}', 'Enemy HP')
         return EnemyDetectionResult().to_dict()
 
 
@@ -496,7 +497,7 @@ def detect_enemy_for_auto_attack(hwnd, screen=None):
                 out.update(_detect_enemy_name_presence(hwnd, screen=screen))
                 return out
         except Exception as e:
-            print(f"[Enemy HP Detection] Manual region error: {e}")
+            logger.error(f'Manual region error: {e}', 'Enemy HP')
 
     out = _detect_enemy_from_target_strip(hwnd, screen)
     out.update(_detect_enemy_name_presence(hwnd, screen=out.get('screen')))
@@ -615,7 +616,7 @@ def reset_enemy_tracking():
     """Reset enemy tracking when target is lost (for assist_only mode)"""
     config.enemy_initial_hp = None
     config.enemy_detected = False
-    print('[Assist Only] Enemy tracking reset')
+    logger.info('Enemy tracking reset', 'Assist Only')
 
 
 def check_assist_key():
@@ -644,7 +645,7 @@ def check_assist_key():
         check_assist_key.last_click_time = current_time
         debug_utils.debug_print(f'Assist key pressed: {key!r}', 'AssistOnly')
     except Exception as e:
-        print(f'[Assist Only] Error pressing assist key: {e}')
+        logger.error(f'Error pressing assist key: {e}', 'Assist Only')
 
 
 # ============================================================================
@@ -706,7 +707,7 @@ class RetargetManager:
             }
         
         if recursion_depth >= max_recursion:
-            print(f"[Retarget] Max retries reached ({max_recursion}), stopping retarget loop")
+            logger.warn(f'Max retries reached ({max_recursion}), stopping retarget loop', 'Retarget')
             return {
                 'success': False,
                 'mob_name': None,
@@ -753,9 +754,10 @@ class RetargetManager:
         # Check if mob needs retargeting (not in target list)
         if mob_result['needs_retarget']:
             context_str = f" ({context})" if context else ""
-            print(
-                f"[Retarget] Skipping mob: {detected_mob} "
-                f"(no CV template match, retry {recursion_depth + 1}/{max_recursion}){context_str}"
+            logger.info(
+                f'Skipping mob: {detected_mob} '
+                f'(no CV template match, retry {recursion_depth + 1}/{max_recursion}){context_str}',
+                'Retarget',
             )
             
             if reset_state_on_skip:
@@ -837,7 +839,7 @@ class AutoTargetManager:
                 context=context
             )
             if reason:
-                print(f"Auto-targeting ({reason})")
+                logger.info(f'Auto-targeting ({reason})', 'Auto Target')
             return True
         return False
 
@@ -859,7 +861,7 @@ def _trigger_smart_loot_safe():
         current_time = time.time()
         if (current_time - config.last_enemy_hp_log_time >=
                 config.HP_MP_LOG_INTERVAL):
-            print(f"[Auto Attack] Smart loot failed: {e}")
+            logger.error(f'Smart loot failed: {e}', 'Auto Attack')
             config.last_enemy_hp_log_time = current_time
 
 
@@ -907,7 +909,7 @@ def _try_retarget_unless_buffs_pending(reason, hwnd=None):
 
 def _finish_kill_with_loot(reason):
     """Trigger loot and reset combat state after a kill."""
-    print(f"[Auto Attack] {reason} - triggering smart loot")
+    logger.info(f'{reason} - triggering smart loot', 'Auto Attack')
     _trigger_smart_loot_safe()
     EnemyStateManager.reset_enemy_state()
     _auto_target_manager.reset_search_timer()
@@ -1019,10 +1021,11 @@ def check_auto_attack():
                 # Enemy was killed - trigger smart loot first
                 # This handles the case where enemy bar disappears (enemy died)
                 reason = "enemy bar disappeared"
-                print(
-                    f"[Auto Attack] Enemy disappeared ({reason}) - triggering smart loot "
-                    f"(had_enemy: readings={len(config.enemy_hp_readings)}, "
-                    f"target_time={config.enemy_target_time}, mob={config.current_target_mob})"
+                logger.info(
+                    f'Enemy disappeared ({reason}) - triggering smart loot '
+                    f'(had_enemy: readings={len(config.enemy_hp_readings)}, '
+                    f'target_time={config.enemy_target_time}, mob={config.current_target_mob})',
+                    'Auto Attack',
                 )
                 _trigger_smart_loot_safe()
                 EnemyStateManager.reset_enemy_state()
@@ -1054,9 +1057,10 @@ def check_auto_attack():
             # Stale HP bar: name row gone first; lingering bar pixels are not a live target.
             if EnemyHpProcessor.should_treat_stale_bar_as_kill(
                     name_present, raw_enemy_hp_percentage, current_time):
-                print(
-                    f"[Auto Attack] Target name missing ({config.enemy_name_missing_streak} frames) "
-                    f"with stale HP bar ({raw_enemy_hp_percentage:.1f}%) — treating as kill"
+                logger.info(
+                    f'Target name missing ({config.enemy_name_missing_streak} frames) '
+                    f'with stale HP bar ({raw_enemy_hp_percentage:.1f}%) — treating as kill',
+                    'Auto Attack',
                 )
                 _finish_kill_with_loot("target name missing (stale HP bar)")
                 return
@@ -1071,7 +1075,7 @@ def check_auto_attack():
             # Block combat when mob filter is on but target is not on the whitelist.
             if (cv_mob_filter and not config.is_looting
                     and not should_target_current_mob()):
-                print("[Mob Filter] No whitelist match — retargeting")
+                logger.info('No whitelist match — retargeting', 'Mob Filter')
                 EnemyStateManager.reset_enemy_state()
                 if config.skill_sequence_manager:
                     config.skill_sequence_manager.reset_sequence()
@@ -1089,7 +1093,7 @@ def check_auto_attack():
                     enemy_hp_percentage = 0.0
                     EnemyStateManager.reset_enemy_state()
                     # Trigger smart loot when enemy death is detected via HP jump
-                    print(f"[Auto Attack] Enemy death detected (HP jump) - triggering smart loot")
+                    logger.info('Enemy death detected (HP jump) - triggering smart loot', 'Auto Attack')
                     _trigger_smart_loot_safe()
                     _auto_target_manager.reset_search_timer()
                     # smart_loot() now handles timing and clears is_looting when done
@@ -1129,7 +1133,7 @@ def check_auto_attack():
                                     enemy_found=True, run_active=config.bot_running,
                                 )
                         except Exception as e:
-                            print(f"[AutoAttack] Error executing skill sequence: {e}")
+                            logger.error(f'Error executing skill sequence: {e}', 'Auto Attack')
                 
                 if (cv_mob_filter and config.enemy_target_time > 0 and
                         not config.is_looting and
@@ -1143,7 +1147,7 @@ def check_auto_attack():
                         )
                         return
                     if config.current_mob_match is None:
-                        print("[Mob Filter] Lost CV match during combat — retargeting")
+                        logger.info('Lost CV match during combat — retargeting', 'Mob Filter')
                         EnemyStateManager.reset_enemy_state()
                         if config.skill_sequence_manager:
                             config.skill_sequence_manager.reset_sequence()
@@ -1162,9 +1166,10 @@ def check_auto_attack():
                     previous_readings = config.enemy_hp_readings[:-1]
                     if (previous_readings and 
                         max(previous_readings) > HP_PREVIOUS_READING_MIN):
-                        print(
-                            f"[Auto Attack] Enemy HP dropped from {max(previous_readings):.1f}% "
-                            f"to {raw_enemy_hp_percentage:.1f}% - triggering smart loot"
+                        logger.info(
+                            f'Enemy HP dropped from {max(previous_readings):.1f}% '
+                            f'to {raw_enemy_hp_percentage:.1f}% - triggering smart loot',
+                            'Auto Attack',
                         )
                         # Trigger smart loot when HP drops to death threshold
                         _trigger_smart_loot_safe()
@@ -1183,10 +1188,11 @@ def check_auto_attack():
                 if (raw_enemy_hp_percentage <= HP_DEATH_THRESHOLD and 
                     config.enemy_target_time > 0 and
                     current_time - config.enemy_target_time > 1.0):  # Enemy tracked for at least 1 second
-                    print(
-                        f"[Auto Attack] Enemy HP very low ({raw_enemy_hp_percentage:.1f}%) "
-                        f"after tracking for {current_time - config.enemy_target_time:.1f}s - "
-                        f"assuming enemy is dead, triggering smart loot"
+                    logger.info(
+                        f'Enemy HP very low ({raw_enemy_hp_percentage:.1f}%) '
+                        f'after tracking for {current_time - config.enemy_target_time:.1f}s - '
+                        f'assuming enemy is dead, triggering smart loot',
+                        'Auto Attack',
                     )
                     _trigger_smart_loot_safe()
                     enemy_hp_percentage = 0.0
@@ -1220,7 +1226,7 @@ def check_auto_attack():
                     if mob_filter.is_active():
                         mob_filter.verify_after_target(hwnd)
                         if config.current_mob_match is None:
-                            print("[Mob Filter] No CV template match after targeting — retargeting")
+                            logger.info('No CV template match after targeting — retargeting', 'Mob Filter')
                             EnemyStateManager.reset_enemy_state()
                             if config.skill_sequence_manager:
                                 config.skill_sequence_manager.reset_sequence()
@@ -1229,7 +1235,7 @@ def check_auto_attack():
                             _auto_target_manager.try_auto_target("non-target mob detected")
                             return
                     
-                    print(f"Enemy targeted")
+                    logger.info('Enemy targeted', 'Auto Attack')
         
         # Store enemy HP percentage in config for GUI to read
         config.current_enemy_hp_percentage = enemy_hp_percentage
@@ -1238,6 +1244,6 @@ def check_auto_attack():
         current_time = time.time()
         if (current_time - config.last_enemy_hp_log_time >= 
                 config.HP_MP_LOG_INTERVAL):
-            print(f"Error capturing enemy HP bar: {e}")
+            logger.error(f'Error capturing enemy HP bar: {e}', 'Auto Attack')
             config.last_enemy_hp_log_time = current_time
         config.current_enemy_hp_percentage = 0.0

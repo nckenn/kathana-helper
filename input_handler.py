@@ -9,6 +9,7 @@ from time import sleep
 import pyautogui
 import config
 import debug_utils
+import logger
 
 # Movement sequence state tracking
 _movement_sequence_active = False
@@ -110,7 +111,7 @@ def send_silent_key(hwnd, vk_code, use_scan_code=False, modifiers=None):
                 from ctypes import windll
                 scan_code = windll.user32.MapVirtualKeyW(vk_code, 0)
             except Exception as e:
-                print(f"Error mapping scan code, using bare lParam: {e}")
+                logger.warn(f'Error mapping scan code, using bare lParam: {e}', 'Input')
                 scan_code = 0
         # Non-scan keys keep lParam=0 (proven to work for plain number keys).
         lparam_down = (1 | (scan_code << 16)) if scan_code else 0
@@ -141,7 +142,7 @@ def send_silent_key(hwnd, vk_code, use_scan_code=False, modifiers=None):
                     mod_vk = modifier_codes[mod]
                     win32api.SendMessage(hwnd, win32con.WM_KEYUP, mod_vk, 0)
     except Exception as e:
-        print(f"Error sending silent key: {e}")
+        logger.error(f'Error sending silent key: {e}', 'Input')
         return False
     return True
 
@@ -169,7 +170,7 @@ def send_input(key):
                     if send_silent_key(hwnd, vk_code, use_scan_code=use_scan_code, modifiers=modifiers if modifiers else None):
                         return
             except Exception as e:
-                print(f"Silent input failed, falling back to regular input: {e}")
+                logger.warn(f'Silent input failed, falling back to regular input: {e}', 'Input')
             
             # Fallback: try to send with pydirectinput for modifier combinations
             if '+' in key.lower():
@@ -239,7 +240,7 @@ def send_input(key):
             
             pydirectinput.press(key)
     except Exception as e:
-        print(f"Error sending input {key}: {e}")
+        logger.error(f'Error sending input {key}: {e}', 'Input')
 
 
 def _post_key_hold(hwnd, vk_code, hold_duration):
@@ -284,7 +285,7 @@ def start_movement_sequence(foreground=False):
             win32gui.SetForegroundWindow(hwnd)
             sleep(0.05)
         except Exception as e:
-            print(f"Error starting movement sequence: {e}")
+            logger.error(f'Error starting movement sequence: {e}', 'Input')
 
 
 def end_movement_sequence():
@@ -347,7 +348,7 @@ def send_movement_key(key, hold_duration=0.15, foreground=False):
         sleep(hold_duration)
         pydirectinput.keyUp(key)
     except Exception as e:
-        print(f"Error sending movement key {key}: {e}")
+        logger.error(f'Error sending movement key {key}: {e}', 'Input')
 
 
 def _rotate_camera_background(hwnd, drag_pixels, step_pixels, direction, move_delay):
@@ -382,7 +383,7 @@ def _rotate_camera_background(hwnd, drag_pixels, step_pixels, direction, move_de
         win32api.PostMessage(hwnd, win32con.WM_RBUTTONUP, 0, win32api.MAKELONG(cx, cy))
         return True
     except Exception as e:
-        print(f"Error rotating camera (background): {e}")
+        logger.error(f'Error rotating camera (background): {e}', 'Input')
         try:
             win32api.PostMessage(hwnd, win32con.WM_RBUTTONUP, 0, 0)
         except Exception:
@@ -460,7 +461,7 @@ def _rotate_camera_foreground(drag_pixels, step_pixels, direction, settle, move_
                 pass
         return True
     except Exception as e:
-        print(f"Error rotating camera (foreground): {e}")
+        logger.error(f'Error rotating camera (foreground): {e}', 'Input')
         if button_down:
             try:
                 win32api.mouse_event(_MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
@@ -527,7 +528,7 @@ def perform_mouse_click():
                 screen_y = rect[1] + config.mouse_clicker_coords['y']
                 pyautogui.click(screen_x, screen_y)
         except Exception as e2:
-            print(f"Error performing mouse click: {e2}")
+            logger.error(f'Error performing mouse click: {e2}', 'Input')
 
 
 def perform_mouse_click_at(screen_x, screen_y):
@@ -560,7 +561,7 @@ def perform_mouse_click_at(screen_x, screen_y):
             # Final fallback to pyautogui
             pyautogui.click(screen_x, screen_y)
         except Exception as e2:
-            print(f"Error performing mouse click at ({screen_x}, {screen_y}): {e2}")
+            logger.error(f'Error performing mouse click at ({screen_x}, {screen_y}): {e2}', 'Input')
 
 
 def initialize_pyautogui():

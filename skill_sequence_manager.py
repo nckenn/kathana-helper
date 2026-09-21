@@ -7,12 +7,13 @@ import config
 import input_handler
 import template_cache
 import match_utils
+import logger
 try:
     import cv2
     CV2_AVAILABLE = True
 except ImportError:
     CV2_AVAILABLE = False
-    print('[CV2] OpenCV not available. Install with: pip install opencv-python')
+    logger.error('OpenCV not available. Install with: pip install opencv-python', 'CV2')
 
 
 class SkillSequenceManager:
@@ -35,12 +36,12 @@ class SkillSequenceManager:
     def set_skill(self, idx, image_path):
         if 0 <= idx < len(self.skills):
             self.skills[idx] = image_path
-            print(f'[SkillSequenceManager] Skill {idx + 1} set to: {image_path}')
+            logger.info(f'Skill {idx + 1} set to: {image_path}', 'SkillSequence')
 
     def clear_skill(self, idx):
         if 0 <= idx < len(self.skills):
             self.skills[idx] = None
-            print(f'[SkillSequenceManager] Skill {idx + 1} cleared')
+            logger.info(f'Skill {idx + 1} cleared', 'SkillSequence')
 
     def set_ui_reference(self, ui):
         self.ui_reference = ui
@@ -50,7 +51,7 @@ class SkillSequenceManager:
         self.skill_waiting_activation = False
         self.enemy_found_previous = False
         self._cast_attempts = 0
-        print('[SKILL-SEQUENCE] Sequence reset')
+        logger.info('Sequence reset', 'SkillSequence')
 
     def _park(self, idx, n):
         """Point the rotation at slot `idx` and clear per-skill cast state."""
@@ -186,7 +187,7 @@ class SkillSequenceManager:
     def _press_skill(self, original_idx):
         hotkey = (config.skill_sequence_config[original_idx].get('key') or '').strip()
         if hotkey:
-            print(f'[SKILL-SEQUENCE] Skill {original_idx + 1} ready; pressing key {hotkey!r}')
+            logger.info(f'Skill {original_idx + 1} ready; pressing key {hotkey!r}', 'SkillSequence')
             input_handler.send_input(hotkey)
 
     @staticmethod
@@ -215,8 +216,8 @@ class SkillSequenceManager:
 
             template = template_cache.get_template(skill_path, cv2.IMREAD_COLOR)
             if template is None:
-                print(f'[SKILL-SEQUENCE] Could not load template for skill '
-                      f'{original_idx + 1}; skipping')
+                logger.warn(f'Could not load template for skill '
+                            f'{original_idx + 1}; skipping', 'SkillSequence')
                 self._park(idx + 1, n)
                 continue
             if area.shape[0] < template.shape[0] or area.shape[1] < template.shape[1]:
@@ -234,8 +235,8 @@ class SkillSequenceManager:
                 self._cast_attempts += 1
                 # Give up on a ready skill that won't cast so we never stall here.
                 if self._cast_attempts >= self.MAX_CAST_ATTEMPTS:
-                    print(f'[SKILL-SEQUENCE] Skill {original_idx + 1} did not cast after '
-                          f'{self._cast_attempts} tries; advancing')
+                    logger.warn(f'Skill {original_idx + 1} did not cast after '
+                                f'{self._cast_attempts} tries; advancing', 'SkillSequence')
                     self._advance(n)
                 return
 
