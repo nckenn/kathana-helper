@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to publish, e.g. v3.1.0 (must match APP_VERSION in config.py)'
+        description: 'Version to publish, e.g. v3.1.0 or 3.1.0 (must match APP_VERSION in config.py)'
         required: true
         type: string
 
@@ -58,11 +58,13 @@ jobs:
         run: |
           tag="${{ inputs.tag || github.ref_name }}"
           app_version=$(python -c "import config; print(config.APP_VERSION)")
-          if [ "$tag" != "v$app_version" ]; then
-            echo "::error::Tag '$tag' does not match APP_VERSION '$app_version' in config.py"
+          # Accept "3.1.0" or "v3.1.0"; the published tag is always v-prefixed.
+          given="${tag#v}"
+          if [ "$given" != "$app_version" ]; then
+            echo "::error::Tag '$tag' does not match config.py, which says APP_VERSION = '$app_version'. Use 'v$app_version' (or '$app_version'), or bump APP_VERSION first."
             exit 1
           fi
-          echo "tag=$tag"             >> "$GITHUB_OUTPUT"
+          echo "tag=v$app_version"    >> "$GITHUB_OUTPUT"
           echo "version=$app_version" >> "$GITHUB_OUTPUT"
 
       # Never publish a build whose tests do not pass.
