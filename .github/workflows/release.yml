@@ -1,0 +1,107 @@
+name: release
+
+# Builds the Windows exe and publishes it to the PUBLIC releases repo, so this
+# repo can stay private while downloads stay open.
+#
+# REQUIRED SETUP (one time, done by a repo admin -- the workflow cannot do it):
+#   1. Create a fine-grained Personal Access Token with
+#        Repository access: nckenn/kathana-helper-releases
+#        Permissions:       Contents -> Read and write
+#   2. Add it to THIS repo under Settings -> Secrets and variables -> Actions
+#      as a secret named RELEASE_REPO_TOKEN
+#   The built-in GITHUB_TOKEN cannot be used: it only has rights to this repo.
+#
+# To cut a release: bump APP_VERSION in config.py, commit, then
+#   git tag v3.1.1 && git push origin v3.1.1
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to publish, e.g. v3.1.0 (must match APP_VERSION in config.py)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_REPO: nckenn/kathana-helper-releases
+
+jobs:
+  build-and-publish:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt pyinstaller
+
+      # A tag that disagrees with APP_VERSION would ship an exe whose filename
+      # and in-app version differ from the release it is published under.
+      - name: Check the tag matches APP_VERSION
+        id: version
+        shell: bash
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          app_version=$(python -c "import config; print(config.APP_VERSION)")
+          if [ "$tag" != "v$app_version" ]; then
+            echo "::error::Tag '$tag' does not match APP_VERSION '$app_version' in config.py"
+            exit 1
+          fi
+          echo "tag=$tag"             >> "$GITHUB_OUTPUT"
+          echo "version=$app_version" >> "$GITHUB_OUTPUT"
+
+      # Never publish a build whose tests do not pass.
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Build the executable
+        run: pyinstaller kathana_helper.spec --noconfirm
+
+      # The spec names it "Kathana Helper v3.1.0.exe"; GitHub turns spaces in
+      # asset names into dots, so rename it for a clean download URL.
+      - name: Rename the artifact
+        id: artifact
+        shell: bash
+        run: |
+          src="dist/Kathana Helper v${{ steps.version.outputs.version }}.exe"
+          out="Kathana-Helper-${{ steps.version.outputs.tag }}.exe"
+          if [ ! -f "$src" ]; then
+            echo "::error::Expected build output not found: $src"
+            ls -la dist/ || true
+            exit 1
+          fi
+          mv "$src" "$out"
+          echo "path=$out" >> "$GITHUB_OUTPUT"
+          echo "Built $out ($(du -h "$out" | cut -f1))"
+
+      - name: Publish to the public releases repo
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: ${{ env.RELEASE_REPO }}
+          token: ${{ secrets.RELEASE_REPO_TOKEN }}
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Kathana Helper ${{ steps.version.outputs.tag }}
+          files: ${{ steps.artifact.outputs.path }}
+          fail_on_unmatched_files: true
+          body: |
+            ## Kathana Helper ${{ steps.version.outputs.tag }}
+
+            Download the `.exe` below and run it. No installation needed.
+
+            Windows SmartScreen may warn about an unrecognised publisher --
+            the build is unsigned. Choose **More info -> Run anyway**.

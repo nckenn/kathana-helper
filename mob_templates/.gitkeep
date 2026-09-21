@@ -1,0 +1,3 @@
+Learned mob templates live here at runtime and are not committed.
+The directory itself is, because kathana_helper.spec bundles it and
+PyInstaller fails on a missing data path in a clean checkout.

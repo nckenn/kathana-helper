@@ -19,6 +19,7 @@ dist/
 decompiled/
 debug/
 calibration_debug/
-mob_templates/
+mob_templates/*
+!mob_templates/.gitkeep
 
 .idea
