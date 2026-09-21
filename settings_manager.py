@@ -4,11 +4,17 @@ Settings management - save and load bot configuration
 import json
 import os
 import sys
+import tempfile
 import config
 import logger
 
 _gui_overlay_provider = None
 _current_settings_path = None
+
+# Schema version for saved profiles. Bump when a key changes meaning (not when
+# one is merely added), and give `_migrate_settings` a branch for the old shape.
+#   1 - per-skill "Skip if on cooldown"; the global skill_sequence_mode is gone.
+SETTINGS_VERSION = 1
 
 SETTINGS_FILE_FILTER = (
     ("Kathana settings", "*.json"),
@@ -100,6 +106,7 @@ def build_settings_snapshot(gui_overlay=None):
             }
 
     settings = {
+        'version': SETTINGS_VERSION,
         'skill_slots': clean_skill_slots,
         'action_slots': clean_action_slots,
         'mob_detection_enabled': config.mob_detection_enabled,
@@ -186,8 +193,49 @@ def build_settings_snapshot(gui_overlay=None):
     return settings
 
 
+def _migrate_settings(settings):
+    """Bring a loaded profile up to SETTINGS_VERSION; return the dict to apply.
+
+    Never rewrites a value the user set. Where an old profile cannot be
+    translated faithfully, it says so in the log and leaves the value alone.
+    """
+    version = settings.get('version')
+
+    if version == SETTINGS_VERSION:
+        return settings
+
+    if isinstance(version, int) and version > SETTINGS_VERSION:
+        logger.warn(
+            f"Profile was written by a newer version (schema {version}, this build "
+            f"reads {SETTINGS_VERSION}); unknown settings will be ignored",
+            "Settings",
+        )
+        return settings
+
+    settings = dict(settings)
+
+    if version is None:
+        # Pre-versioned profile. Cooldown skipping used to be a global Cast mode
+        # (Rotation/Priority), both of which skipped every skill on cooldown; it
+        # is now the per-skill "Skip if on cooldown" checkbox. The stored bypass
+        # flags already use the new meaning, so they are kept as-is -- but a
+        # profile whose flags are off will now wait on those skills.
+        if settings.pop('skill_sequence_mode', None) is not None:
+            logger.warn(
+                "Profile predates per-skill cooldown skipping; the old Cast mode "
+                "setting was dropped. Check 'Skip if on cooldown' per skill if the "
+                "rotation now waits where it used to move on.",
+                "Settings",
+            )
+
+    settings['version'] = SETTINGS_VERSION
+    return settings
+
+
 def apply_settings_dict(settings):
     """Apply a loaded settings dict to in-memory config."""
+    settings = _migrate_settings(settings)
+
     if 'skill_slots' in settings:
         for slot_key_str in settings['skill_slots']:
             if slot_key_str.isdigit():
@@ -373,6 +421,32 @@ def apply_settings_dict(settings):
     template_cache.clear()
 
 
+def _write_json_atomic(target_path, data):
+    """Write JSON so an interrupted save cannot truncate an existing profile.
+
+    A profile holds every region calibration, skill and buff binding, so a
+    half-written file is a real loss. Serialize to a sibling temp file, flush it
+    to disk, then os.replace() it over the target -- atomic on Windows and POSIX,
+    so the old profile survives a crash mid-write.
+    """
+    directory = os.path.dirname(target_path) or '.'
+    fd, tmp_path = tempfile.mkstemp(
+        dir=directory, prefix=os.path.basename(target_path) + '.', suffix='.tmp',
+    )
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, target_path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
 def save_settings(gui_overlay=None, path=None):
     """Save all bot settings to a JSON file."""
     try:
@@ -391,8 +465,7 @@ def save_settings(gui_overlay=None, path=None):
         )
 
         settings = build_settings_snapshot(gui_overlay=gui_overlay)
-        with open(target_path, 'w', encoding='utf-8') as f:
-            json.dump(settings, f, indent=2)
+        _write_json_atomic(target_path, settings)
 
         set_settings_path(target_path)
 

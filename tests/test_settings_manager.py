@@ -126,3 +126,64 @@ def test_sync_gui_to_config_uses_dict_vars():
     assert config.skill_sequence_config[0]['enabled'] is True
     assert config.skill_sequence_config[0]['bypass'] is True
     assert config.skill_sequence_config[0]['key'] == '1'
+
+
+def test_saved_profile_carries_schema_version():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, 'versioned.json')
+        assert settings_manager.save_settings(path=path)
+
+        with open(path, encoding='utf-8') as f:
+            saved = json.load(f)
+
+        assert saved['version'] == settings_manager.SETTINGS_VERSION
+
+
+def test_failed_save_leaves_the_existing_profile_intact(monkeypatch):
+    """A crash mid-write must not truncate the profile the user already had."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, 'profile.json')
+        config.mp_key = '7'
+        assert settings_manager.save_settings(path=path)
+
+        def boom(*args, **kwargs):
+            raise OSError('disk full')
+
+        monkeypatch.setattr(settings_manager.json, 'dump', boom)
+        config.mp_key = '3'
+        assert settings_manager.save_settings(path=path) is False
+
+        with open(path, encoding='utf-8') as f:
+            assert json.load(f)['mp_key'] == '7'
+
+        # The temp file used for the attempt is cleaned up, not left beside it.
+        assert os.listdir(tmp) == ['profile.json']
+
+
+def test_legacy_profile_drops_dead_cast_mode_but_keeps_bypass_flags():
+    """Pre-version profiles lose skill_sequence_mode; per-skill flags survive."""
+    legacy = _minimal_settings()
+    legacy.pop('version', None)
+    legacy['skill_sequence_mode'] = 'priority'
+    legacy['skill_sequence_config']['0']['bypass'] = True
+    legacy['skill_sequence_config']['1']['bypass'] = False
+
+    migrated = settings_manager._migrate_settings(legacy)
+
+    assert migrated['version'] == settings_manager.SETTINGS_VERSION
+    assert 'skill_sequence_mode' not in migrated
+    assert migrated['skill_sequence_config']['0']['bypass'] is True
+    assert migrated['skill_sequence_config']['1']['bypass'] is False
+    # The caller's dict is left alone.
+    assert legacy['skill_sequence_mode'] == 'priority'
+
+
+def test_profile_from_a_newer_build_is_applied_as_best_it_can():
+    newer = _minimal_settings()
+    newer['version'] = settings_manager.SETTINGS_VERSION + 5
+    newer['mp_key'] = '4'
+
+    migrated = settings_manager._migrate_settings(newer)
+
+    assert migrated['version'] == settings_manager.SETTINGS_VERSION + 5
+    assert migrated['mp_key'] == '4'
