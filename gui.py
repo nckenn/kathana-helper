@@ -433,22 +433,23 @@ class BotGUI(
         
         # Set application icon
         try:
-            # Get the directory where the script/executable is located
+            # An icon.ico next to the executable wins, so the icon can be
+            # swapped without a rebuild; otherwise use the bundled copy
+            # (which lives in _MEIPASS, not beside the exe).
+            icon_path = None
             if getattr(sys, 'frozen', False):
-                # If running as compiled executable (PyInstaller)
-                # Use the directory where the executable is located, not _MEIPASS
-                base_path = os.path.dirname(sys.executable)
-            else:
-                # If running as script
-                base_path = os.path.dirname(os.path.abspath(__file__))
+                sibling = os.path.join(os.path.dirname(sys.executable), 'icon.ico')
+                if os.path.exists(sibling):
+                    icon_path = sibling
+            if icon_path is None:
+                icon_path = config.resolve_resource_path('icon.ico')
             
-            icon_path = os.path.join(base_path, 'icon.ico')
-            if os.path.exists(icon_path):
+            if icon_path:
                 # Set icon for Windows taskbar, window, and desktop
                 self.root.iconbitmap(icon_path)
                 print(f'✅ Application icon set: {icon_path}')
             else:
-                print(f'⚠️ Icon file not found at: {icon_path}')
+                print('⚠️ Icon file not found (looked beside the exe and in the bundle)')
         except Exception as e:
             print(f'❌ Error setting application icon: {e}')
         
