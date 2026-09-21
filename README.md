@@ -6,7 +6,7 @@ UI, and skill/buff icons directly from the game window (via screen capture and
 computer vision — **no OCR**) to automate combat, potions, buffs, looting, and
 more.
 
-**Current version:** `3.1.1`
+**Current version:** `3.1.2`
 
 ## File Structure
 
