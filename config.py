@@ -6,7 +6,7 @@ import os
 import re
 import sys
 
-APP_VERSION = "3.1.0"
+APP_VERSION = "3.1.1"
 APP_TITLE = f"Kathana Helper v{APP_VERSION}"
 
 
