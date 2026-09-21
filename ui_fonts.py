@@ -7,8 +7,19 @@ so setting that once here restyles the whole app without touching call sites.
 import os
 import sys
 
+# Two faces, each doing what it is good at.
+#
+# Monospace used to be the default for everything, which made prose harder to
+# read and gave labels and data the same texture. The UI face now carries
+# labels, headings and sentences; monospace is kept for values whose characters
+# matter individually: hotkeys, percentages, filenames, coordinates.
+#
 # Tk matches on the font's family name, not the file name.
-APP_FONT_FAMILY = "JetBrains Mono"
+MONO_FONT_FAMILY = "JetBrains Mono"
+UI_FONT_FAMILY = "Segoe UI"
+
+# Back-compat: this name meant "the family the app uses everywhere".
+APP_FONT_FAMILY = MONO_FONT_FAMILY
 # Windows/Tk fallbacks if the bundled font fails to register for any reason.
 _FALLBACK_FAMILY = "Segoe UI"
 
@@ -58,9 +69,25 @@ def apply_app_font():
     except Exception:
         return _FALLBACK_FAMILY
 
-    family = APP_FONT_FAMILY if _register_font_files() else _FALLBACK_FAMILY
+    global MONO_FONT_FAMILY, APP_FONT_FAMILY
+    if not _register_font_files():
+        MONO_FONT_FAMILY = _FALLBACK_FAMILY
+        APP_FONT_FAMILY = _FALLBACK_FAMILY
+
+    # The default family is the UI face: a widget that does not ask for one is
+    # a label or a sentence. Values opt into monospace via mono().
     try:
-        ctk.ThemeManager.theme["CTkFont"]["family"] = family
+        ctk.ThemeManager.theme["CTkFont"]["family"] = UI_FONT_FAMILY
     except Exception:
         pass
-    return family
+    return UI_FONT_FAMILY
+
+
+def mono(size=11, weight="normal"):
+    """A font for values whose individual characters matter.
+
+    Hotkeys, percentages, filenames, coordinates -- anything read character by
+    character, or compared down a column.
+    """
+    import customtkinter as ctk
+    return ctk.CTkFont(family=MONO_FONT_FAMILY, size=size, weight=weight)

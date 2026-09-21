@@ -602,13 +602,13 @@ class BotGUI(
         self.connection_label.pack(side="left", padx=(12, 0))
 
         self.bars_status_label = ctk.CTkLabel(
-            status_row, text="", font=ctk.CTkFont(size=10),
+            status_row, text="", font=ui_fonts.mono(10),
             text_color=styles.MUTED_TEXT,
         )
         self.bars_status_label.pack(side="left", padx=(12, 0))
 
         self.settings_profile_label = ctk.CTkLabel(
-            status_row, text="", font=ctk.CTkFont(size=11),
+            status_row, text="", font=ui_fonts.mono(11),
             text_color=styles.MUTED_TEXT, anchor="e",
         )
         self.settings_profile_label.pack(side="right")
@@ -631,9 +631,114 @@ class BotGUI(
         mouse_clicker_tab = tabview.add("Mouse Clicker")
 
         # Action slots frame - moved to Status tab (wrap in scrollable frame)
+        # Typography tuned for small screens (avoid global widget scaling, which looks pixelated).
+        _h_font = ctk.CTkFont(size=11, weight="bold")
+        _t_font = ctk.CTkFont(size=11)
+        _small_font = ctk.CTkFont(size=10)
+        # Sized for the bundled monospace app font (JetBrains Mono): the
+        # longest label here is 11 chars, which needs ~110px plus the box.
+        _chk_w = 145
+
+        _sub_font = ctk.CTkFont(size=10)
+        _chev_color = "#9aa4b2"
+
+        def _wrap_to_card(card, label, inset):
+            """Keep a card subtitle wrapped to the card width instead of clipping.
+
+            Card widths come from the grid, so the text that fits depends on the
+            font — the app font is monospace and noticeably wider than the system
+            UI font. Wrapping on <Configure> keeps subtitles readable at any
+            window size without hand-tuning each string.
+            """
+            def _sync(_event=None):
+                w = card.winfo_width()
+                if w > inset + 40:
+                    label.configure(wraplength=w - inset)
+
+            card.bind("<Configure>", _sync, add="+")
+            card.after(0, _sync)
+
+        def _card(parent, title, subtitle=None):
+            frame = ctk.CTkFrame(parent, fg_color=("gray92", "gray20"), corner_radius=10)
+            frame.columnconfigure(0, weight=1)
+            ctk.CTkLabel(
+                frame,
+                text=title,
+                font=_h_font,
+                text_color=("gray25", "gray80"),
+                anchor="w",
+            ).grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 0))
+            next_row = 1
+            if subtitle:
+                sub_lbl = ctk.CTkLabel(
+                    frame, text=subtitle, font=_sub_font,
+                    text_color=("gray45", "gray55"), anchor="w", justify="left",
+                )
+                sub_lbl.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 2))
+                _wrap_to_card(frame, sub_lbl, 24)
+                next_row = 2
+            body = ctk.CTkFrame(frame, fg_color="transparent")
+            body.grid(row=next_row, column=0, sticky="ew", padx=12, pady=(4, 10))
+            body.columnconfigure(0, weight=1)
+            return frame, body
+
+        def _collapsible_card(parent, title, subtitle=None, expanded=False):
+            frame = ctk.CTkFrame(parent, fg_color=("gray92", "gray20"), corner_radius=10)
+            frame.columnconfigure(0, weight=1)
+            header = ctk.CTkFrame(frame, fg_color="transparent")
+            header.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 2))
+            header.columnconfigure(1, weight=1)
+            chev = ctk.CTkLabel(
+                header, text="", width=18,
+                image=ui_icons.get_icon(
+                    "chevron_down" if expanded else "chevron_right",
+                    size=14, color=_chev_color,
+                ),
+            )
+            chev.grid(row=0, column=0, sticky="w")
+            tlbl = ctk.CTkLabel(
+                header, text=title, font=_h_font,
+                text_color=("gray25", "gray80"), anchor="w",
+            )
+            tlbl.grid(row=0, column=1, sticky="w", padx=(4, 0))
+            sub_lbl = None
+            if subtitle:
+                sub_lbl = ctk.CTkLabel(
+                    frame, text=subtitle, font=_sub_font,
+                    text_color=("gray45", "gray55"), anchor="w", justify="left",
+                )
+                _wrap_to_card(frame, sub_lbl, 46)  # 34 chevron indent + 12 pad
+            body = ctk.CTkFrame(frame, fg_color="transparent")
+            body.columnconfigure(0, weight=1)
+            state = {"open": expanded}
+
+            def _apply():
+                chev.configure(image=ui_icons.get_icon(
+                    "chevron_down" if state["open"] else "chevron_right",
+                    size=14, color=_chev_color,
+                ))
+                if state["open"]:
+                    if sub_lbl is not None:
+                        sub_lbl.grid(row=1, column=0, sticky="ew", padx=34, pady=(0, 2))
+                    body.grid(row=2, column=0, sticky="ew", padx=12, pady=(4, 10))
+                else:
+                    if sub_lbl is not None:
+                        sub_lbl.grid_forget()
+                    body.grid_forget()
+
+            def _toggle(_e=None):
+                state["open"] = not state["open"]
+                _apply()
+
+            for w in (header, chev, tlbl):
+                w.bind("<Button-1>", _toggle)
+            _apply()
+            return frame, body
+
         status_scroll = ctk.CTkScrollableFrame(status_tab)
         status_scroll.pack(fill="both", expand=True)
         status_frame = status_scroll
+        status_frame.columnconfigure(0, weight=1)
         
         # Create action slot controls in a horizontal layout
         self.action_vars = {}
@@ -648,7 +753,7 @@ class BotGUI(
         self.hp_progress_bar = ctk.CTkProgressBar(hp_bar_frame, width=200, height=20, progress_color="red", corner_radius=0)
         self.hp_progress_bar.set(0)
         self.hp_progress_bar.grid(row=0, column=1, padx=(0, 10))
-        self.hp_percent_label = ctk.CTkLabel(hp_bar_frame, text="---%", font=ctk.CTkFont(size=11, weight="bold"), text_color="white")
+        self.hp_percent_label = ctk.CTkLabel(hp_bar_frame, text="---%", font=ui_fonts.mono(11, "bold"), text_color="white")
         self.hp_percent_label.grid(row=0, column=2)
         
         # MP Progress Bar
@@ -660,7 +765,7 @@ class BotGUI(
         self.mp_progress_bar = ctk.CTkProgressBar(mp_bar_frame, width=200, height=20, progress_color="#0b58b0", corner_radius=0)
         self.mp_progress_bar.set(0)
         self.mp_progress_bar.grid(row=0, column=1, padx=(0, 10))
-        self.mp_percent_label = ctk.CTkLabel(mp_bar_frame, text="---%", font=ctk.CTkFont(size=11, weight="bold"), text_color="white")
+        self.mp_percent_label = ctk.CTkLabel(mp_bar_frame, text="---%", font=ui_fonts.mono(11, "bold"), text_color="white")
         self.mp_percent_label.grid(row=0, column=2)
         
         # Enemy HP Progress Bar
@@ -672,7 +777,7 @@ class BotGUI(
         self.enemy_hp_progress_bar = ctk.CTkProgressBar(enemy_hp_bar_frame, width=200, height=20, progress_color="green", corner_radius=0)
         self.enemy_hp_progress_bar.set(0)
         self.enemy_hp_progress_bar.grid(row=0, column=1, padx=(0, 10))
-        self.enemy_hp_percent_label = ctk.CTkLabel(enemy_hp_bar_frame, text="---%", font=ctk.CTkFont(size=11, weight="bold"), text_color="white")
+        self.enemy_hp_percent_label = ctk.CTkLabel(enemy_hp_bar_frame, text="---%", font=ui_fonts.mono(11, "bold"), text_color="white")
         self.enemy_hp_percent_label.grid(row=0, column=2)
         
         # Enemy Name display
@@ -687,14 +792,12 @@ class BotGUI(
         self.unstuck_countdown_label.grid(row=0, column=2)
         
         # License Info card (styled like OCR status frame)
-        license_info_frame = ctk.CTkFrame(
-            status_frame,
-            corner_radius=8,
-            fg_color=("gray15", "gray15"),
-            border_width=0,
-            border_color="gray35",
+        # Collapsed by default: the bars above are what changes while the bot
+        # runs; the licence details are read once, if ever.
+        license_card, license_info_frame = _collapsible_card(
+            status_frame, "License", expanded=False,
         )
-        license_info_frame.grid(row=4, column=0, sticky="ew", padx=15, pady=(10, 8))
+        license_card.grid(row=4, column=0, sticky="ew", padx=15, pady=(14, 8))
         license_info_frame.columnconfigure(0, weight=1)
 
         # Header row
@@ -814,110 +917,6 @@ class BotGUI(
         # Configure settings frame for 2 columns
         settings_frame.columnconfigure(0, weight=1, uniform="settings_cols")
         settings_frame.columnconfigure(1, weight=1, uniform="settings_cols")
-
-        # Typography tuned for small screens (avoid global widget scaling, which looks pixelated).
-        _h_font = ctk.CTkFont(size=11, weight="bold")
-        _t_font = ctk.CTkFont(size=11)
-        _small_font = ctk.CTkFont(size=10)
-        # Sized for the bundled monospace app font (JetBrains Mono): the
-        # longest label here is 11 chars, which needs ~110px plus the box.
-        _chk_w = 145
-
-        _sub_font = ctk.CTkFont(size=10)
-        _chev_color = "#9aa4b2"
-
-        def _wrap_to_card(card, label, inset):
-            """Keep a card subtitle wrapped to the card width instead of clipping.
-
-            Card widths come from the grid, so the text that fits depends on the
-            font — the app font is monospace and noticeably wider than the system
-            UI font. Wrapping on <Configure> keeps subtitles readable at any
-            window size without hand-tuning each string.
-            """
-            def _sync(_event=None):
-                w = card.winfo_width()
-                if w > inset + 40:
-                    label.configure(wraplength=w - inset)
-
-            card.bind("<Configure>", _sync, add="+")
-            card.after(0, _sync)
-
-        def _card(parent, title, subtitle=None):
-            frame = ctk.CTkFrame(parent, fg_color=("gray92", "gray20"), corner_radius=10)
-            frame.columnconfigure(0, weight=1)
-            ctk.CTkLabel(
-                frame,
-                text=title,
-                font=_h_font,
-                text_color=("gray25", "gray80"),
-                anchor="w",
-            ).grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 0))
-            next_row = 1
-            if subtitle:
-                sub_lbl = ctk.CTkLabel(
-                    frame, text=subtitle, font=_sub_font,
-                    text_color=("gray45", "gray55"), anchor="w", justify="left",
-                )
-                sub_lbl.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 2))
-                _wrap_to_card(frame, sub_lbl, 24)
-                next_row = 2
-            body = ctk.CTkFrame(frame, fg_color="transparent")
-            body.grid(row=next_row, column=0, sticky="ew", padx=12, pady=(4, 10))
-            body.columnconfigure(0, weight=1)
-            return frame, body
-
-        def _collapsible_card(parent, title, subtitle=None, expanded=False):
-            frame = ctk.CTkFrame(parent, fg_color=("gray92", "gray20"), corner_radius=10)
-            frame.columnconfigure(0, weight=1)
-            header = ctk.CTkFrame(frame, fg_color="transparent")
-            header.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 2))
-            header.columnconfigure(1, weight=1)
-            chev = ctk.CTkLabel(
-                header, text="", width=18,
-                image=ui_icons.get_icon(
-                    "chevron_down" if expanded else "chevron_right",
-                    size=14, color=_chev_color,
-                ),
-            )
-            chev.grid(row=0, column=0, sticky="w")
-            tlbl = ctk.CTkLabel(
-                header, text=title, font=_h_font,
-                text_color=("gray25", "gray80"), anchor="w",
-            )
-            tlbl.grid(row=0, column=1, sticky="w", padx=(4, 0))
-            sub_lbl = None
-            if subtitle:
-                sub_lbl = ctk.CTkLabel(
-                    frame, text=subtitle, font=_sub_font,
-                    text_color=("gray45", "gray55"), anchor="w", justify="left",
-                )
-                _wrap_to_card(frame, sub_lbl, 46)  # 34 chevron indent + 12 pad
-            body = ctk.CTkFrame(frame, fg_color="transparent")
-            body.columnconfigure(0, weight=1)
-            state = {"open": expanded}
-
-            def _apply():
-                chev.configure(image=ui_icons.get_icon(
-                    "chevron_down" if state["open"] else "chevron_right",
-                    size=14, color=_chev_color,
-                ))
-                if state["open"]:
-                    if sub_lbl is not None:
-                        sub_lbl.grid(row=1, column=0, sticky="ew", padx=34, pady=(0, 2))
-                    body.grid(row=2, column=0, sticky="ew", padx=12, pady=(4, 10))
-                else:
-                    if sub_lbl is not None:
-                        sub_lbl.grid_forget()
-                    body.grid_forget()
-
-            def _toggle(_e=None):
-                state["open"] = not state["open"]
-                _apply()
-
-            for w in (header, chev, tlbl):
-                w.bind("<Button-1>", _toggle)
-            _apply()
-            return frame, body
 
         # --- Quick Start card (compact readiness checklist + one-click presets) ---
         qs_card, qs_body = _card(settings_frame, "Quick Start")
@@ -1082,7 +1081,7 @@ class BotGUI(
             height=28,
             text=key_button_label(config.repair_key),
             command=self.register_repair_key,
-            font=_small_font,
+            font=ui_fonts.mono(10),
             corner_radius=6,
             **styles.CHIP,
         )
@@ -1116,7 +1115,7 @@ class BotGUI(
             height=28,
             text=key_button_label(config.assist_key),
             command=self.register_assist_key,
-            font=_small_font,
+            font=ui_fonts.mono(10),
             corner_radius=6,
             **styles.CHIP,
         )
@@ -1225,7 +1224,7 @@ class BotGUI(
             width=78,
             height=28,
             command=self.register_mp_key,
-            font=_small_font,
+            font=ui_fonts.mono(10),
             corner_radius=6,
             **styles.CHIP,
         )
@@ -1492,27 +1491,26 @@ class BotGUI(
         skill_sequence_scroll.pack(fill="both", expand=True)
         skill_sequence_frame = skill_sequence_scroll
         
-        # Info section for Skill Sequence
-        info_frame = ctk.CTkFrame(skill_sequence_frame, corner_radius=6, fg_color=("gray18", "gray14"), 
-                                 border_width=1, border_color="gray25")
-        info_frame.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(10, 15))
-        info_frame.columnconfigure(0, weight=1)
-        
-        info_title = ctk.CTkLabel(info_frame, text="How to use:", 
-                                  font=ctk.CTkFont(size=12, weight="bold"))
-        info_title.grid(row=0, column=0, sticky="w", padx=10, pady=(10, 5))
-        
-        info_text = ctk.CTkLabel(info_frame, 
-                                text="1. Click the skill image to select a skill icon\n"
-                                     "2. Assign a hotkey for each skill (pressed instead of clicking)\n"
-                                     "3. Left checkbox: include this skill in the rotation\n"
-                                     "4. Right checkbox: skip this skill while it is on cooldown\n"
-                                     "   Skills cast in slot order 1\u21922\u21923\u2026 then back to 1. A skill\n"
-                                     "   without \u201cskip\u201d is waited for, so the order is never broken.\n"
-                                     "   (Runs when an enemy is found — set Skill Bar in Region Editor)",
-                                font=ctk.CTkFont(size=12),
-                                justify="left", anchor="w")
-        info_text.grid(row=1, column=0, sticky="w", padx=10, pady=(0, 10))
+        # Instructions collapse: read once while setting the tab up, and
+        # they were taking 160px above the controls they describe.
+        info_frame, info_body = _collapsible_card(
+            skill_sequence_frame, "How to use", expanded=False,
+        )
+        info_frame.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(10, 12))
+
+        info_text = ctk.CTkLabel(
+            info_body,
+            text="1. Click the skill image to select a skill icon\n"
+                 "2. Assign a hotkey for each skill (pressed instead of clicking)\n"
+                 "3. Left checkbox: include this skill in the rotation\n"
+                 "4. Right checkbox: skip this skill while it is on cooldown\n"
+                 "   Skills cast in slot order 1\u21922\u21923\u2026 then back to 1. A skill\n"
+                 "   without \u201cskip\u201d is waited for, so the order is never broken.\n"
+                 "   (Runs when an enemy is found — set Skill Bar in Region Editor)",
+            font=_t_font, text_color=("gray35", "gray65"),
+            justify="left", anchor="w",
+        )
+        info_text.grid(row=0, column=0, sticky="w")
 
         # Initialize skill sequence variables
         self.skill_sequence_vars = {}
@@ -1565,7 +1563,7 @@ class BotGUI(
             key_btn = ctk.CTkButton(
                 skill_slot_frame, width=72, height=28, text=KEY_BUTTON_DEFAULT_LABEL,
                 command=lambda idx=i: self.register_skill_sequence_key(idx),
-                font=ctk.CTkFont(size=10), corner_radius=6, **styles.CHIP,
+                font=ui_fonts.mono(10), corner_radius=6, **styles.CHIP,
             )
             key_btn.grid(row=0, column=3, padx=(5, 5), pady=6, sticky="w")
             self.skill_sequence_key_vars[i].trace_add(
@@ -1717,24 +1715,21 @@ class BotGUI(
         buffs_scroll.pack(fill="both", expand=True)
         buffs_frame = buffs_scroll
         
-        # Info section for Buffs
-        buffs_info_frame = ctk.CTkFrame(buffs_frame, corner_radius=6, fg_color=("gray18", "gray14"), 
-                                        border_width=1, border_color="gray25")
-        buffs_info_frame.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(10, 15))
-        buffs_info_frame.columnconfigure(0, weight=1)
-        
-        buffs_info_title = ctk.CTkLabel(buffs_info_frame, text="How to use:", 
-                                        font=ctk.CTkFont(size=12, weight="bold"))
-        buffs_info_title.grid(row=0, column=0, sticky="w", padx=10, pady=(10, 5))
-        
-        buffs_info_text = ctk.CTkLabel(buffs_info_frame, 
-                                      text="1. Set Buff Strip in Region Editor (active buff icons)\n"
-                                           "2. Click a buff image to detect when it is already active\n"
-                                           "3. Assign a hotkey — pressed when the buff is missing",
-                                      font=ctk.CTkFont(size=12),
-                                      justify="left", anchor="w")
-        buffs_info_text.grid(row=1, column=0, sticky="w", padx=10, pady=(0, 10))
-        
+        buffs_info_frame, buffs_info_body = _collapsible_card(
+            buffs_frame, "How to use", expanded=False,
+        )
+        buffs_info_frame.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(10, 12))
+
+        buffs_info_text = ctk.CTkLabel(
+            buffs_info_body,
+            text="1. Set Buff Strip in Region Editor (active buff icons)\n"
+                 "2. Click a buff image to detect when it is already active\n"
+                 "3. Assign a hotkey — pressed when the buff is missing",
+            font=_t_font, text_color=("gray35", "gray65"),
+            justify="left", anchor="w",
+        )
+        buffs_info_text.grid(row=0, column=0, sticky="w")
+
         # Initialize buffs variables
         self.buffs_vars = {}
         self.buffs_key_vars = {}
@@ -1784,7 +1779,7 @@ class BotGUI(
             buff_key_btn = ctk.CTkButton(
                 buff_slot_frame, width=72, height=28, text=KEY_BUTTON_DEFAULT_LABEL,
                 command=lambda idx=i: self.register_buff_key(idx),
-                font=ctk.CTkFont(size=10), corner_radius=6, **styles.CHIP,
+                font=ui_fonts.mono(10), corner_radius=6, **styles.CHIP,
             )
             buff_key_btn.grid(row=0, column=3, padx=(5, 8), pady=6, sticky="e")
             self.buffs_key_vars[i].trace_add(
@@ -2374,7 +2369,7 @@ class BotGUI(
             
             key_button = ctk.CTkButton(row_frame, width=72, height=28,
                                       command=lambda: self.register_key_in_dialog(key_var, dialog),
-                                      font=ctk.CTkFont(size=10), corner_radius=4,
+                                      font=ui_fonts.mono(10), corner_radius=4,
                                       **styles.CHIP)
             key_button.grid(row=0, column=4, padx=5, pady=5)
             update_key_button_text(btn=key_button)
